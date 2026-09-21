@@ -33,6 +33,13 @@ end_of_record
 
 
 class CoverageParserTests(unittest.TestCase):
+    def test_coverage_defaults_to_tracked_repository(self):
+        with patch.dict("os.environ", {"GSB_REPO": "example/project"}, clear=True):
+            cfg = Config.from_env()
+
+        self.assertEqual(cfg.repo, "example/project")
+        self.assertEqual(cfg.coverage_repo, "example/project")
+
     def test_lcov_includes_line_branch_and_function_totals(self):
         coverage = parse_coverage_file("lcov.info", LCOV.encode())
 
@@ -54,7 +61,7 @@ class CoverageParserTests(unittest.TestCase):
             }))
             archive.writestr("coverage/summary.md", "# Node test coverage\n")
 
-        parsed = parse_artifact_zip("node-coverage", blob.getvalue())
+        parsed = parse_artifact_zip("node-coverage-deadbeef", blob.getvalue())
 
         self.assertIsNone(parsed["summary"])
         self.assertIsNone(parsed["run_log"])
