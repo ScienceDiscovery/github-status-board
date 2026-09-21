@@ -197,16 +197,26 @@
     if (!B.data) { root.innerHTML = `<div class="skeleton"><span class="spinner"></span>装配看板…</div>`; return; }
     if(B.data.storage_warning) B.error=B.data.storage_warning;
     const items = filtered();
-    let html = '<p class="board-local-note">GitHub 工作项由快照更新；优先级、迭代、备注和列设置仅保存在本浏览器，不会同步给其他成员。</p>'+toolbarHtml(items);
+    let html = '<div class="board-controls"><p class="board-local-note">GitHub 工作项由快照更新；优先级、迭代、备注和列设置仅保存在本浏览器，不会同步给其他成员。</p>'+toolbarHtml(items);
     if (B.error) html += `<div class="banner warn"><span class="icon">▲</span><div>${esc(B.error)}</div></div>`;
     if (B.historyOpen) html += historyHtml();
-    if (B.prefs.view === 'table') html += `<div class="card">${tableHtml(items)}</div>`;
+    html += '</div>';
+    if (B.prefs.view === 'table') html += `<div class="card board-table-panel">${tableHtml(items)}</div>`;
     else {
       const cols = columns(items);
       html += `<div class="board ${B.prefs.equal ? 'equal' : ''}">${cols.map((c) => columnHtml(c, B.prefs.group)).join('')}</div>`;
     }
     html += `<div class="muted small board-foot">数据：快照 ${ago(B.data.snapshot_generated_at)} 的 Issue/PR + 本地字段（${B.data.counts.issues} Issue · ${B.data.counts.prs} PR，含最近 ${esc(String(B.data.rules.closed_window_days))} 天关闭的）。拖拽只改本地字段，不写回 GitHub。</div>`;
+    // Preserve the independent scroll areas when fields or the snapshot update.
+    const scrollKey = el => el.classList.contains('bcol-body')
+      ? 'column:' + el.parentElement.dataset.group + ':' + el.parentElement.dataset.key : el.classList.contains('board') ? 'board' : el.className;
+    const scrollable = '.board, .board-controls, .board-table, .bcol-body';
+    const positions = new Map([...root.querySelectorAll(scrollable)].map(el => [scrollKey(el), [el.scrollLeft, el.scrollTop]]));
     root.innerHTML = html;
+    root.querySelectorAll(scrollable).forEach(el => {
+      const pos = positions.get(scrollKey(el));
+      if (pos) [el.scrollLeft, el.scrollTop] = pos;
+    });
   }
 
   // ------------------------------------------------------------ drawer
