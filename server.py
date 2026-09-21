@@ -232,9 +232,6 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     CFG = Config.from_env(repo=args.repo, host=args.host, port=args.port, refresh_interval=args.refresh_interval)
-    if CFG.port in (4310, 4311):
-        print("refusing to bind 4310/4311: reserved for the local trial stack", file=sys.stderr)
-        return 2
 
     if args.once:
         snap = build_snapshot(CFG)

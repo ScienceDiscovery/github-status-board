@@ -49,7 +49,7 @@ token 只在内存中使用：不写入缓存、不写入日志、不出现在�
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `GSB_REPO` | `openJiuwen-ai/sciencediscovery` | 跟踪的 owner/repo |
-| `GSB_HOST` / `GSB_PORT` | `127.0.0.1` / `8790` | 绑定地址；拒绝 4310/4311 |
+| `GSB_HOST` / `GSB_PORT` | `127.0.0.1` / `8790` | 绑定地址与端口 |
 | `GSB_REFRESH_INTERVAL` | `600` | 自动刷新间隔（秒），0 关闭 |
 | `GSB_TEST_ARTIFACTS` | `ut-results,st-results,e2e-results` | 要解析的 Actions 测试产物名 |
 | `GSB_ARTIFACT_MAX_MB` | `80` | 单个产物下载上限 |
