@@ -14,7 +14,13 @@ test('all nine pages render; only static requests and no promotional copy', asyn
   await expect(page.locator('#global-banner')).toContainText('超过两小时');
   await expect(page.locator('body')).not.toContainText('把进展与风险放在同一页');
   await page.screenshot({path:shot('overview-desktop'),fullPage:true});
-  await expect(page.locator('#tabs a')).toHaveCount(9);
+  await expect(page.locator('.topbar #tabs a')).toHaveCount(9);
+  await expect(page.locator('body > footer')).toHaveCount(0);
+  await expect(page.locator('body')).not.toContainText('GitHub Pages 静态看板 · GitHub 数据只读');
+  await expect(page.locator('#global-banner')).not.toContainText('部分补充信息不可读取');
+  const tabsBox=await page.locator('#tabs').boundingBox(), timeBox=await page.locator('#meta').boundingBox();
+  expect(timeBox.x).toBeGreaterThan(tabsBox.x+tabsBox.width);
+  expect(timeBox.y).toBeLessThan(tabsBox.y+tabsBox.height);
   for (const id of ['board','issues','prs','ci','tests','ops','quality','releases']) {
     await page.locator(`[data-tab="${id}"]`).click();
     await expect(page.locator(`#tab-${id}`)).toBeVisible();
@@ -171,4 +177,46 @@ test('mobile layout and failed refresh preserve snapshot',async({page})=>{
   await page.getByRole('button',{name:'刷新视图',exact:true}).click();
   await expect(page.locator('#global-banner')).toContainText('无法读取快照');
   await expect(page.locator('#tab-overview .lane')).toHaveCount(3);
+});
+
+
+test('board fits viewport while columns and table scroll independently',async({page})=>{
+  await page.setViewportSize({width:1280,height:720});
+  await page.route('**/data/snapshot.json*',async route=>{
+    const response=await route.fetch(), doc=await response.json();
+    const item=doc.board.items.find(i=>i.kind==='issue');
+    doc.board.items=Array.from({length:60},(_,i)=>({...item,id:'issue:'+(100+i),number:100+i,title:'待处理工作项 '+i,linked:[]}));
+    await route.fulfill({response,json:doc});
+  });
+  await page.goto('/github-status-board/#board');
+  const column=page.locator('.bcol[data-key="待处理"] .bcol-body');
+  await expect(column.locator('.bcard')).toHaveCount(60);
+  const viewportFits=()=>page.evaluate(()=>document.documentElement.scrollHeight<=innerHeight && document.documentElement.scrollWidth<=innerWidth);
+  expect(await viewportFits()).toBeTruthy();
+  const head=await page.locator('.bcol[data-key="待处理"] .bcol-head').boundingBox();
+  await column.hover();await page.mouse.wheel(0,700);
+  await expect.poll(()=>column.evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
+  expect((await page.locator('.bcol[data-key="待处理"] .bcol-head').boundingBox()).y).toBe(head.y);
+  expect(await page.evaluate(()=>scrollY)).toBe(0);
+  const scroll=await column.evaluate(el=>el.scrollTop);
+  await page.getByRole('button',{name:'刷新视图',exact:true}).click();
+  await expect.poll(()=>column.evaluate(el=>el.scrollTop)).toBe(scroll);
+  await page.locator('[data-bpref="equal"]').uncheck();
+  expect(await viewportFits()).toBeTruthy();
+  await expect.poll(()=>column.evaluate(el=>el.scrollHeight>el.clientHeight)).toBeTruthy();
+  await page.locator('[data-bpref="view"] [data-val="table"]').click();
+  const table=page.locator('.board-table');
+  await expect(table.locator('tbody tr')).toHaveCount(60);
+  await table.hover();await page.mouse.wheel(0,700);
+  await expect.poll(()=>table.evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
+  expect(await viewportFits()).toBeTruthy();
+  await page.locator('[data-bpref="view"] [data-val="board"]').click();
+  await page.setViewportSize({width:390,height:640});
+  expect(await viewportFits()).toBeTruthy();
+  await page.setViewportSize({width:1280,height:720});
+  await page.locator('[data-tab="tests"]').click();
+  await expect(page.locator('#tab-tests')).toBeVisible();
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollHeight>innerHeight)).toBeTruthy();
+  await page.mouse.move(900,650);await page.mouse.wheel(0,500);
+  await expect.poll(()=>page.evaluate(()=>scrollY)).toBeGreaterThan(0);
 });

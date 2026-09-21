@@ -479,16 +479,19 @@
   // ------------------------------------------------------------ shell
   function renderShell() {
     const snap=STATE.snap, btn=$('#refresh-btn'), banner=$('#global-banner');
+    document.body.classList.toggle('board-page', STATE.tab === 'board');
     btn.disabled=!!STATE.status?.refreshing;
     btn.textContent=btn.disabled?'读取中…':'刷新视图';
     if(snap){
       $('#repo-link').textContent=snap.repo;$('#repo-link').href=snap.repo_url;
       document.title=snap.repo+' · GitHub 状态看板';
-      $('#meta').textContent='快照更新于 '+date(snap.generated_at);
-      $('#foot-rate').textContent='时间按浏览器时区显示 · 每 60 秒刷新视图';
+      $('#meta').textContent=date(snap.generated_at);
+      $('#meta').dateTime=snap.generated_at;
+      $('#meta').title='按浏览器时区显示';
+      $('#repo-link').title=snap.repo;
     }
     const stale=snap && Date.now()-new Date(snap.generated_at)>7200000;
-    const message=STATE.clientError || [...(snap?.notices||[]).map(n=>n.message), ...(stale?['快照超过两小时未更新；当前显示最后一次发布的数据。']:[])].join(' ');
+    const message=STATE.clientError || [...(snap?.notices||[]).map(n=>n.message).filter(message=>message !== '部分补充信息不可读取，请以 GitHub 原页面为准。'), ...(stale?['快照超过两小时未更新；当前显示最后一次发布的数据。']:[])].join(' ');
     banner.className='banner '+(message?'warn':'hidden');banner.textContent=message;
     document.querySelectorAll('#tabs a').forEach(a=>{
       const active=a.dataset.tab===STATE.tab;a.classList.toggle('active',active);

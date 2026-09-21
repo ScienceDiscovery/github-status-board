@@ -12,24 +12,23 @@
     <span class="brand-title">GitHub 状态看板</span>
     <a id="repo-link" class="repo-link" href="#" target="_blank" rel="noopener">—</a>
   </div>
-  <div class="meta" id="meta">载入中…</div>
-  <div class="actions">
-    <button id="refresh-btn" class="btn primary" type="button">刷新</button>
+  <nav class="tabs" id="tabs" aria-label="看板页面">
+    <a href="#overview" data-tab="overview">总览</a>
+    <a href="#board" data-tab="board">看板</a>
+    <a href="#issues" data-tab="issues">Issue</a>
+    <a href="#prs" data-tab="prs">PR</a>
+    <a href="#ci" data-tab="ci">CI</a>
+    <a href="#tests" data-tab="tests">测试</a>
+    <a href="#ops" data-tab="ops">运维</a>
+    <a href="#quality" data-tab="quality">构建报告</a><a href="#releases" data-tab="releases">版本验证</a>
+  </nav>
+  <div class="topbar-status">
+    <div class="meta"><span>快照更新于</span><time id="meta">载入中…</time></div>
+    <button id="refresh-btn" class="btn primary" type="button">刷新视图</button>
   </div>
 </header>
 
 <div id="global-banner" class="banner hidden"></div>
-
-<nav class="tabs" id="tabs">
-  <a href="#overview" data-tab="overview">总览</a>
-  <a href="#board" data-tab="board">看板</a>
-  <a href="#issues" data-tab="issues">Issue</a>
-  <a href="#prs" data-tab="prs">PR</a>
-  <a href="#ci" data-tab="ci">CI</a>
-  <a href="#tests" data-tab="tests">测试</a>
-  <a href="#ops" data-tab="ops">运维</a>
-  <a href="#quality" data-tab="quality">构建报告</a><a href="#releases" data-tab="releases">版本验证</a>
-</nav>
 
 <main id="main">
   <section id="tab-overview" class="tab"></section>
@@ -42,10 +41,6 @@
   <section id="tab-quality" class="tab"></section><section id="tab-releases" class="tab"></section>
 </main>
 
-<footer class="foot">
-  <span>GitHub Pages 静态看板 · GitHub 数据只读 · 自定义字段保存在本浏览器</span>
-  <span id="foot-rate"></span>
-</footer>
 
 <aside id="drawer" class="drawer hidden" aria-label="卡片详情"></aside>
 <dialog id="board-settings" class="settings"></dialog>
