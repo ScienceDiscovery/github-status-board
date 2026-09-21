@@ -67,7 +67,7 @@ Actions 产物名使用 `ut-results`、`st-results`、`e2e-results`（分片可�
 3. `dashboard-summary.json`：字段 `tests`、`passed`、`failed`、`skipped`、`flaky` 均为非负整数，后四项之和必须等于 tests。
 4. `run.log`：兼容现有 CI 的 TAP / unittest / pytest 汇总，作为没有结构化报告时的后备来源。
 
-同一产物内只取一种报告格式，优先级为 summary、Playwright、JUnit、log。分片产物必须互不重叠，避免同时上传同一层的合并报告和分片。稳定通过率 = passed / tests；skipped 和 flaky 单列，不计稳定通过。零用例不显示 100%。
+同一产物内只取一种报告格式，优先级为 summary、Playwright、JUnit、log。分片产物必须互不重叠，避免同时上传同一层的合并报告和分片。用例数按报告中的测试实例（包含浏览器项目）计数，不是测试文件数；重试不重复计数。稳定通过率 = passed / tests；skipped 和 flaky 单列，不计稳定通过。零用例不显示 100%。
 
 报告只关联当前 run、SHA 和 attempt；重跑前的产物不会挪用。过期、下载失败、解析失败和未上传均显示未知数量。每个产物最多下载 80 MiB，展开内容最多 160 MiB / 3000 个条目，不解压到磁盘。明细最多 500 条，汇总保留完整数量。
 
