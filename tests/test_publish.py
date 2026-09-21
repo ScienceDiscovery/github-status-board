@@ -25,7 +25,7 @@ class PublishingTests(unittest.TestCase):
         (self.site/'.env').write_text('private local file')
         self.assertEqual(publish(GH(),self.site,'example/board'),'new-commit')
         files=calls[0][2]['tree']
-        self.assertEqual({f['path'] for f in files},{'index.html','app.js','style.css','data/snapshot.json','.nojekyll'})
+        self.assertEqual({f['path'] for f in files},{'index.html','app.js','style.css','report.js','board.js','board-local.js','data/snapshot.json','.nojekyll'})
         self.assertEqual(calls[1][2]['parents'],['old'])
         self.assertEqual(calls[2][2],{'sha':'new-commit','force':False})
     def test_credential_in_content_prevents_remote_write(self):

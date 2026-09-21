@@ -17,6 +17,40 @@ for idx,kind in enumerate(('gate','daily','release')):
     if kind=='release': counts={'tests':10,'passed':10,'failed':0,'skipped':0,'flaky':0}
     runs.append(dict(id=10+idx,workflow_id=idx,name={'gate':'CI','daily':'Daily','release':'Release'}[kind],channel=kind,event={'gate':'pull_request','daily':'schedule','release':'release'}[kind],status='completed',conclusion='failure' if kind!='release' else 'success',branch='main',sha='a'*40,attempt=2,updated_at=time,url=base+'/actions/runs/'+str(10+idx),reports_status='available',jobs=[{'name':'E2E','status':'completed','conclusion':'failure','url':base+'/actions/runs/10','failed_steps':['Run browser journeys']}],tests=[{'name':'e2e-results','layer':'e2e','status':'available','counts':counts,'cases':[{'name':'创建项目','file':'test/create.spec.ts','project':'chromium','status':'passed'},{'name':'恢复会话','file':'test/session.spec.ts','project':'chromium','status':'flaky'}]}]))
 doc={'schema_version':1,'generated_at':time,'repository':{'name':repo,'url':base,'description':'浏览器验收数据','default_branch':'main'},'issues':{'open_count':1,'unassigned_count':1,'stale_count':0,'counts':{'opened_30d':4,'closed_30d':3},'items':[item]},'prs':{'open_count':1,'waiting_review_count':1,'draft_count':0,'merged_30d':2,'median_time_to_merge_h':3,'items':[pr]},'quality':{'runs':runs,'required_checks':['E2E'],'branch_protected':True},'releases':[{'tag':'v1.0','url':base+'/releases/tag/v1.0','sha':'a'*40,'published_at':time,'prerelease':False,'validation_run_ids':[12]},{'tag':'v0.9','url':base+'/releases/tag/v0.9','sha':'b'*40,'published_at':time,'prerelease':False,'validation_run_ids':[]}],'notices':[]}
+
+# Keep all nine pages exercised without contacting GitHub during acceptance tests.
+from datetime import datetime, timezone
+from unittest.mock import patch
+from gsb.board import BoardStore
+from gsb.config import Config
+from gsb.collectors import Context
+from gsb.public_sections import public_tests
+
+item.update(state='open',created_at=time,comments=0,idle_days=4,body='## Reproduction\nDetails for #1. <script>alert(2)</script>')
+pr.update(state='open',created_at=time,comments=1,idle_days=4,body='Fixes #1',head='fix-timeout',base='main',requested_reviewers=['reviewer'],reviews=[],waiting_review=True,mergeable='CONFLICTING',linked_issues=[1])
+issues=doc['issues']; issues.update(unlabeled_count=0,no_response_count=1,median_age_days=4,oldest_age_days=4,stale_days_threshold=30,labels=[dict(name='bug',color='aa3333',count=1)],unused_labels=[],aging=[dict(bucket='0–7 天',count=1)],assignee_load=[],milestones=[dict(name='v1.0',count=1)],recent=[item],stale=[],oldest=[item],closed_recent=[])
+issues['counts'].update(closed_total=3,opened_7d=1,closed_7d=0)
+prs=doc['prs'];prs.update(review_sla_days=3,ci_states={'failure':1},review_decisions={'CHANGES_REQUESTED':1},closed_unmerged_30d=0,p90_time_to_merge_h=5,median_time_to_merge_h_human=3,merged_human_count=2,reviewer_load=[dict(login='reviewer',count=1)],authors=[dict(login='maintainer',count=1)],recent_merged=[],recent_closed_unmerged=[])
+for r in runs:
+    r.update(title=r['name'],created_at=time,duration_s=120,actor='maintainer')
+    r['jobs'][0].update(duration_s=120)
+    r['tests'][0].update(artifact_id=r['id']+100,url=r['url']+'/artifacts/100',created_at=time)
+runs[0]['coverage']=[dict(format='lcov',lines_pct=80,lines_found=200,lines_hit=160,file='lcov.info',url=runs[0]['url'])]
+class GH:
+    def get_text_file(self,*args): return '{"scripts":{"test":"node --test"}}'
+cfg=Config(repo=repo)
+ctx=Context(GH(),cfg,datetime.now(timezone.utc),{'default_branch':'main'})
+with patch('gsb.public_sections._tree_paths',return_value=(['services/core/src/index.ts','services/core/tests/test_main.py','test/session.spec.ts','services/empty/index.ts'],'github:git-tree')):
+    tests=public_tests(ctx,runs)
+rate=dict(success_rate=50,total=2,success=1,failure=1,cancelled=0,median_duration_s=120)
+ci=dict(default_branch='main',main=rate,pull_request=rate,red_streak_main=1,failures_7d=2,runs_sampled=3,job_history_runs=2,main_timeline=runs,latest_main=dict(run=runs[0],jobs=runs[0]['jobs']),workflows=[dict(name='CI',url=runs[0]['url'],path='.github/workflows/ci.yml',state='active',all=rate,main=rate,pull_request=rate,failures_7d=2,last_run=runs[0])],job_health=[dict(name='E2E',success_rate=50,runs=2,success=1,failure=1,cancelled=0,median_duration_s=120,last=runs[0],top_failed_steps=[dict(step='Run browser journeys',count=1)])],recent_runs=runs)
+ops=dict(releases=dict(latest=None,count=0,items=[],tags=[],total_downloads=0,cadence_days=None,unreleased=None),branches=dict(default='main',protection=dict(enabled=True,required_reviews=1,required_checks=['E2E']),rulesets=[],items=[],count=1,stale=[]),public_advisories=[],community=dict(health_percentage=75,missing=['contributing'],files=dict(readme=True,contributing=False)),contributors=dict(count=2,total_commits=10,bus_factor_50=1,top=[dict(login='maintainer',contributions=8,share=80)]),activity=dict(weeks=[dict(week=1789819200,total=10)],commits_4w=10,commits_52w=10),recent_commits=[],commits_7d=3,stale_automation=dict(workflow=None))
+wrap=lambda value:dict(status='ok',data=value,notes=[],error=None)
+doc.update(repo=repo,repo_url=base,config=dict(artifact_names=['ut-results','e2e-results'],pr_idle_days=14),sections={k:wrap(v) for k,v in dict(repo=dict(description='浏览器验收数据',stars=10,forks=2,language='Python',license='MIT',default_branch='main',pushed_at=time),issues=issues,prs=prs,ci=ci,tests=tests,ops=ops).items()})
+doc['board']=BoardStore(cfg,persist=False).payload(doc)
+doc['details']={'issue:1':dict(body=item['body'],cross_references=[]),'pr:3':dict(body=pr['body'],cross_references=[])}
 export_site(root/'.e2e/site/github-status-board',doc)
 empty=json.loads(json.dumps(doc));empty['quality']['runs']=[];empty['releases']=[];empty['issues']=None;empty['prs']=None;empty['notices']=[{'message':'GitHub 数据不可读取，结果未知。'}]
+empty['sections']={k:dict(status='error',data=None,notes=[],error=dict(kind='error',message='结果未知')) for k in empty['sections']}
+empty['board']['items']=[];empty['details']={}
 export_site(root/'.e2e/site/empty',empty)

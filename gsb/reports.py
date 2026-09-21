@@ -7,7 +7,7 @@ import re
 import zipfile
 from xml.etree import ElementTree as ET
 
-from .testparse import parse_run_log
+from .testparse import parse_run_log, COVERAGE_FILE_RE, parse_coverage_file
 
 FIELDS = ("passed", "failed", "skipped", "flaky")
 
@@ -57,7 +57,7 @@ def junit(text):
         status = ("skipped" if item.find("skipped") is not None else
                   "failed" if item.find("failure") is not None or item.find("error") is not None else
                   "flaky" if item.find("flakyFailure") is not None or item.find("flakyError") is not None else "passed")
-        cases.append({"name": str(item.get("name", ""))[:300], "file": str(item.get("classname", ""))[:300], "status": status})
+        cases.append({"name": str(item.get("name", ""))[:300], "file": str(item.get("file") or item.get("classname", ""))[:300], "status": status})
     if cases:
         return {**totals(cases), "cases": cases[:500], "format": "junit"}
     # Count leaf suites only: parent aggregates must not double-count children.
@@ -94,14 +94,20 @@ def parse_report_zip(blob):
         if len(entries) > 3000 or sum(e.file_size for e in entries) > 160 * 1024 * 1024:
             raise ValueError("report archive exceeds extraction budget")
         reports = {"playwright": [], "junit": [], "summary": [], "log": []}
+        coverage = []
         for item in entries:
             name = item.filename.lower()
             if item.is_dir() or item.file_size > 20 * 1024 * 1024:
                 continue
-            if not (name.endswith(("results.json", "report.json", ".xml", "run.log", "dashboard-summary.json"))):
+            if not (name.endswith(("results.json", "report.json", ".xml", "run.log", "dashboard-summary.json")) or COVERAGE_FILE_RE.search(name)):
                 continue
             text = archive.read(item).decode("utf-8", "replace")
             try:
+                if COVERAGE_FILE_RE.search(name):
+                    cov = parse_coverage_file(name, text.encode())
+                    if cov and isinstance(cov.get("lines_pct"), (int, float)) and 0 <= cov["lines_pct"] <= 100:
+                        coverage.append({"file": item.filename.replace("\\", "/").rsplit("/", 1)[-1], **cov})
+                    continue
                 result = None
                 family = ""
                 if name.endswith(".json"):
@@ -118,9 +124,13 @@ def parse_report_zip(blob):
                 elif name.endswith(".xml"):
                     result, family = junit(text), "junit"
                 elif name.endswith("run.log"):
-                    parsed = parse_run_log(text).get("totals", {})
-                    if parsed.get("tests"):
-                        result, family = {**parsed, "flaky": 0, "cases": [], "format": "log"}, "log"
+                    parsed = parse_run_log(text)
+                    if parsed['totals'].get('tests'):
+                        # Retain numeric breakdowns, never command lines or raw output.
+                        keys = ('tests', 'passed', 'failed', 'skipped', 'framework')
+                        commands = [{**{k: c.get(k) for k in keys}, 'label': f'命令 {i+1}'} for i, c in enumerate(parsed['commands'])]
+                        packages = [{**{k: c.get(k) for k in keys}, 'package': c['package']} for c in parsed['packages']]
+                        result, family = {**parsed['totals'], "flaky": 0, "cases": [], "format": "log", 'commands': commands, 'packages': packages}, "log"
                 if result:
                     reports[family].append(result)
             except (ValueError, TypeError, AttributeError, ET.ParseError):
@@ -128,5 +138,7 @@ def parse_report_zip(blob):
         for family in ("summary", "playwright", "junit", "log"):
             if reports[family]:
                 counts = {k: sum(r.get(k, 0) for r in reports[family]) for k in ("tests", *FIELDS)}
-                return {**counts, "format": family, "cases": [c for r in reports[family] for c in r["cases"]][:500]}
+                return {**counts, "format": family, "cases": [c for r in reports[family] for c in r["cases"]][:500], "coverage": coverage, **({k: [v for r in reports[family] for v in r[k]] for k in ("commands", "packages")} if family == "log" else {})}
+        if coverage:
+            return {"tests": None, "coverage": coverage}
     return None

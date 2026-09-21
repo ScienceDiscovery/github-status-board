@@ -54,7 +54,7 @@ def run_details(gh, cfg, run):
     run["reports_status"] = "missing"
     for artifact in artifacts:
         name = artifact["name"]
-        if not re.search(r"results|junit|playwright|test.report|dashboard", name, re.I):
+        if not re.search(r"results|junit|playwright|test.report|dashboard|coverage|lcov|codecov", name, re.I):
             continue
         association = artifact.get("workflow_run") or {}
         if association.get("head_sha") and association["head_sha"] != run["sha"]:
@@ -71,8 +71,15 @@ def run_details(gh, cfg, run):
                     raise ValueError("artifact over budget")
                 parsed = parse_report_zip(gh.download_artifact(cfg.repo, artifact["id"], max_bytes=cfg.artifact_max_bytes))
                 if parsed:
+                    for coverage in parsed.get("coverage", []):
+                        run.setdefault("coverage", []).append({**coverage, "artifact": name, "run_id": run["id"], "sha": run["sha"], "attempt": run["attempt"], "url": run["url"]})
+                    if parsed.get("tests") is None:
+                        continue
                     entry.update(status="available", counts={k: parsed[k] for k in ("tests", "passed", "failed", "skipped", "flaky")},
                                  cases=parsed["cases"], format=parsed["format"])
+                    for key in ("commands", "packages"):
+                        if key in parsed:
+                            entry[key] = parsed[key]
                 else:
                     entry["status"] = "no_counts"
             except (GitHubError, ValueError, OSError, zipfile.BadZipFile, RuntimeError):
@@ -158,6 +165,8 @@ def build_project(gh, repo, settings=None):
     except GitHubError:
         doc["notices"].append({"section": "releases", "message": "版本列表读取失败。"})
     # Never accidentally include the collector credential in public output.
+    from .public_sections import extend_project
+    extend_project(doc, context)
     if gh.token and gh.token in json.dumps(doc, ensure_ascii=False):
         raise ValueError("credential detected in export")
     return doc

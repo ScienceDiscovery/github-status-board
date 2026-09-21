@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent
 def export_site(output, snapshot):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    for name in ("index.html", "app.js", "style.css"):
+    for name in ("index.html", "app.js", "style.css", "report.js", "board.js", "board-local.js"):
         shutil.copyfile(ROOT / "static" / name, output / name)
     (output / "data").mkdir(exist_ok=True)
     target = output / "data/snapshot.json"
@@ -38,7 +38,7 @@ def publish(gh, site, repository, branch="gh-pages"):
         if err.status != 404:
             raise
         old = None
-    files = ["index.html", "app.js", "style.css", "data/snapshot.json", ".nojekyll"]
+    files = ["index.html", "app.js", "style.css", "report.js", "board.js", "board-local.js", "data/snapshot.json", ".nojekyll"]
     tree = [{"path": p, "mode": "100644", "type": "blob", "content": (Path(site) / p).read_text(encoding="utf-8")} for p in files]
     for entry in tree:
         if gh.token and gh.token in entry["content"]:
