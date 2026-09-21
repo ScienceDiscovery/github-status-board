@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_REPO = "openJiuwen-ai/sciencediscovery"
+DEFAULT_COVERAGE_REPO = "ScienceDiscovery/github-status-board"
 
 
 def _int(name: str, default: int) -> int:
@@ -18,7 +20,8 @@ def _int(name: str, default: int) -> int:
 
 @dataclass
 class Config:
-    repo: str = "openJiuwen-ai/sciencediscovery"
+    repo: str = DEFAULT_REPO
+    coverage_repo: str = DEFAULT_COVERAGE_REPO
     host: str = "127.0.0.1"
     port: int = 8790
     refresh_interval: int = 600           # seconds between automatic refreshes; 0 disables
@@ -39,8 +42,13 @@ class Config:
 
     @classmethod
     def from_env(cls, **overrides) -> "Config":
+        repo = os.environ.get("GSB_REPO", DEFAULT_REPO)
+        coverage_repo = os.environ.get("GSB_COVERAGE_REPO")
+        if not coverage_repo:
+            coverage_repo = DEFAULT_COVERAGE_REPO if repo.lower() == DEFAULT_REPO.lower() else repo
         cfg = cls(
-            repo=os.environ.get("GSB_REPO", cls.repo),
+            repo=repo,
+            coverage_repo=coverage_repo,
             host=os.environ.get("GSB_HOST", cls.host),
             port=_int("GSB_PORT", cls.port),
             refresh_interval=_int("GSB_REFRESH_INTERVAL", cls.refresh_interval),

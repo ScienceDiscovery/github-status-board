@@ -52,6 +52,7 @@ token 只在内存中使用：不写入缓存、不写入日志、不出现在�
 | `GSB_HOST` / `GSB_PORT` | `127.0.0.1` / `8790` | 绑定地址与端口 |
 | `GSB_REFRESH_INTERVAL` | `600` | 自动刷新间隔（秒），0 关闭 |
 | `GSB_TEST_ARTIFACTS` | `ut-results,st-results,e2e-results` | 要解析的 Actions 测试产物名 |
+| `GSB_COVERAGE_REPO` | 默认跟踪 ScienceDiscovery 时为 `ScienceDiscovery/github-status-board`，其他仓库与 `GSB_REPO` 相同 | 覆盖率 Actions 产物所在仓库 |
 | `GSB_ARTIFACT_MAX_MB` | `80` | 单个产物下载上限 |
 | `GSB_REVIEW_SLA_DAYS` | `3` | 超过此天数无人评审的 PR 计为「等待过久」 |
 | `GSB_STALE_DAYS` | `30` | Issue 无更新超过此天数计为陈旧 |
@@ -60,6 +61,22 @@ token 只在内存中使用：不写入缓存、不写入日志、不出现在�
 | `GSB_CACHE_DIR` | `./.cache` | 快照与已解析产物的缓存目录 |
 | `GSB_DISK_CACHE` | `1` | 设为 `0` 时快照只在内存，不写磁盘 |
 | `GSB_DATA_DIR` | `./.data` | 看板本地字段 / 列配置 / 规则 / 别名（`board.json`） |
+
+## ScienceDiscovery 覆盖率接入
+
+ScienceDiscovery 主仓无需修改。看板仓库自己的 `science-coverage.yml` 每小时检查一次
+`openJiuwen-ai/sciencediscovery` 的 `main` SHA；只有主线变化或旧覆盖率产物已经过期时，才会在
+GitHub-hosted Ubuntu runner 中检出该版本、构建并运行 Node 覆盖率。也可以从 Actions 页面手动运行。
+产物名为 `sciencediscovery-coverage-<sha>`，保留 30 天。
+
+看板从 `GSB_COVERAGE_REPO` 读取该 Actions 产物中的 `lcov.info`，显示行、分支、函数覆盖率及
+命中/总数。该产物不需要加入 `GSB_TEST_ARTIFACTS`；后者只用于 ScienceDiscovery 自己发布的
+UT / ST / E2E 执行结果。默认配置从 `ScienceDiscovery/github-status-board` 读取覆盖率；验证个人
+fork 的工作流时，可临时设置 `GSB_COVERAGE_REPO=wyhohyw/github-status-board`。
+
+token 需要同时拥有 ScienceDiscovery 和覆盖率产物仓库的 Actions 只读权限。工作流首次成功上传
+产物后，刷新看板即可看到数据；页面默认每 10 分钟自动刷新，也可以手动刷新。Node 覆盖率不含
+浏览器 TSX、Python 和 Playwright 测试，不能解释为整个产品的总覆盖率。
 
 ## 看板
 

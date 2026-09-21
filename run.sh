@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-command lifecycle for the local GitHub status board.
+# One-command lifecycle for the local GitHub status board (kept LF-only for WSL/bash).
 #   ./run.sh start|stop|restart|status|logs|once
 # Environment (all optional): GSB_REPO, GSB_PORT, GSB_HOST, GITHUB_TOKEN, GSB_REFRESH_INTERVAL
 set -euo pipefail

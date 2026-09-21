@@ -411,8 +411,16 @@
     // Coverage ------------------------------------------------------------
     html += sectionHead('覆盖率', cov?.source ? `来源 ${esc(cov.source)}` : '按优先级探测数据源，均未命中时用结构代理降级');
     const steps = `<ul class="steps">${(cov?.attempts || []).map((a) => `<li><span class="mark ${a.ok ? 'ok' : 'no'}">${a.ok ? '✓' : '✗'}</span><span><b>${esc(a.step)}</b> <span class="muted">${esc(a.detail)}</span></span></li>`).join('')}</ul>`;
-    const covValue = cov?.value ? kv(Object.entries(cov.value).filter(([k]) => k !== 'format').map(([k, v]) => [k, typeof v === 'number' ? pct(v) : esc(String(v))])) : '';
-    const gap = cov && !cov.source ? `<div class="banner warn" style="margin:10px 0 0"><span class="icon">▲</span><div><div class="title">该仓库目前没有任何行覆盖率数据源</div><div>CI 只上传 <code>ut/st/e2e-results</code>（日志 + Playwright JSON），没有 lcov / coverage-summary；未接入 Codecov；仓库内也没有 c8 / nyc / codecov.yml 之类的配置。下方用「结构代理」降级：每个包的源文件数、测试文件数、比值，以及 CI 最近一次实际执行的用例数。它衡量的是「有没有测、测了多少」，<b>不是</b>行覆盖率。</div><div class="hint">补齐方式：在 UT job 用 <code>c8 --reporter=lcov --reporter=json-summary</code> 包一层 <code>node --test</code>，并把 <code>coverage/</code> 作为 <code>coverage-results</code> 产物上传；看板会自动识别名称含 coverage 的产物并解析 lcov / coverage-summary.json。</div></div></div>` : '';
+    const covLabels = {
+      lines_pct: '行覆盖率', branches_pct: '分支覆盖率', functions_pct: '函数覆盖率', statements_pct: '语句覆盖率',
+      lines_hit: '已覆盖行', lines_found: '总行数', branches_hit: '已覆盖分支', branches_found: '总分支数',
+      functions_hit: '已覆盖函数', functions_found: '总函数数', file: '文件', summary: '摘要', url: '链接',
+    };
+    const covValue = cov?.value ? kv(Object.entries(cov.value).filter(([k, v]) => k !== 'format' && v != null).map(([k, v]) => [
+      covLabels[k] || k,
+      typeof v === 'number' ? (k.endsWith('_pct') ? pct(v) : n(v)) : esc(String(v)),
+    ])) : '';
+    const gap = cov && !cov.source ? `<div class="banner warn" style="margin:10px 0 0"><span class="icon">▲</span><div><div class="title">该仓库目前没有任何行覆盖率数据源</div><div>最近的 Actions 产物中没有可解析的 lcov / coverage-summary，也未从 Codecov 或 check-run 找到覆盖率。下方用「结构代理」降级：每个包的源文件数、测试文件数、比值，以及 CI 最近一次实际执行的用例数。它衡量的是「有没有测、测了多少」，<b>不是</b>行覆盖率。</div><div class="hint">补齐方式：让 CI 上传名称含 <code>coverage</code>、<code>lcov</code> 或 <code>codecov</code> 的 Actions 产物，并在其中提供 <code>lcov.info</code>、<code>coverage-summary.json</code>、Cobertura 或 Clover XML；看板会自动识别。</div></div></div>` : '';
     html += `<div class="card">${steps}${covValue}${gap}</div>`;
     html += `<div class="card" style="margin-top:12px"><h3>结构代理：按包的测试存在性与 CI 执行量<span class="sub">source_files 不含测试与 .d.ts；CI 用例来自最近 ut-results</span></h3>${table('t-inv', [
       { key: 'package', label: '包', render: (p) => `<code>${esc(p.package)}</code>` },
