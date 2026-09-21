@@ -1,681 +1,320 @@
-/* GitHub 状态看板 — 单页渲染逻辑（无构建、无依赖）。
- * 数据来自 /api/snapshot；每个区块独立渲染，区块级错误只影响自己的卡片。 */
-(() => {
-  'use strict';
-
-  // ------------------------------------------------------------ utilities
-  const $ = (sel, root = document) => root.querySelector(sel);
-  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const n = (v) => (v == null ? '—' : Number(v).toLocaleString('zh-CN'));
-  const pct = (v) => (v == null ? '—' : `${Number(v).toFixed(1)}%`);
-  const dur = (s) => {
-    if (s == null) return '—';
-    s = Math.round(s);
-    if (s < 60) return `${s}s`;
-    if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
-    return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
-  };
-  const hours = (h) => (h == null ? '—' : h * 60 < 1 ? '<1 分钟' : h < 1 ? `${Math.round(h * 60)} 分钟` : h < 48 ? `${h.toFixed(1)} 小时` : `${(h / 24).toFixed(1)} 天`);
-  const codeify = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
-  // Memory-only parts of the snapshot come back from the disk cache as {redacted:true} after a restart.
-  const live = (v) => (v && typeof v === 'object' && v.redacted ? null : v);
-  const pending = (v) => !!(v && typeof v === 'object' && v.redacted);
-  const memoryOnlyNote = (what) => `<div class="muted">${badge('内存态', 'info')} ${esc(what)}只保留在进程内存、不写入磁盘缓存；服务刚重启，等待本轮采集（约 15 秒）后显示。</div>`;
-  const ago = (iso) => {
-    if (!iso) return '—';
-    const diff = (Date.now() - new Date(iso).getTime()) / 1000;
-    if (diff < 60) return '刚刚';
-    if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
-    if (diff < 86400 * 60) return `${Math.floor(diff / 86400)} 天前`;
-    return `${Math.floor(diff / 86400 / 30)} 个月前`;
-  };
-  const date = (iso) => (iso ? new Date(iso).toLocaleString('zh-CN', { hour12: false }) : '—');
-  const days = (d) => (d == null ? '—' : d < 1 ? '<1 天' : `${Math.round(d)} 天`);
-  const tip = (text) => ` data-tip="${esc(text)}"`;
-  const link = (href, text, extra = '') => `<a href="${esc(href)}" target="_blank" rel="noopener"${extra}>${text}</a>`;
-  const LAYER_COLOR = { unit: 'var(--s1)', e2e: 'var(--s2)', st: 'var(--s3)', 'ci-self': 'var(--s4)', tooling: 'var(--s5)', other: 'var(--muted)' };
-  const LAYER_NAME = { unit: '单元 (unit)', e2e: '端到端 (e2e)', st: '系统/冒烟 (st)', 'ci-self': 'CI 自检', tooling: '脚本工具', other: '其他' };
-  const CONCLUSION_TONE = { success: 'good', failure: 'bad', timed_out: 'bad', cancelled: '', skipped: '', in_progress: 'warn', queued: 'warn', pending: 'warn', neutral: '', action_required: 'warn', startup_failure: 'bad', error: 'bad', expected: 'warn' };
-  const CONCLUSION_NAME = { success: '成功', failure: '失败', timed_out: '超时', cancelled: '取消', skipped: '跳过', in_progress: '运行中', queued: '排队', pending: '等待', neutral: '中性', action_required: '需处理', startup_failure: '启动失败', error: '错误', expected: '等待' };
-
-  const STATE = { snap: null, status: null, tab: 'overview', sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, pollTimer: null };
-
-  // ------------------------------------------------------------ components
-  const badge = (text, tone = '', extra = '') => `<span class="badge ${tone}"${extra}>${esc(text)}</span>`;
-  const conclusionBadge = (c) => badge(CONCLUSION_NAME[c] || c || '未知', CONCLUSION_TONE[c] ?? '');
-  const tiles = (items) => `<div class="tiles">${items.map((t) => {
-    const inner = `<div class="label"><span>${esc(t.label)}</span>${t.tag ? `<span>${t.tag}</span>` : ''}</div>
-      <div class="value">${t.value}${t.unit ? `<small>${esc(t.unit)}</small>` : ''}</div>${t.sub ? `<div class="foot">${t.sub}</div>` : ''}`;
-    return `<div class="tile ${t.tone || ''}">${t.href ? `<a href="${esc(t.href)}">${inner}</a>` : inner}</div>`;
-  }).join('')}</div>`;
-  const card = (title, body, opts = {}) => `<div class="card ${opts.span2 ? 'span2' : ''}"><h3>${esc(title)}${opts.sub ? `<span class="sub">${opts.sub}</span>` : ''}</h3>${body}</div>`;
-  const empty = (text) => `<div class="empty">${esc(text)}</div>`;
-  const kv = (pairs) => `<dl class="kv">${pairs.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
-  const sectionHead = (title, sub = '') => `<div class="section-head"><h2>${esc(title)}</h2><span class="sub">${sub}</span></div>`;
-
-  /** Horizontal magnitude bars: one hue (sequential job), value text in ink. */
-  const bars = (items, opts = {}) => {
-    if (!items.length) return empty(opts.emptyText || '暂无数据');
-    const max = opts.max ?? Math.max(...items.map((i) => i.value || 0), 1);
-    return `<div class="bars">${items.map((i) => {
-      const segs = i.segments
-        ? i.segments.map((s) => `<span class="fill" style="width:${(s.value / max) * 100}%;background:${s.color}"${tip(`${s.name}: ${s.value}`)}></span>`).join('')
-        : `<span class="fill" style="width:${((i.value || 0) / max) * 100}%;${i.color ? `background:${i.color}` : ''}"></span>`;
-      return `<span class="lbl" title="${esc(i.label)}">${i.labelHtml || esc(i.label)}</span><span class="track">${segs}</span><span class="val">${i.valueText ?? n(i.value)}</span>`;
-    }).join('')}</div>`;
-  };
-  const legend = (items) => `<div class="legend">${items.map((i) => `<span><i style="background:${i.color}"></i>${esc(i.name)}${i.value != null ? ` ${n(i.value)}` : ''}</span>`).join('')}</div>`;
-  const stack = (segments) => {
-    const total = segments.reduce((a, s) => a + (s.value || 0), 0) || 1;
-    return `<div class="stack">${segments.filter((s) => s.value).map((s) => `<span style="width:${(s.value / total) * 100}%;background:${s.color}"${tip(`${s.name}: ${s.value} (${((s.value / total) * 100).toFixed(1)}%)`)}></span>`).join('')}</div>`;
-  };
-  const ratioBar = (v, tone = '') => `<span class="ratio ${tone}"><span style="width:${Math.max(0, Math.min(100, v || 0))}%"></span></span>`;
-  const sparkline = (values, labels = []) => {
-    if (!values.length) return '';
-    const w = 400, h = 54, pad = 4, max = Math.max(...values, 1);
-    const pts = values.map((v, i) => [pad + (i * (w - 2 * pad)) / Math.max(values.length - 1, 1), h - pad - (v / max) * (h - 2 * pad)]);
-    const path = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
-    const area = `${path} L${pts[pts.length - 1][0].toFixed(1)},${h - pad} L${pts[0][0].toFixed(1)},${h - pad} Z`;
-    const last = pts[pts.length - 1];
-    const dots = pts.map((p, i) => `<rect x="${(p[0] - 6).toFixed(1)}" y="0" width="12" height="${h}" fill="transparent"${tip(`${labels[i] || ''}: ${values[i]} 次提交`)}></rect>`).join('');
-    return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path class="area" d="${area}"></path><line class="base" x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}"></line><path d="${path}"></path><circle cx="${last[0]}" cy="${last[1]}" r="3"></circle>${dots}</svg>`;
-  };
-  const strip = (runs) => `<div class="strip">${runs.slice().reverse().map((r) => `<a class="${esc(r.conclusion || r.status)}" href="${esc(r.url)}" target="_blank" rel="noopener"${tip(`${r.title || r.name}\n${CONCLUSION_NAME[r.conclusion] || r.status} · ${r.branch} · ${r.event}\n${date(r.created_at)} · ${dur(r.duration_s)}`)}></a>`).join('')}</div>`;
-  const labelChips = (labels) => labels.map((l) => `<span class="label-chip"><span class="sw" style="background:#${esc(l.color || '999')}"></span>${esc(l.name)}</span>`).join('');
-
-  /** Sortable table. cols: [{key,label,num,render,sort}] ; rows: objects. Sorting is client-side by id. */
-  const table = (id, cols, rows, opts = {}) => {
-    const sort = STATE.sort[id] || opts.defaultSort || null;
-    let data = rows.slice();
-    if (sort) {
-      const col = cols.find((c) => c.key === sort.key);
-      const getter = col?.sort || ((r) => r[sort.key]);
-      data.sort((a, b) => {
-        const va = getter(a), vb = getter(b);
-        if (va == null && vb == null) return 0;
-        if (va == null) return 1;
-        if (vb == null) return -1;
-        return (va > vb ? 1 : va < vb ? -1 : 0) * (sort.dir === 'desc' ? -1 : 1);
-      });
-    }
-    if (opts.limit) data = data.slice(0, opts.limit);
-    if (!data.length) return empty(opts.emptyText || '暂无数据');
-    const head = cols.map((c) => `<th class="${c.num ? 'num' : ''} ${c.sortable === false ? '' : 'sortable'}" data-table="${id}" data-key="${c.key}">${esc(c.label)}${sort && sort.key === c.key ? (sort.dir === 'desc' ? ' ▼' : ' ▲') : ''}</th>`).join('');
-    const body = data.map((r) => `<tr>${cols.map((c) => `<td class="${c.num ? 'num' : ''}">${c.render ? c.render(r) : esc(r[c.key])}</td>`).join('')}</tr>`).join('');
-    return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>${opts.limit && rows.length > opts.limit ? `<div class="muted" style="margin-top:6px">仅显示前 ${opts.limit} / ${rows.length} 条</div>` : ''}`;
-  };
-
-  const KIND_TEXT = { unauthorized: '未授权', forbidden: '权限不足', rate_limited: 'API 限流', not_found: '不存在或无权限', network: '网络错误', server: 'GitHub 服务端错误', internal: '看板内部错误', error: '错误' };
-  const errorBanner = (err, what = '') => {
-    if (!err) return '';
-    const reset = err.reset_at ? `（重置于 ${date(new Date(err.reset_at * 1000).toISOString())}）` : '';
-    const hint = err.hint ? `<div class="hint">${esc(err.hint).replace(/`([^`]+)`/g, '<code>$1</code>')}</div>` : '';
-    return `<div class="banner error"><span class="icon">⛔</span><div><div class="title">${esc(what)}${KIND_TEXT[err.kind] || err.kind}${err.status ? ` · HTTP ${err.status}` : ''}${reset}</div><div>${esc(err.message)}</div>${hint}${err.trace ? `<details><summary>堆栈</summary><pre class="mono">${esc(err.trace)}</pre></details>` : ''}</div><div class="banner-actions"><button class="btn small" data-action="refresh">重试</button></div></div>`;
-  };
-  const notesList = (notes) => (notes && notes.length ? `<ul class="notes">${notes.map((x) => `<li><b>${esc(x.what || x.key)}</b>：${esc(x.message)}${x.hint ? ` <span class="muted">${esc(x.hint)}</span>` : ''}</li>`).join('')}</ul>` : '');
-  const sectionState = (sec, name) => {
-    if (!sec) return `<div class="banner warn"><span class="icon">⏳</span><div><div class="title">${esc(name)} 尚未采集</div><div>首次采集进行中或缓存中没有该区块，请稍候或点击刷新。</div></div></div>`;
-    if (sec.status === 'error') return errorBanner(sec.error, `${name}：`);
-    return notesList(sec.notes);
-  };
-
-  // ------------------------------------------------------------ renderers
-  function renderOverview(snap) {
-    const S = snap.sections;
-    const repo = S.repo?.data, iss = S.issues?.data, prs = S.prs?.data, ci = S.ci?.data, tests = S.tests?.data, ops = S.ops?.data;
-    const ut = tests?.executed?.find((e) => e.layer === 'ut' || e.artifact.startsWith('ut'));
-    const e2e = tests?.executed?.find((e) => e.layer === 'e2e');
-    const mainRate = ci?.main?.success_rate;
-    const cov = tests?.coverage;
-    const rel = ops?.releases?.latest;
-    let html = '';
-    html += repo ? `<div class="muted" style="margin-bottom:10px">${esc(repo.description || '')} · ⭐ ${n(repo.stars)} · fork ${n(repo.forks)} · ${esc(repo.language || '')} · ${esc(repo.license || '无 license')} · 默认分支 <code>${esc(repo.default_branch)}</code> · 最近 push ${ago(repo.pushed_at)}</div>` : '';
-    html += tiles([
-      { label: 'Issue 开放', value: n(iss?.open_count), href: '#issues', sub: iss ? `7 天 +${n(iss.counts.opened_7d)} / −${n(iss.counts.closed_7d)} · 陈旧 ${n(iss.stale_count)}` : '—', tone: '' },
-      { label: 'PR 开放', value: n(prs?.open_count), href: '#prs', sub: prs ? `草稿 ${prs.draft_count} · 等待评审 ${prs.waiting_review_count} · CI 失败 ${prs.ci_states.failure || 0}` : '—', tone: prs && prs.waiting_review_count ? 'warn' : '' },
-      { label: `CI 主干成功率`, value: pct(mainRate), href: '#ci', sub: ci ? `连续失败 ${ci.red_streak_main} 次 · 7 天失败 ${ci.failures_7d}` : '—', tone: mainRate == null ? '' : mainRate >= 80 ? 'good' : mainRate >= 50 ? 'warn' : 'bad' },
-      { label: 'CI 最近执行用例', value: n(ut?.totals?.tests), href: '#tests', sub: ut?.totals ? `UT 通过 ${n(ut.totals.passed)} · 失败 ${n(ut.totals.failed)}${e2e?.totals ? ` · E2E ${e2e.totals.passed}/${e2e.totals.tests}` : ''}` : ut ? '产物存在但没有解析出用例数' : '无产物', tone: ut?.totals?.failed ? 'bad' : '' },
-      { label: '测试文件', value: n(tests?.tree?.total), href: '#tests', sub: tests?.tree ? Object.entries(tests.tree.by_layer).map(([k, v]) => `${k} ${v}`).join(' · ') : '—' },
-      { label: '行覆盖率', value: cov?.value?.lines_pct != null ? pct(cov.value.lines_pct) : '无数据源', href: '#tests', sub: cov?.source ? `来源 ${esc(cov.source)}` : '已探测 5 个来源，均未命中；见测试页降级视图', tone: cov?.source ? '' : 'warn' },
-      { label: '最新 Release', value: rel ? esc(rel.tag) : '—', href: '#ops', sub: rel ? `${days(rel.age_days)}前 · 未发布提交 ${n(ops.releases.unreleased?.commits)}` : '无 release' },
-      { label: '社区健康度', value: ops?.community ? pct(ops.community.health_percentage) : '—', href: '#ops', sub: ops?.community ? `缺 ${ops.community.missing.join(', ') || '无'}` : '—' },
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (v) =>
+  String(v ?? "").replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ],
+  );
+const safeUrl = (v) => (/^https:\/\//.test(v || "") ? v : "#");
+const link = (url, text) =>
+  `<a href="${esc(safeUrl(url))}" target="_blank" rel="noopener">${esc(text)} ↗</a>`;
+const number = (v) => (v == null ? "—" : Number(v).toLocaleString("zh-CN"));
+const date = (v) =>
+  v && !isNaN(new Date(v))
+    ? new Date(v).toLocaleString("zh-CN", { hour12: false })
+    : "—";
+const labels = {
+  success: ["通过", "good"],
+  failure: ["失败", "bad"],
+  timed_out: ["超时", "bad"],
+  cancelled: ["已取消", "warn"],
+  skipped: ["跳过", "muted"],
+  neutral: ["中性", "muted"],
+  action_required: ["待处理", "warn"],
+  stale: ["已过期", "warn"],
+  in_progress: ["运行中", "info"],
+  queued: ["排队中", "info"],
+  waiting: ["等待", "info"],
+  pending: ["等待", "info"],
+  completed: ["已完成", "muted"],
+  unknown: ["未知", "muted"],
+  passed: ["通过", "good"],
+  failed: ["失败", "bad"],
+  flaky: ["重试后通过", "warn"],
+  available: ["已取得报告", "good"],
+  missing: ["未上传报告", "warn"],
+  unavailable: ["无法读取", "warn"],
+  expired: ["产物已过期", "warn"],
+  no_counts: ["报告不可解析", "warn"],
+  not_inspected: ["未采集报告", "muted"],
+  partial: ["报告不完整", "warn"],
+};
+const badge = (state, text) => {
+  const [name, tone] = labels[String(state).toLowerCase()] || [
+    text || state || "未知",
+    "muted",
+  ];
+  return `<span class="badge ${tone}">${esc(text || name)}</span>`;
+};
+const channelNames = {
+  gate: "合并门禁",
+  daily: "每日构建",
+  release: "版本验证",
+};
+let data,
+  search = "",
+  workKind = "all",
+  lane = "all";
+function state(run) {
+  return run?.status === "completed"
+    ? run.conclusion || "unknown"
+    : run?.status || "unknown";
+}
+function metric(label, value, hint) {
+  return `<div class="metric"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div><div class="hint">${esc(hint)}</div></div>`;
+}
+function heading(title, note = "") {
+  return `<div class="section-head"><h2>${esc(title)}</h2><p>${esc(note)}</p></div>`;
+}
+function countSummary(report) {
+  const c = report?.counts;
+  return c ? `${number(c.passed)} / ${number(c.tests)} 通过` : "暂无用例结果";
+}
+function breakdown(c) {
+  if (!c) return "";
+  const total = c.tests || 1;
+  return `<div class="bar">${["passed", "failed", "skipped", "flaky"].map((k) => `<i class="${k}" style="width:${Math.max(0, Math.min(100, (c[k] / total) * 100))}%"></i>`).join("")}</div><div class="legend">${[
+    ["passed", "通过", "#399d80"],
+    ["failed", "失败", "#d26a62"],
+    ["skipped", "跳过", "#c0c8ce"],
+    ["flaky", "重试", "#d7a948"],
+  ]
+    .map(
+      ([k, n, col]) =>
+        `<span style="--color:${col}">${n} ${number(c[k])}</span>`,
+    )
+    .join("")}</div>`;
+}
+function e2e(run) {
+  return (run?.tests || []).filter((t) => t.layer === "e2e");
+}
+function sumReports(reports) {
+  if (!reports.length || reports.some((r) => !r.counts)) return null;
+  return Object.fromEntries(
+    ["tests", "passed", "failed", "skipped", "flaky"].map((k) => [
+      k,
+      reports.reduce((n, r) => n + r.counts[k], 0),
+    ]),
+  );
+}
+function attention() {
+  const out = [];
+  const iss = data.issues,
+    prs = data.prs,
+    runs = data.quality.runs;
+  if (iss?.unassigned_count)
+    out.push([
+      "warn",
+      `${iss.unassigned_count} 个 Issue 尚未认领`,
+      "为工作项明确负责人，减少等待。",
+      "#work",
     ]);
-
-    // Attention list — computed from the same data the tabs show.
-    const items = [];
-    if (ci?.red_streak_main) items.push(['critical', `主干 CI 连续失败 ${ci.red_streak_main} 次；最近一次失败 job：${(ci.latest_main?.jobs || []).filter((j) => j.conclusion === 'failure').map((j) => `${j.name}${j.failed_steps.length ? `（步骤 ${j.failed_steps.join('、')}）` : ''}`).join('、') || '—'}`, '#ci']);
-    if (prs?.waiting_review_count) items.push(['warn', `${prs.waiting_review_count} 个 PR 超过 ${prs.review_sla_days} 天无人评审：${prs.items.filter((p) => p.waiting_review).map((p) => `#${p.number}`).join(' ')}`, '#prs']);
-    if (prs?.ci_states?.failure) items.push(['warn', `${prs.ci_states.failure} 个开放 PR 的 CI 为失败状态`, '#prs']);
-    if (prs?.items?.some((p) => p.mergeable === 'CONFLICTING')) items.push(['warn', `存在冲突的 PR：${prs.items.filter((p) => p.mergeable === 'CONFLICTING').map((p) => `#${p.number}`).join(' ')}`, '#prs']);
-    if (e2e?.totals?.failed) items.push(['warn', `最近 E2E 产物有 ${e2e.totals.failed} 个失败/超时用例（分支 ${e2e.branch}）`, '#tests']);
-    if (iss?.no_response_count) items.push(['info', `${iss.no_response_count} 个开放 Issue 还没有任何评论，${iss.unassigned_count} 个无人认领，${iss.unlabeled_count} 个无标签`, '#issues']);
-    if (iss?.stale_count) items.push(['info', `${iss.stale_count} 个 Issue 超过 ${iss.stale_days_threshold} 天没有更新`, '#issues']);
-    if (tests?.inventory?.some((p) => !p.tested)) items.push(['info', `没有任何测试文件的包：${tests.inventory.filter((p) => !p.tested).map((p) => p.package).join('、')}`, '#tests']);
-    if (cov && !cov.source) items.push(['info', '仓库没有可用的覆盖率数据源（无 coverage 产物 / Codecov / 覆盖率配置），测试页用结构代理降级展示', '#tests']);
-    if (ops?.branches?.protection && !ops.branches.protection.enabled) items.push(['warn', `默认分支 ${ops.branches.default} 未启用分支保护（rulesets ${ops.branches.rulesets?.length || 0} 条）`, '#ops']);
-    if (ops?.branches?.stale?.length) items.push(['info', `陈旧分支：${ops.branches.stale.map((b) => `${b.name}（落后 ${n(b.behind)}）`).join('、')}`, '#ops']);
-    if (live(ops?.security) && !ops.security.dependabot?.ok) items.push(['info', `安全告警不可读：${ops.security.dependabot?.error?.hint || ''}`, '#ops']);
-    if (live(ops?.security)?.dependabot?.ok && ops.security.dependabot.open) items.push(['warn', `${ops.security.dependabot.open} 个开放的 Dependabot 告警`, '#ops']);
-    if (ops?.releases?.unreleased?.commits > 50) items.push(['info', `自 ${ops.releases.latest?.tag} 以来已有 ${n(ops.releases.unreleased.commits)} 个提交未发布`, '#ops']);
-    if (ops?.contributors?.bus_factor_50 === 1) items.push(['info', `贡献高度集中：一位贡献者贡献了 ${ops.contributors.top[0]?.share}% 的提交`, '#ops']);
-    if (!items.length) items.push(['good', '没有需要关注的事项', '#overview']);
-
-    const status = Object.entries(S).map(([k, s]) => badge(`${k} ${s.status}${s.elapsed_s ? ` · ${s.elapsed_s}s` : ''}`, s.status === 'ok' ? 'good' : s.status === 'partial' ? 'warn' : 'bad'));
-    html += `<div class="grid wide" style="margin-top:12px">${card('需要关注', `<ul class="attention">${items.map(([sev, text, href]) => `<li><span class="sev ${sev}"></span><span>${codeify(text)} <a href="${href}">查看</a></span></li>`).join('')}</ul>`)}
-      ${card('数据源状态', `<div class="status-row">${status.join('')}</div>${kv([
-        ['采集时间', `${date(snap.generated_at)}（${ago(snap.generated_at)}）`],
-        ['耗时 / API 调用', `${snap.duration_s}s / ${snap.api_calls} 次`],
-        ['认证', snap.auth.authenticated ? `${esc(snap.auth.token_source)}${live(repo?.viewer) ? ` · @${esc(repo.viewer)}` : ''}${live(repo?.permissions) ? ` · 权限 ${Object.entries(repo.permissions).filter(([, v]) => v).map(([k]) => k).join('/')}` : pending(repo?.permissions) ? ' · 权限（内存态，采集中）' : ''}` : '<span class="bad">未认证（匿名限额 60 次/小时）</span>'],
-        ['限流', snap.rate?.core ? `core 剩余 ${n(snap.rate.core.remaining)}/${n(snap.rate.core.limit)}，重置 ${date(new Date(snap.rate.core.reset * 1000).toISOString())}` : '—'],
-        ['自动刷新', snap.config.refresh_interval ? `每 ${snap.config.refresh_interval}s` : '关闭'],
-      ])}<div class="muted" style="margin-top:8px">各区块的错误与降级说明显示在对应标签页顶部。</div>`)}</div>`;
-    return html;
-  }
-
-  function renderIssues(sec) {
-    const d = sec?.data;
-    let html = sectionState(sec, 'Issue');
-    if (!d) return html;
-    html += tiles([
-      { label: '开放', value: n(d.open_count), sub: d.truncated ? '列表已截断（只取前 500）' : '' },
-      { label: '已关闭（累计）', value: n(d.counts.closed_total) },
-      { label: '30 天新增', value: n(d.counts.opened_30d), sub: `7 天 ${n(d.counts.opened_7d)}` },
-      { label: '30 天关闭', value: n(d.counts.closed_30d), sub: `7 天 ${n(d.counts.closed_7d)}` },
-      { label: `陈旧（≥${d.stale_days_threshold} 天无更新）`, value: n(d.stale_count), tone: d.stale_count ? 'warn' : '' },
-      { label: '无人认领', value: n(d.unassigned_count), tone: d.unassigned_count ? 'warn' : '' },
-      { label: '无标签', value: n(d.unlabeled_count) },
-      { label: '零回复', value: n(d.no_response_count) },
-      { label: '中位年龄', value: days(d.median_age_days), sub: `最老 ${days(d.oldest_age_days)}` },
+  if (iss?.stale_count)
+    out.push([
+      "warn",
+      `${iss.stale_count} 个 Issue 长时间无更新`,
+      "确认是否仍在计划中。",
+      "#work",
     ]);
-    const issueRow = (i) => `<span class="title">${link(i.url, `#${i.number} ${esc(i.title)}`)}</span><span class="sub">${esc(i.author)} · ${labelChips(i.labels)}</span>`;
-    html += `<div class="grid">
-      ${card('标签分布', bars(d.labels.map((l) => ({ label: l.name, labelHtml: `<span class="label-chip"><span class="sw" style="background:#${esc(l.color || '999')}"></span>${esc(l.name)}</span>`, value: l.count })), { emptyText: '开放 Issue 都没有标签' }) + (d.unused_labels.length ? `<div class="muted" style="margin-top:8px">仓库另有 ${d.unused_labels.length} 个标签未用于任何开放 Issue：${esc(d.unused_labels.join('、'))}</div>` : ''), { sub: '按开放 Issue 计数' })}
-      ${card('年龄分布', bars(d.aging.map((a) => ({ label: a.bucket, value: a.count }))), { sub: '按创建时间' })}
-      ${card('认领负载', bars(d.assignee_load.map((a) => ({ label: a.login, value: a.count })), { emptyText: '所有开放 Issue 均无人认领' }), { sub: '按 assignee' })}
-      ${card('里程碑', bars(d.milestones.map((m) => ({ label: m.name, value: m.count }))))}
-    </div>`;
-    html += `<div class="grid wide" style="margin-top:12px">
-      ${card('最近更新', table('iss-recent', [
-        { key: 'number', label: 'Issue', render: issueRow, sortable: false },
-        { key: 'updated_at', label: '更新', render: (i) => ago(i.updated_at) },
-        { key: 'comments', label: '评论', num: true },
-      ], d.recent, { limit: 10 }))}
-      ${card('最久未动', table('iss-stale', [
-        { key: 'number', label: 'Issue', render: issueRow, sortable: false },
-        { key: 'idle_days', label: '闲置', num: true, render: (i) => days(i.idle_days) },
-        { key: 'age_days', label: '年龄', num: true, render: (i) => days(i.age_days) },
-      ], (d.stale.length ? d.stale : d.oldest), { limit: 10, emptyText: '没有陈旧 Issue' }), { sub: d.stale.length ? `≥${d.stale_days_threshold} 天无更新` : '暂无陈旧 Issue，显示最老的开放 Issue' })}
-    </div>`;
-    // Drill-down list with filters.
-    const f = STATE.filters;
-    const labels = [...new Set(d.items.flatMap((i) => i.labels.map((l) => l.name)))].sort();
-    const assignees = [...new Set(d.items.flatMap((i) => i.assignees))].sort();
-    let rows = d.items;
-    if (f.issueQ) rows = rows.filter((i) => `${i.number} ${i.title} ${i.author}`.toLowerCase().includes(f.issueQ.toLowerCase()));
-    if (f.issueLabel === '__none__') rows = rows.filter((i) => !i.labels.length);
-    else if (f.issueLabel) rows = rows.filter((i) => i.labels.some((l) => l.name === f.issueLabel));
-    if (f.issueAssignee === '__none__') rows = rows.filter((i) => !i.assignees.length);
-    else if (f.issueAssignee) rows = rows.filter((i) => i.assignees.includes(f.issueAssignee));
-    html += sectionHead('全部开放 Issue', `${rows.length} / ${d.items.length}`);
-    html += `<div class="card"><div class="filters">
-      <input type="text" data-filter="issueQ" placeholder="搜索编号 / 标题 / 作者" value="${esc(f.issueQ)}">
-      <select data-filter="issueLabel"><option value="">全部标签</option><option value="__none__" ${f.issueLabel === '__none__' ? 'selected' : ''}>无标签</option>${labels.map((l) => `<option ${f.issueLabel === l ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
-      <select data-filter="issueAssignee"><option value="">全部认领人</option><option value="__none__" ${f.issueAssignee === '__none__' ? 'selected' : ''}>无人认领</option>${assignees.map((a) => `<option ${f.issueAssignee === a ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>
-    </div>${table('iss-all', [
-      { key: 'number', label: '#', num: true, render: (i) => link(i.url, `#${i.number}`) },
-      { key: 'title', label: '标题', render: (i) => `${link(i.url, esc(i.title))}<div class="sub">${labelChips(i.labels)}${i.milestone ? ` · ${esc(i.milestone)}` : ''}</div>` },
-      { key: 'author', label: '作者' },
-      { key: 'assignees', label: '认领', render: (i) => (i.assignees.length ? esc(i.assignees.join(', ')) : '<span class="muted">—</span>'), sort: (i) => i.assignees.join(',') },
-      { key: 'comments', label: '评论', num: true },
-      { key: 'created_at', label: '创建', render: (i) => ago(i.created_at) },
-      { key: 'updated_at', label: '更新', render: (i) => ago(i.updated_at) },
-    ], rows, { defaultSort: { key: 'updated_at', dir: 'desc' } })}</div>`;
-    return html;
-  }
-
-  function renderPRs(sec) {
-    const d = sec?.data;
-    let html = sectionState(sec, 'PR');
-    if (!d) return html;
-    html += tiles([
-      { label: '开放 PR', value: n(d.open_count) },
-      { label: '草稿', value: n(d.draft_count) },
-      { label: `等待评审 > ${d.review_sla_days} 天`, value: n(d.waiting_review_count), tone: d.waiting_review_count ? 'warn' : 'good' },
-      { label: 'CI 失败', value: n(d.ci_states.failure || 0), tone: d.ci_states.failure ? 'bad' : 'good', sub: `成功 ${d.ci_states.success || 0} · 进行中 ${d.ci_states.pending || 0}` },
-      { label: '30 天合并', value: n(d.merged_30d), sub: `关闭未合并 ${n(d.closed_unmerged_30d)}` },
-      { label: '合并时长中位（全部）', value: hours(d.median_time_to_merge_h), sub: `P90 ${hours(d.p90_time_to_merge_h)} · 含 bot 同步 PR` },
-      { label: '合并时长中位（人工 PR）', value: hours(d.median_time_to_merge_h_human), sub: d.merged_human_count ? `样本 ${d.merged_human_count} 个非 bot PR` : '最近关闭的 PR 全部来自 bot' },
+  if (prs?.waiting_review_count)
+    out.push([
+      "warn",
+      `${prs.waiting_review_count} 个 PR 超过评审时限`,
+      "安排评审，解除交付阻塞。",
+      "#work",
     ]);
-    const DECISION = { APPROVED: ['已批准', 'good'], CHANGES_REQUESTED: ['需修改', 'bad'], REVIEW_REQUIRED: ['待评审', 'warn'], NONE: ['无评审', ''] };
-    const MERGEABLE = { MERGEABLE: ['可合并', 'good'], CONFLICTING: ['有冲突', 'bad'], UNKNOWN: ['计算中', ''] };
-    const ciCell = (p) => {
-      const checks = p.ci.checks || [];
-      const ok = checks.filter((c) => c.conclusion === 'success').length;
-      const bad = checks.filter((c) => ['failure', 'timed_out', 'error', 'cancelled', 'startup_failure'].includes(c.conclusion)).length;
-      const state = p.ci.state ? conclusionBadge(p.ci.state) : badge('无检查', 'none');
-      const list = checks.length ? `<details><summary>${ok}/${checks.length} 通过${bad ? `，${bad} 失败` : ''}</summary><ul class="checks">${checks.map((c) => `<li>${conclusionBadge(c.conclusion)} ${c.url ? link(c.url, esc(c.name)) : esc(c.name)}</li>`).join('')}</ul></details>` : '';
-      return `${state}${list}`;
-    };
-    html += sectionHead('开放 PR');
-    html += `<div class="card">${table('pr-open', [
-      { key: 'number', label: '#', num: true, render: (p) => link(p.url, `#${p.number}`) },
-      { key: 'title', label: '标题', render: (p) => `${link(p.url, esc(p.title))}<div class="sub">${esc(p.author)} · <code>${esc(p.head)}</code> → <code>${esc(p.base)}</code>${p.labels.length ? ' · ' + labelChips(p.labels) : ''}</div>` },
-      { key: 'age_days', label: '年龄', num: true, render: (p) => days(p.age_days) },
-      { key: 'review_decision', label: '状态', render: (p) => [p.draft ? badge('草稿', 'none') : '', badge(...(DECISION[p.review_decision] || [p.review_decision, ''])), p.mergeable ? badge(...(MERGEABLE[p.mergeable] || [p.mergeable, ''])) : '', p.waiting_review ? badge(`等待评审 ${days(p.age_days)}`, 'warn') : ''].filter(Boolean).join(' ') },
-      { key: 'ci', label: 'CI', render: ciCell, sort: (p) => p.ci.state },
-      { key: 'requested_reviewers', label: '评审人', render: (p) => (p.requested_reviewers.length ? esc(p.requested_reviewers.join(', ')) : p.reviews.length ? esc([...new Set(p.reviews.map((r) => r.author))].join(', ')) : '<span class="muted">未指定</span>'), sort: (p) => p.requested_reviewers.length },
-      { key: 'updated_at', label: '更新', render: (p) => ago(p.updated_at) },
-    ], d.items, { emptyText: '当前没有开放 PR' })}</div>`;
-    html += `<div class="grid" style="margin-top:12px">
-      ${card('评审负载', bars(d.reviewer_load.map((r) => ({ label: r.login, value: r.count })), { emptyText: '开放 PR 没有被指定或提交过评审' }), { sub: '被请求评审 + 已提交评审（开放 PR）' })}
-      ${card('PR 作者', bars(d.authors.map((a) => ({ label: a.login, value: a.count }))), { sub: '开放 + 最近关闭' })}
-      ${card('评审决定', bars(Object.entries(d.review_decisions).map(([k, v]) => ({ label: (DECISION[k] || [k])[0], value: v }))))}
-      ${card('CI 状态', bars(Object.entries(d.ci_states).map(([k, v]) => ({ label: CONCLUSION_NAME[k] || k, value: v }))))}
-    </div>`;
-    html += sectionHead('最近合并', '按合并时间');
-    html += `<div class="card">${table('pr-merged', [
-      { key: 'number', label: '#', num: true, render: (p) => link(p.url, `#${p.number}`) },
-      { key: 'title', label: '标题', render: (p) => `${link(p.url, esc(p.title))}<div class="sub">${esc(p.author)}</div>` },
-      { key: 'merged_at', label: '合并', render: (p) => ago(p.merged_at) },
-      { key: 'time_to_merge_h', label: '开到合并', num: true, render: (p) => hours(p.time_to_merge_h) },
-    ], d.recent_merged, { limit: 15 })}</div>`;
-    return html;
-  }
-
-  function renderCI(sec) {
-    const d = sec?.data;
-    let html = sectionState(sec, 'CI');
-    if (!d) return html;
-    const rateTone = (r) => (r == null ? '' : r >= 80 ? 'good' : r >= 50 ? 'warn' : 'bad');
-    html += tiles([
-      { label: `主干 (${d.default_branch}) 成功率`, value: pct(d.main.success_rate), tone: rateTone(d.main.success_rate), sub: `${d.main.success} 成功 / ${d.main.failure} 失败 / ${d.main.cancelled} 取消` },
-      { label: 'PR 触发成功率', value: pct(d.pull_request.success_rate), tone: rateTone(d.pull_request.success_rate), sub: `${d.pull_request.success} 成功 / ${d.pull_request.failure} 失败` },
-      { label: '主干连续失败', value: n(d.red_streak_main), tone: d.red_streak_main ? 'bad' : 'good', unit: '次' },
-      { label: '7 天失败', value: n(d.failures_7d), tone: d.failures_7d ? 'warn' : '' },
-      { label: '主干中位耗时', value: dur(d.main.median_duration_s) },
-      { label: '采样 run', value: n(d.runs_sampled), sub: `job 明细取最近 ${d.job_history_runs} 次主干 run` },
+  if (prs?.items?.some((p) => p.ci.state === "failure"))
+    out.push([
+      "critical",
+      "开放 PR 存在失败检查",
+      "先定位门禁失败，再安排合入。",
+      "#work",
     ]);
-    html += `<div class="grid wide" style="margin-top:12px">
-      ${card(`主干时间线`, strip(d.main_timeline) + legend([{ name: '成功', color: 'var(--good)' }, { name: '失败/超时', color: 'var(--critical)' }, { name: '取消', color: 'var(--axis)' }, { name: '运行中', color: 'var(--warning)' }]), { sub: `最近 ${d.main_timeline.length} 次，右侧最新，点击打开 run` })}
-      ${card('最近一次主干 run', d.latest_main ? `${kv([
-        ['Run', `${link(d.latest_main.run.url, esc(d.latest_main.run.title))} ${conclusionBadge(d.latest_main.run.conclusion)}`],
-        ['时间', `${date(d.latest_main.run.created_at)} · ${dur(d.latest_main.run.duration_s)} · ${esc(d.latest_main.run.actor)}`],
-      ])}<ul class="checks" style="margin-top:8px">${d.latest_main.jobs.map((j) => `<li>${conclusionBadge(j.conclusion)} ${link(j.url, esc(j.name))} <span class="muted">${dur(j.duration_s)}</span>${j.failed_steps.length ? ` <span class="bad">失败步骤：${esc(j.failed_steps.join('、'))}</span>` : ''}</li>`).join('')}</ul>` : empty('没有主干 run'))}
-    </div>`;
-    html += sectionHead('Workflow 健康');
-    html += `<div class="card">${table('ci-wf', [
-      { key: 'name', label: 'Workflow', render: (w) => `${link(w.url, esc(w.name))}<div class="sub"><code>${esc(w.path)}</code> · ${esc(w.state)}</div>` },
-      { key: 'all', label: '总体成功率', num: true, render: (w) => `${ratioBar(w.all.success_rate, rateTone(w.all.success_rate))}${pct(w.all.success_rate)} <span class="muted">(${w.all.total})</span>`, sort: (w) => w.all.success_rate },
-      { key: 'main', label: '主干', num: true, render: (w) => `${pct(w.main.success_rate)} <span class="muted">(${w.main.total})</span>`, sort: (w) => w.main.success_rate },
-      { key: 'pull_request', label: 'PR', num: true, render: (w) => `${pct(w.pull_request.success_rate)} <span class="muted">(${w.pull_request.total})</span>`, sort: (w) => w.pull_request.success_rate },
-      { key: 'failures_7d', label: '7 天失败', num: true },
-      { key: 'median', label: '中位耗时', num: true, render: (w) => dur(w.all.median_duration_s), sort: (w) => w.all.median_duration_s },
-      { key: 'last', label: '最近 run', render: (w) => (w.last_run ? `${conclusionBadge(w.last_run.conclusion || w.last_run.status)} ${link(w.last_run.url, esc(w.last_run.branch))} <span class="muted">${ago(w.last_run.created_at)}</span>` : '—'), sortable: false },
-    ], d.workflows)}</div>`;
-    html += sectionHead('Job 健康', `最近 ${d.job_history_runs} 次主干 run 的 job 级统计`);
-    html += `<div class="card">${table('ci-jobs', [
-      { key: 'name', label: 'Job' },
-      { key: 'success_rate', label: '成功率', num: true, render: (j) => `${ratioBar(j.success_rate, rateTone(j.success_rate))}${pct(j.success_rate)}` },
-      { key: 'runs', label: '次数', num: true, render: (j) => `${j.runs} <span class="muted">(${j.success}✓ ${j.failure}✗ ${j.cancelled}取消)</span>` },
-      { key: 'median_duration_s', label: '中位耗时', num: true, render: (j) => dur(j.median_duration_s) },
-      { key: 'last', label: '最近', render: (j) => (j.last ? `${conclusionBadge(j.last.conclusion)} ${link(j.last.url, ago(j.last.created_at))}` : '—'), sortable: false },
-      { key: 'steps', label: '常失败步骤', render: (j) => (j.top_failed_steps.length ? j.top_failed_steps.map((s) => `${esc(s.step)} ×${s.count}`).join('，') : '<span class="muted">—</span>'), sortable: false },
-    ], d.job_health, { emptyText: '没有可统计的 job' })}</div>`;
-    const branches = [...new Set(d.recent_runs.map((r) => r.branch))];
-    const f = STATE.filters;
-    const runs = f.runBranch ? d.recent_runs.filter((r) => r.branch === f.runBranch) : d.recent_runs;
-    html += sectionHead('最近 run', `${runs.length} 条`);
-    html += `<div class="card"><div class="filters"><select data-filter="runBranch"><option value="">全部分支</option>${branches.map((b) => `<option ${f.runBranch === b ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select></div>${table('ci-runs', [
-      { key: 'conclusion', label: '结论', render: (r) => conclusionBadge(r.conclusion || r.status) },
-      { key: 'title', label: '标题', render: (r) => `${link(r.url, esc(r.title))}<div class="sub">${esc(r.name)} · <code>${esc(r.sha)}</code> · ${esc(r.actor)}</div>` },
-      { key: 'branch', label: '分支', render: (r) => `<code>${esc(r.branch)}</code>` },
-      { key: 'event', label: '事件' },
-      { key: 'duration_s', label: '耗时', num: true, render: (r) => dur(r.duration_s) },
-      { key: 'created_at', label: '时间', render: (r) => ago(r.created_at) },
-    ], runs, { limit: 30 })}</div>`;
-    return html;
-  }
-
-  function renderTests(sec) {
-    const d = sec?.data;
-    let html = sectionState(sec, '测试');
-    if (!d) return html;
-    const tree = d.tree;
-    const ut = d.executed.find((e) => e.artifact.startsWith('ut'));
-    const e2e = d.executed.find((e) => e.layer === 'e2e');
-    const cov = d.coverage;
-    html += tiles([
-      { label: '测试文件（仓库树）', value: n(tree?.total), sub: tree ? `来源 ${esc(d.tree_source)}` : '文件树不可用' },
-      { label: '有测试的包', value: tree ? `${d.inventory.filter((p) => p.tested).length}<small>/ ${d.inventory.length}</small>` : '—', tone: d.inventory.some((p) => !p.tested) ? 'warn' : 'good' },
-      { label: 'CI 最近 UT 用例', value: n(ut?.totals?.tests), sub: ut?.totals ? `${ut.totals.passed} 通过 · ${ut.totals.failed} 失败 · ${ut.totals.skipped} 跳过` : ut ? '产物存在但没有解析出用例数' : '无产物', tone: ut?.totals?.failed ? 'bad' : ut?.totals ? 'good' : '' },
-      { label: 'CI 最近 E2E 用例', value: n(e2e?.totals?.tests), sub: e2e?.totals ? `${e2e.totals.passed} 通过 · ${e2e.totals.failed} 失败/超时 · ${e2e.totals.skipped} 跳过` : e2e ? '产物存在但没有解析出用例数' : '无产物', tone: e2e?.totals?.failed ? 'bad' : e2e?.totals ? 'good' : '' },
-      { label: '行覆盖率', value: cov?.value?.lines_pct != null ? pct(cov.value.lines_pct) : '无数据源', tone: cov?.source ? 'good' : 'warn', sub: cov?.source ? esc(cov.source) : '见下方数据源探测与降级视图' },
-    ]);
-
-    // Distribution ----------------------------------------------------------
-    if (tree) {
-      const layerSegs = Object.entries(tree.by_layer).map(([k, v]) => ({ name: LAYER_NAME[k] || k, value: v, color: LAYER_COLOR[k] || 'var(--muted)' }));
-      const pkgs = tree.by_package.slice(0, 20).map((p) => ({ label: p.package, value: p.files, segments: Object.entries(p.layers).map(([k, v]) => ({ name: LAYER_NAME[k] || k, value: v, color: LAYER_COLOR[k] })) }));
-      html += `<div class="grid wide" style="margin-top:12px">
-        ${card('按层分布', stack(layerSegs) + legend(layerSegs) + `<div style="margin-top:10px">${bars(Object.entries(tree.by_language).map(([k, v]) => ({ label: k, value: v })))}</div>`, { sub: '测试文件数；下方按语言' })}
-        ${card('按包 / 目录分布', bars(pkgs) + legend(layerSegs.map((s) => ({ name: s.name, color: s.color }))), { sub: `前 ${pkgs.length} 个，颜色为层` })}
-      </div>`;
-    }
-
-    // Executed ------------------------------------------------------------
-    html += sectionHead('CI 最近执行结果', `来自 Actions 产物 ${esc((snapConfig().artifact_names || []).join(', '))}`);
-    if (!d.executed.length) html += `<div class="banner warn"><span class="icon">▲</span><div><div class="title">没有可解析的测试产物</div><div>最近 100 个 Actions 产物里没有未过期的 ${esc((snapConfig().artifact_names || []).join('/'))}。</div></div></div>`;
-    const executedCards = d.executed.map((e) => {
-      const t = e.totals || {};
-      const head = kv([
-        ['层 / 状态', `${badge(e.layer, 'info')} ${badge(e.status === 'incomplete' ? '不完整' : e.status || '未知', e.status === 'passed' ? 'good' : e.status === 'failed' ? 'bad' : e.status === 'incomplete' ? 'warn' : '')}${e.note ? ` <span class="muted">${esc(e.note)}</span>` : ''}`],
-        ['来源', `${e.branch ? `<code>${esc(e.branch)}</code>` : ''} · run ${e.run_id ? link(`${STATE.snap.repo_url}/actions/runs/${e.run_id}`, e.run_id) : '—'} · ${ago(e.created_at)}${e.branch && e.branch !== STATE.snap.sections.repo?.data?.default_branch ? ' <span class="muted">（默认分支上没有未过期产物，退回 PR 分支）</span>' : ''}`],
-        ['用例', `${n(t.tests)} ${e.detail?.unit || ''} · <span class="ok">${n(t.passed)} 通过</span> · <span class="${t.failed ? 'bad' : ''}">${n(t.failed)} 失败</span> · ${n(t.skipped)} 跳过 · ${dur((e.duration_ms || 0) / 1000)}`],
+  const latest = runs.filter(
+    (r, i) =>
+      runs.findIndex(
+        (x) => x.channel === r.channel && x.workflow_id === r.workflow_id,
+      ) === i,
+  );
+  for (const r of latest) {
+    if (["failure", "timed_out"].includes(r.conclusion))
+      out.push([
+        "critical",
+        `${channelNames[r.channel]}失败：${r.name}`,
+        `提交 ${(r.sha || "").slice(0, 8)} · ${date(r.updated_at)}`,
+        "#quality",
       ]);
-      let body = '';
-      if (e.detail?.commands) {
-        body += `<details open><summary>按命令 / 层（${e.detail.commands.length}）</summary>${table(`t-cmd-${e.artifact}`, [
-          { key: 'label', label: '脚本', render: (c) => `<code>${esc(c.label)}</code><div class="sub mono">${esc(c.command)}</div>` },
-          { key: 'framework', label: '框架' },
-          { key: 'tests', label: '用例', num: true }, { key: 'passed', label: '通过', num: true },
-          { key: 'failed', label: '失败', num: true, render: (c) => (c.failed ? `<span class="bad">${c.failed}</span>` : '0') }, { key: 'skipped', label: '跳过', num: true },
-        ], e.detail.commands)}</details>`;
-        body += `<details><summary>按包（${e.detail.packages.length}）</summary>${table(`t-pkg-${e.artifact}`, [
-          { key: 'package', label: '包', render: (p) => `<code>${esc(p.package)}</code>` },
-          { key: 'tests', label: '用例', num: true }, { key: 'passed', label: '通过', num: true },
-          { key: 'failed', label: '失败', num: true, render: (p) => (p.failed ? `<span class="bad">${p.failed}</span>` : '0') }, { key: 'skipped', label: '跳过', num: true },
-        ], e.detail.packages, { defaultSort: { key: 'tests', dir: 'desc' } })}</details>`;
-      }
-      if (e.detail?.files) {
-        const st = e.detail.stats || {};
-        body += `<div class="muted" style="margin:6px 0">Playwright 项目 ${esc((e.detail.projects || []).join(', '))} · 期望通过 ${st.expected} · 意外 ${st.unexpected} · 不稳定 ${st.flaky} · 旅程报告 ${e.detail.journeys} 个</div>`;
-        if (e.detail.failures.length) body += `<details open><summary class="bad">失败 / 超时用例（${e.detail.failures.length}）</summary><ul class="checks">${e.detail.failures.map((f) => `<li>${conclusionBadge(f.status === 'timedOut' ? 'timed_out' : 'failure')} <code>${esc(f.file)}</code> ${esc(f.title)}${f.error ? `<details><summary>错误</summary><pre class="mono" style="white-space:pre-wrap">${esc(f.error)}</pre></details>` : ''}</li>`).join('')}</ul></details>`;
-        body += `<details><summary>按 spec 文件（${e.detail.files.length}）</summary>${table(`t-e2e-${e.artifact}`, [
-          { key: 'file', label: 'Spec', render: (f) => `<code>${esc(f.file)}</code>` },
-          { key: 'specs', label: '用例', num: true }, { key: 'passed', label: '通过', num: true },
-          { key: 'failed', label: '失败', num: true, render: (f) => (f.failed + f.timedOut ? `<span class="bad">${f.failed + f.timedOut}</span>` : '0'), sort: (f) => f.failed + f.timedOut },
-          { key: 'skipped', label: '跳过', num: true }, { key: 'duration_ms', label: '耗时', num: true, render: (f) => dur(f.duration_ms / 1000) },
-        ], e.detail.files)}</details>`;
-      }
-      if (e.detail?.outcomes) {
-        body += `<details open><summary>命令结果（${e.detail.outcomes.length}）</summary><ul class="checks">${e.detail.outcomes.map((o) => `<li>${conclusionBadge(o.exit_code === 0 ? 'success' : 'failure')} <code>${esc(o.command)}</code> <span class="muted">${dur((o.duration_ms || 0) / 1000)}</span></li>`).join('')}</ul></details>`;
-      }
-      if (e.detail?.junit) body += `<details open><summary>JUnit suites</summary><ul class="checks">${e.detail.junit.map((j) => `<li><code>${esc(j.file)}</code> ${n(j.totals.tests)} 用例 · ${n(j.totals.failed)} 失败</li>`).join('')}</ul></details>`;
-      return { name: e.artifact, head, body };
+    const c = sumReports(e2e(r));
+    if (c && (c.failed || c.skipped || c.flaky))
+      out.push([
+        "warn",
+        `E2E：${c.failed} 失败 · ${c.skipped} 跳过 · ${c.flaky} 重试`,
+        `${r.name} · 跳过与不稳定用例不计为稳定通过`,
+        "#quality",
+      ]);
+  }
+  for (const kind of ["gate", "daily", "release"])
+    if (!runs.some((r) => r.channel === kind))
+      out.push([
+        "warn",
+        `${channelNames[kind]}暂无运行记录`,
+        "尚不能判断此阶段的交付质量。",
+        "#quality",
+      ]);
+  if (!out.length)
+    out.push([
+      "info",
+      "当前未发现明确阻塞项",
+      "仍需结合测试报告和评审状态判断是否可交付。",
+      "#quality",
+    ]);
+  return `<ul class="attention">${out
+    .slice(0, 8)
+    .map(
+      ([sev, title, note, url]) =>
+        `<li><span class="dot ${sev}"></span><div><a href="${url}">${esc(title)} →</a><span class="sub">${esc(note)}</span></div></li>`,
+    )
+    .join("")}</ul>`;
+}
+function laneCard(kind) {
+  const r = data.quality.runs.find((r) => r.channel === kind);
+  const c = sumReports(e2e(r));
+  return `<article class="card lane"><div class="kicker">${{ gate: "PULL REQUEST / CI", daily: "NIGHTLY / SCHEDULE", release: "RELEASE / VERSION" }[kind]}</div><h3>${channelNames[kind]}</h3>${r ? `<div class="run-title">${link(r.url, r.name)}</div>${badge(state(r))}<span class="sub">${esc(r.branch)} · <code>${esc(r.sha?.slice(0, 8))}</code> · 第 ${r.attempt} 次运行</span><span class="sub">${date(r.updated_at)}</span><div class="numbers"><div><b>${c ? number(c.passed) + " / " + number(c.tests) : "—"}</b><span>E2E 稳定通过 / 总用例</span></div><div><b>${c && c.tests ? ((c.passed / c.tests) * 100).toFixed(1) + "%" : "—"}</b><span>通过率</span></div></div>${c ? breakdown(c) : `<p class="small-note">${r.status === "completed" ? "没有可用的 E2E 用例报告；构建通过不等于 E2E 已通过。" : "运行尚未结束，测试结果待产出。"}</p>`}` : '<div class="empty">暂无运行记录<br><span class="sub">接入此类工作流后自动展示</span></div>'}</article>`;
+}
+function overview() {
+  const iss = data.issues,
+    prs = data.prs;
+  const latest = data.quality.runs.find((r) => e2e(r).some((t) => t.counts));
+  const c = sumReports(e2e(latest));
+  return `<div class="grid metrics">${metric("开放 Issue", number(iss?.open_count), iss ? `${iss.unassigned_count} 未认领 · ${iss.stale_count} 陈旧` : "数据不可用")}${metric("待合入 PR", number(prs?.open_count), prs ? `${prs.waiting_review_count} 等待评审 · ${prs.draft_count} 草稿` : "数据不可用")}${metric("最近报告 · E2E", c ? `${number(c.passed)} / ${number(c.tests)}` : "—", latest ? `${latest.name} · ${date(latest.updated_at)}` : "尚无 E2E 用例报告")}${metric("最近发布版本", data.releases[0]?.tag || "—", data.releases[0] ? date(data.releases[0].published_at) : "尚未创建 Release")}</div>${heading("交付质量的三道观察窗", "各展示最近一次运行，不混用不同提交的测试结果")}<div class="grid lanes">${["gate", "daily", "release"].map(laneCard).join("")}</div>${heading("下一步值得关注")}<div class="grid split"><article class="card"><h2>风险与待办</h2>${attention()}</article><article class="card"><h2>交付节奏</h2><span class="sub">以工作项和评审为依据</span><div class="numbers"><div><b>${number(iss?.counts?.opened_30d)}</b><span>30 天新增 Issue</span></div><div><b>${number(iss?.counts?.closed_30d)}</b><span>30 天关闭 Issue</span></div><div><b>${number(prs?.merged_30d)}</b><span>30 天合入 PR</span></div></div><p class="small-note">${prs?.median_time_to_merge_h != null ? "PR 合入中位耗时 " + prs.median_time_to_merge_h + " 小时" : "暂无已合入 PR 的耗时样本"}</p><h3 style="margin-top:26px">门禁配置</h3><p class="small-note">${data.quality.required_checks?.length ? "必需检查：" + esc(data.quality.required_checks.join("、")) : data.quality.branch_protected === false ? "默认分支未启用保护。下方 PR 展示已上报的检查结果，不代表已强制门禁。" : "必需检查规则暂不可读取，请结合 GitHub 的合并条件。"}</p><a href="#work">查看工作项与 PR 检查 →</a></article></div>`;
+}
+function work() {
+  return `${heading("Issue 与 Pull Request", "优先处理无人认领、等待评审和检查失败的工作项")}<div class="filters"><label>类型 <select id="work-kind" aria-label="类型"><option value="all">全部</option><option value="issue">Issue</option><option value="pr">PR</option></select></label><label>搜索 <input id="search" type="search" placeholder="标题、编号、负责人、标签" value="${esc(search)}"></label></div><div id="work-table"></div>`;
+}
+function workTable() {
+  const items = [
+    ...(data.issues?.items || []).map((i) => ({ ...i, kind: "issue" })),
+    ...(data.prs?.items || []).map((i) => ({ ...i, kind: "pr" })),
+  ].filter(
+    (i) =>
+      (workKind === "all" || i.kind === workKind) &&
+      JSON.stringify([i.number, i.title, i.assignees, i.labels])
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+  );
+  const body = items
+    .slice(0, 100)
+    .map((i) => {
+      const checks = i.ci?.checks || [];
+      return `<tr><td class="title">${badge(i.kind, i.kind === "pr" ? "PR" : "Issue")} ${link(i.url, `#${i.number} ${i.title}`)}<div class="pills">${(i.labels || []).map((l) => `<span class="pill">${esc(l.name)}</span>`).join("")}</div></td><td>${esc((i.assignees || []).join(", ") || "未认领")}<span class="sub">作者 ${esc(i.author)}</span></td><td class="compact">${i.kind === "pr" ? badge(i.review_decision === "APPROVED" ? "success" : i.review_decision === "CHANGES_REQUESTED" ? "failure" : "pending", i.draft ? "草稿" : i.review_decision === "APPROVED" ? "已批准" : i.review_decision === "CHANGES_REQUESTED" ? "需修改" : "待评审") : esc(i.milestone || "未设里程碑")}</td><td>${i.kind === "pr" ? `${badge(i.ci?.state || "unknown")}<span class="sub">${checks.length} 项已上报检查 · ${esc(i.head_sha?.slice(0, 8))}</span>${checks.length ? `<details><summary>查看检查</summary>${checks.map((c) => `<p>${badge(c.conclusion)} ${link(c.url, c.name)}</p>`).join("")}</details>` : ""}` : "—"}</td><td class="compact">${number(Math.floor(i.age_days || 0))} 天<span class="sub">${date(i.updated_at)}</span></td></tr>`;
+    })
+    .join("");
+  $("#work-table").innerHTML =
+    `<p class="small-note">匹配 ${items.length} 项${items.length > 100 ? "，显示前 100 项；请缩小搜索范围" : ""}</p><div class="table-wrap"><table><thead><tr><th>工作项</th><th>负责人</th><th>评审 / 里程碑</th><th>当前提交检查</th><th>创建至今 / 更新</th></tr></thead><tbody>${body || '<tr><td colspan="5" class="empty">没有匹配的开放工作项</td></tr>'}</tbody></table></div>`;
+}
+function runCard(r) {
+  return `<article class="card run-card"><div class="run-head"><h3>${link(r.url, r.name)} <span class="count-inline">${channelNames[r.channel]}</span></h3>${badge(state(r))}</div><p class="run-meta">${esc(r.branch)} · <code>${esc(r.sha?.slice(0, 12))}</code> · Run #${r.id} / attempt ${r.attempt} · ${date(r.updated_at)} · ${esc(r.event)}</p>${r.tests.length ? `<div class="table-wrap"><table><thead><tr><th>测试层 / 报告</th><th>总用例</th><th>稳定通过</th><th>失败</th><th>跳过</th><th>重试通过</th><th>通过率</th></tr></thead><tbody>${r.tests.map((t, i) => `<tr><td class="title"><strong>${esc(t.layer.toUpperCase())}</strong> <button type="button" class="test-link" data-run="${r.id}" data-test="${i}">${esc(t.name)} →</button><span class="sub">${badge(t.status)}</span></td>${["tests", "passed", "failed", "skipped", "flaky"].map((k) => `<td class="num">${number(t.counts?.[k])}</td>`).join("")}<td class="num">${t.counts?.tests ? ((t.counts.passed / t.counts.tests) * 100).toFixed(1) + "%" : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">${badge(r.reports_status)}<br>暂无可核验的用例数量；请上传 Playwright JSON、JUnit 或测试汇总产物。</p>`}<div class="job-list">${r.jobs.map((j) => `<span>${badge(j.conclusion || j.status)} ${link(j.url, j.name)}${j.failed_steps.length ? `<span class="sub">失败步骤：${esc(j.failed_steps.join("、"))}</span>` : ""}</span>`).join("")}</div></article>`;
+}
+function quality() {
+  const runs = data.quality.runs.filter(
+    (r) => lane === "all" || r.channel === lane,
+  );
+  return `${heading("构建与测试证据", "运行结果和测试用例结果分别判断")}<div class="filters"><label>阶段 <select id="lane" aria-label="阶段"><option value="all">全部阶段</option><option value="gate">合并门禁</option><option value="daily">每日构建</option><option value="release">版本验证</option></select></label><span class="muted">稳定通过率 = 通过 ÷ 总用例；跳过与重试通过单列</span></div>${runs.length ? runs.slice(0, 30).map(runCard).join("") : '<div class="card empty">此阶段尚无 Actions 运行记录。接入对应工作流后，这里会展示提交、任务和测试报告。</div>'}<p class="small-note">最多展示最近 100 次运行中的 30 次；优先读取各阶段／工作流最新报告，最多 12 次。重跑只使用当前 attempt 产生的产物。</p>`;
+}
+function releases() {
+  return `${heading("版本验证", "仅关联版本提交 SHA 一致的版本验证运行")}<div class="card">${
+    data.releases.length
+      ? data.releases
+          .map((release) => {
+            const runs = data.quality.runs.filter((r) =>
+              release.validation_run_ids.includes(r.id),
+            );
+            return `<div class="release-row"><div><h3>${link(release.url, release.tag)}</h3>${badge(release.prerelease ? "pending" : "success", release.prerelease ? "预发布" : "已发布")}<span class="sub">${date(release.published_at)}</span><code>${esc(release.sha?.slice(0, 12) || "提交未知")}</code></div><div>${runs.length ? runs.map((r) => `<div class="release-evidence">${badge(state(r))}${link(r.url, r.name)}<span>E2E ${countSummary({ counts: sumReports(e2e(r)) })}</span></div>`).join("") : `${badge("missing", "尚无匹配的版本验证")}<p class="small-note">发布成功不等于测试完成；等待此版本提交的验证运行。</p>`}</div></div>`;
+          })
+          .join("")
+      : '<div class="empty">仓库尚无 Release。发布版本后，将按标签对应的提交关联验证证据。</div>'
+  }</div>`;
+}
+function render() {
+  if (!data) return;
+  const tab = location.hash.slice(1) || "overview";
+  document.querySelectorAll(".tabs a").forEach((a) => {
+    const active = a.hash === "#" + tab;
+    a.classList.toggle("active", active);
+    if (active) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  });
+  $("#content").innerHTML = (
+    { overview, work, quality, releases }[tab] || overview
+  )();
+  if (tab === "work") {
+    $("#work-kind").value = workKind;
+    workTable();
+    $("#work-kind").onchange = (e) => {
+      workKind = e.target.value;
+      workTable();
+    };
+    $("#search").oninput = (e) => {
+      search = e.target.value;
+      workTable();
+    };
+  }
+  if (tab === "quality") {
+    $("#lane").value = lane;
+    $("#lane").onchange = (e) => {
+      lane = e.target.value;
+      render();
+    };
+  }
+}
+async function load() {
+  const btn = $("#refresh");
+  btn.disabled = true;
+  try {
+    const response = await fetch("./data/snapshot.json?ts=" + Date.now(), {
+      cache: "no-store",
     });
-    // Summary cards side by side; drill-down tables get the full width below so commands are readable.
-    html += `<div class="grid wide">${executedCards.map((c) => card(c.name, c.head)).join('')}</div>`;
-    html += `<div class="grid one" style="margin-top:12px">${executedCards.filter((c) => c.body).map((c) => card(`${c.name} · 明细`, c.body)).join('')}</div>`;
-
-    // Coverage ------------------------------------------------------------
-    html += sectionHead('覆盖率', cov?.source ? `来源 ${esc(cov.source)}` : '按优先级探测数据源，均未命中时用结构代理降级');
-    const steps = `<ul class="steps">${(cov?.attempts || []).map((a) => `<li><span class="mark ${a.ok ? 'ok' : 'no'}">${a.ok ? '✓' : '✗'}</span><span><b>${esc(a.step)}</b> <span class="muted">${esc(a.detail)}</span></span></li>`).join('')}</ul>`;
-    const covValue = cov?.value ? kv(Object.entries(cov.value).filter(([k]) => k !== 'format').map(([k, v]) => [k, typeof v === 'number' ? pct(v) : esc(String(v))])) : '';
-    const gap = cov && !cov.source ? `<div class="banner warn" style="margin:10px 0 0"><span class="icon">▲</span><div><div class="title">该仓库目前没有任何行覆盖率数据源</div><div>CI 只上传 <code>ut/st/e2e-results</code>（日志 + Playwright JSON），没有 lcov / coverage-summary；未接入 Codecov；仓库内也没有 c8 / nyc / codecov.yml 之类的配置。下方用「结构代理」降级：每个包的源文件数、测试文件数、比值，以及 CI 最近一次实际执行的用例数。它衡量的是「有没有测、测了多少」，<b>不是</b>行覆盖率。</div><div class="hint">补齐方式：在 UT job 用 <code>c8 --reporter=lcov --reporter=json-summary</code> 包一层 <code>node --test</code>，并把 <code>coverage/</code> 作为 <code>coverage-results</code> 产物上传；看板会自动识别名称含 coverage 的产物并解析 lcov / coverage-summary.json。</div></div></div>` : '';
-    html += `<div class="card">${steps}${covValue}${gap}</div>`;
-    html += `<div class="card" style="margin-top:12px"><h3>结构代理：按包的测试存在性与 CI 执行量<span class="sub">source_files 不含测试与 .d.ts；CI 用例来自最近 ut-results</span></h3>${table('t-inv', [
-      { key: 'package', label: '包', render: (p) => `<code>${esc(p.package)}</code>` },
-      { key: 'tested', label: '状态', render: (p) => (p.tested ? badge('有测试', 'good') : badge('无测试', 'bad')), sort: (p) => (p.tested ? 1 : 0) },
-      { key: 'source_files', label: '源文件', num: true },
-      { key: 'test_files', label: '测试文件', num: true },
-      { key: 'ratio', label: '测试/源 比', num: true, render: (p) => (p.ratio == null ? '—' : `${ratioBar(Math.min(p.ratio, 1) * 100, p.ratio >= 0.5 ? 'good' : p.ratio > 0 ? 'warn' : 'bad')}${p.ratio.toFixed(2)}`) },
-      { key: 'ci_cases', label: 'CI 用例', num: true, render: (p) => (p.ci_cases == null ? '<span class="muted">—</span>' : `${n(p.ci_cases)}${p.ci_failed ? ` <span class="bad">(${p.ci_failed} 失败)</span>` : ''}`) },
-      { key: 'layers', label: '层', render: (p) => Object.entries(p.layers).map(([k, v]) => `${k} ${v}`).join(' · '), sortable: false },
-    ], d.inventory, { defaultSort: { key: 'ratio', dir: 'asc' } })}</div>`;
-    if (Object.keys(d.test_scripts || {}).length) html += `<div class="card" style="margin-top:12px"><h3>根 package.json 测试脚本</h3>${kv(Object.entries(d.test_scripts).map(([k, v]) => [k, `<code>${esc(v)}</code>`]))}</div>`;
-    return html;
+    if (!response.ok) throw new Error("快照暂不可用");
+    const doc = await response.json();
+    if (doc.schema_version !== 1) throw new Error("快照版本不兼容");
+    data = doc;
+    $("#repo-name").textContent =
+      data.repository.name +
+      " · " +
+      (data.repository.description || "项目交付与质量跟踪");
+    $("#source-link").href = safeUrl(data.repository.url);
+    $("#updated-at").textContent = "数据更新于 " + date(data.generated_at);
+    const age = (Date.now() - new Date(data.generated_at)) / 3600000;
+    $("#freshness-badge").textContent =
+      age > 2 ? "数据已超过 2 小时" : "快照已更新";
+    $("#freshness-badge").className = "badge " + (age > 2 ? "warn" : "good");
+    $("#banner").classList.toggle("hidden", !data.notices.length);
+    $("#banner").textContent = data.notices.map((n) => n.message).join(" ");
+    $("#scope-note").textContent = "数据来源：GitHub + Actions 测试产物";
+    render();
+  } catch (err) {
+    $("#banner").textContent =
+      "读取失败：" + err.message + "。可稍后刷新；保留已加载的数据。";
+    $("#banner").classList.remove("hidden");
+  } finally {
+    btn.disabled = false;
   }
-
-  function renderOps(sec) {
-    const d = sec?.data;
-    let html = sectionState(sec, '运维');
-    if (!d) return html;
-    const cards = [];
-    // Releases
-    const r = d.releases;
-    cards.push(card('Release / Tag', r ? kv([
-      ['最新', r.latest ? `${link(r.latest.url, esc(r.latest.tag))} ${r.latest.prerelease ? badge('预发布', 'warn') : ''} <span class="muted">${ago(r.latest.published_at)} · ${esc(r.latest.author)}</span>` : '无 release'],
-      ['未发布提交', r.unreleased ? `${link(r.unreleased.url, n(r.unreleased.commits))} 个提交，${n(r.unreleased.files_changed)} 个文件` : '—'],
-      ['发布节奏', r.cadence_days != null ? `平均 ${r.cadence_days} 天一次（${r.count} 个 release）` : `${r.count} 个 release，不足以计算节奏`],
-      ['资产下载', n(r.total_downloads)],
-      ['Tags', r.tags.map((t) => `<code>${esc(t.name)}</code>`).join(' ') || '—'],
-    ]) + (r.items.length > 1 ? `<details><summary>全部 release</summary><ul class="checks">${r.items.map((x) => `<li>${link(x.url, esc(x.tag))} <span class="muted">${ago(x.published_at)} · 资产 ${x.assets.length}</span></li>`).join('')}</ul></details>` : '') : empty('Release 数据不可用')));
-    // Branches
-    const b = d.branches;
-    cards.push(card('分支与保护', b ? `${kv([
-      ['默认分支', `<code>${esc(b.default)}</code>`],
-      ['分支保护', b.protection?.enabled ? badge('已启用', 'good') + (b.protection.readable === false ? ' <span class="muted">规则详情需 admin 权限</span>' : ` 需 ${b.protection.required_reviews ?? 0} 个批准 · 必需检查 ${(b.protection.required_checks || []).join(', ') || '无'}`) : badge('未启用', 'bad') + ' <span class="muted">分支列表 protected=false</span>'],
-      ['Rulesets', b.rulesets ? (b.rulesets.length ? b.rulesets.map((x) => `${esc(x.name)} (${esc(x.enforcement)})`).join('，') : '无') : '不可读'],
-    ])}${table('ops-br', [
-      { key: 'name', label: '分支', render: (x) => `<code>${esc(x.name)}</code>${x.is_default ? ' ' + badge('默认', 'info') : ''}${x.protected ? ' ' + badge('保护', 'good') : ''}` },
-      { key: 'ahead', label: '领先', num: true, render: (x) => n(x.ahead) },
-      { key: 'behind', label: '落后', num: true, render: (x) => (x.behind == null ? '—' : x.behind >= 100 ? `<span class="bad">${n(x.behind)}</span>` : n(x.behind)) },
-      { key: 'idle_days', label: '最近提交', render: (x) => (x.is_default ? '—' : x.last_commit_at ? ago(x.last_commit_at) : '—') },
-    ], b.items, { defaultSort: { key: 'behind', dir: 'desc' } })}` : empty('分支数据不可用'), { sub: `${b?.count ?? 0} 个分支` }));
-    // Security
-    const s = live(d.security);
-    const secRow = (name, v) => `<div class="sec-row"><div class="sec-head">${v?.ok ? (v.open ? badge(`${v.open} 个开放`, 'bad') : badge('0 开放', 'good')) : badge('不可读', 'warn')} <b>${name}</b>${v?.ok && v.open ? ` <span class="muted">${Object.entries(v.by_severity).map(([k, c]) => `${k} ${c}`).join(' · ')}</span>` : ''}</div>${v?.ok ? (v.items?.length ? `<ul class="checks">${v.items.slice(0, 8).map((a) => `<li>${badge(a.severity || '?', a.severity === 'critical' || a.severity === 'high' ? 'bad' : 'warn')} ${a.url ? link(a.url, esc(a.summary || a.package || `#${a.number}`)) : esc(a.summary || '')}${a.package ? ` <code>${esc(a.package)}</code>` : ''}</li>`).join('')}</ul>` : '') : `<div class="sub">${esc(v?.error?.message || '')}${v?.error?.hint ? ` — ${codeify(v.error.hint)}` : ''}</div>`}</div>`;
-    cards.push(card('安全告警', pending(d.security) ? memoryOnlyNote('安全告警') : !s ? empty('安全告警数据不可用') : `${secRow('Dependabot', s.dependabot)}${secRow('Code scanning', s.code_scanning)}${secRow('Secret scanning', s.secret_scanning)}${kv([
-      ['Dependabot 告警开关', s.vulnerability_alerts_enabled == null ? '不可读' : s.vulnerability_alerts_enabled ? badge('已开启', 'good') : badge('未开启或不可读', 'warn')],
-      ['仓库安全特性', s.repo_flags ? esc(JSON.stringify(s.repo_flags)) : '<span class="muted">API 未返回（需要 admin 权限才可见）</span>'],
-    ])}<div class="muted" style="margin-top:6px">当前 token 只有 pull 权限；安全告警需要仓库维护者授予访问或使用带 <code>security_events</code> scope 的维护者 token。</div>`));
-    // Community
-    const c = d.community;
-    cards.push(card('社区健康度', c ? `<div class="tile" style="display:inline-block;margin-bottom:8px"><div class="label">GitHub community profile</div><div class="value">${pct(c.health_percentage)}</div></div><ul class="checks" style="font-size:13px">${Object.entries(c.files).filter(([k]) => k !== 'code_of_conduct_file').map(([k, v]) => `<li>${badge(v ? '有' : '缺', v ? 'good' : 'bad')} ${esc(k)}</li>`).join('')}</ul>` : empty('不可用')));
-    // Contributors
-    const ct = d.contributors;
-    cards.push(card('贡献者', ct ? `${kv([['贡献者数', n(ct.count)], ['提交总数', n(ct.total_commits)], ['前 50% 提交由', `${ct.bus_factor_50} 人完成 ${ct.bus_factor_50 === 1 ? badge('集中度高', 'warn') : ''}`]])}<div style="margin-top:8px">${bars(ct.top.map((x) => ({ label: x.login, value: x.contributions, valueText: `${n(x.contributions)} (${x.share}%)` })))}</div>` : empty('不可用'), { sub: '按提交数' }));
-    // Activity
-    const a = d.activity;
-    cards.push(card('提交活跃度', `${a ? `${sparkline(a.weeks.map((w) => w.total), a.weeks.map((w) => new Date(w.week * 1000).toLocaleDateString('zh-CN')))}${kv([['近 4 周', `${n(a.commits_4w)} 次提交`], ['近 52 周', `${n(a.commits_52w)} 次提交`], ['近 7 天（默认分支）', `${n(d.commits_7d)} 次`]])}` : '<div class="muted">GitHub 正在计算周统计，稍后刷新</div>'}<details style="margin-top:6px"><summary>最近提交（${d.recent_commits.length}）</summary><ul class="checks">${d.recent_commits.slice(0, 15).map((x) => `<li><code>${link(x.url, esc(x.sha))}</code> ${esc(x.message)} <span class="muted">${esc(x.author)} · ${ago(x.date)}</span></li>`).join('')}</ul></details>`, { sub: '近 26 周，每周提交数' }));
-    // Traffic
-    const t = live(d.traffic) || {};
-    cards.push(card('流量（14 天）', pending(d.traffic) ? memoryOnlyNote('流量数据') : t.views?.ok ? kv([['浏览', `${n(t.views.count)} 次 / ${n(t.views.uniques)} 独立访客`], ['克隆', `${n(t.clones?.count)} 次 / ${n(t.clones?.uniques)} 独立`]]) : `<div class="muted">${badge('不可读', 'warn')} ${esc(t.views?.error?.message || '')}<div class="sub">${esc(t.views?.error?.hint || '')}</div></div>`));
-    // Stale automation & hygiene
-    const iss = STATE.snap.sections.issues?.data, prs = STATE.snap.sections.prs?.data;
-    cards.push(card('陈旧治理', kv([
-      ['stale 自动化', d.stale_automation.workflow ? `${badge('已配置', 'good')} <code>${esc(d.stale_automation.workflow)}</code>` : `${badge('未配置', 'warn')} <span class="muted">没有 workflow 使用 actions/stale</span>`],
-      ['陈旧 Issue', iss ? `${n(iss.stale_count)} 个 ≥${iss.stale_days_threshold} 天无更新，${n(iss.no_response_count)} 个零回复` : '—'],
-      ['闲置 PR', prs ? `${prs.items.filter((p) => (p.idle_days || 0) >= (STATE.snap.config.pr_idle_days || 14)).length} 个 ≥14 天无更新` : '—'],
-      ['陈旧分支', b ? (b.stale.length ? b.stale.map((x) => `<code>${esc(x.name)}</code>`).join(' ') : '无') : '—'],
-    ])));
-    html += `<div class="grid wide" style="margin-top:12px">${cards.join('')}</div>`;
-    return html;
-  }
-
-  const snapConfig = () => STATE.snap?.config || {};
-
-  // ------------------------------------------------------------ shell
-  function renderShell() {
-    const snap = STATE.snap, st = STATE.status || {};
-    const meta = $('#meta');
-    const banner = $('#global-banner');
-    const btn = $('#refresh-btn');
-    btn.disabled = !!st.refreshing;
-    btn.innerHTML = st.refreshing ? '<span class="spinner"></span>采集中…' : '刷新';
-    tickProgress();
-    if (snap) {
-      $('#repo-link').textContent = snap.repo;
-      $('#repo-link').href = snap.repo_url;
-      document.title = `${snap.repo} · GitHub 状态看板`;
-      const core = snap.rate?.core;
-      meta.innerHTML = [
-        `<span class="pill"${tip(date(snap.generated_at))}>采集于 ${ago(snap.generated_at)}</span>`,
-        `<span class="pill">${snap.auth.authenticated ? `token · ${esc(snap.auth.token_source)}${live(snap.sections.repo?.data?.viewer) ? ` · @${esc(snap.sections.repo.data.viewer)}` : ''}` : '<b>未认证</b>'}</span>`,
-        core ? `<span class="pill"${tip(`重置 ${date(new Date(core.reset * 1000).toISOString())}`)}>限额剩余 ${n(core.remaining)}</span>` : '',
-        `<span class="pill">${snap.api_calls} 次调用 · ${snap.duration_s}s</span>`,
-      ].join('');
-      $('#foot-rate').textContent = `仓库 ${snap.repo} · 自动刷新 ${snap.config.refresh_interval ? snap.config.refresh_interval + 's' : '关闭'}`;
-    } else {
-      meta.textContent = st.refreshing ? '首次采集中，通常需要 30–60 秒…' : '尚无快照';
-    }
-    let b = '', tone = 'hidden';
-    const elapsed = st.refresh_started ? Math.max(0, Math.round(Date.now() / 1000 - st.refresh_started)) : 0;
-    if (STATE.clientError) { tone = 'error'; b = `<span class="icon">⛔</span><div><div class="title">浏览器无法从看板服务读取数据</div><div>${esc(STATE.clientError)}</div><div class="hint">5 秒后自动重试。若你通过端口转发访问，确认转发仍然有效；也可以在服务所在机器上 <code>./run.sh status</code> 查看进程。</div></div>`; }
-    else if (!snap && st.refreshing) { tone = 'info'; b = `<span class="icon">⏳</span><div><div class="title">正在从 GitHub 采集首个快照（已 <span id="refresh-elapsed">${elapsed}</span> 秒，通常 10–20 秒）</div><div>包含 Issue / PR / CI / 测试产物 / 运维数据，约 50 次 API 调用，页面会自动更新。</div></div>`; }
-    else if (!snap && st.last_error) { tone = 'error'; b = `<span class="icon">⛔</span><div><div class="title">采集失败</div><div>${esc(st.last_error)}</div><div class="hint">检查 <code>gh auth status</code> 或 GITHUB_TOKEN，然后点击刷新。</div></div>`; }
-    else if (!snap) { tone = 'warn'; b = `<span class="icon">ℹ</span><div><div class="title">还没有数据</div><div>点击右上角「刷新」开始采集。</div></div>`; }
-    else if (snap.sections.repo?.status === 'error') { tone = 'error'; b = errorBanner(snap.sections.repo.error, '仓库元数据：').replace(/^<div class="banner error">|<\/div>$/g, ''); }
-    else if (!snap.auth.authenticated) { tone = 'warn'; b = `<span class="icon">▲</span><div><div class="title">未认证访问</div><div>匿名限额 60 次/小时，一次完整采集约 50 次；请 <code>gh auth login</code> 或导出 GITHUB_TOKEN 后重启。</div></div>`; }
-    else if (st.refreshing) { tone = 'info'; b = `<span class="icon">⏳</span><div><div class="title">正在从 GitHub 重新采集（已 <span id="refresh-elapsed">${elapsed}</span> 秒，通常 10–20 秒）</div><div>下面显示的是 ${ago(snap.generated_at)} 的上一份快照，采集完成后自动替换。</div></div>`; }
-    else if (st.last_error) { tone = 'warn'; b = `<span class="icon">▲</span><div><div class="title">最近一次刷新失败，显示的是上一次快照</div><div>${esc(st.last_error)}</div></div>`; }
-    banner.className = `banner ${tone}`;
-    banner.innerHTML = b;
-    // tab dots
-    document.querySelectorAll('#tabs a').forEach((a) => {
-      const key = a.dataset.tab;
-      a.classList.toggle('active', key === STATE.tab);
-      const sec = snap?.sections?.[key];
-      const old = a.querySelector('.dot');
-      if (old) old.remove();
-      if (sec && sec.status !== 'ok') a.insertAdjacentHTML('beforeend', `<span class="dot" style="background:${sec.status === 'error' ? 'var(--critical)' : 'var(--warning)'}"${tip(sec.status === 'error' ? '该区块采集失败' : '该区块部分降级')}></span>`);
-    });
-  }
-
-  function renderTabs() {
-    const snap = STATE.snap;
-    const render = (id, fn) => { const el = $(`#tab-${id}`); if (el) el.innerHTML = fn(); };
-    if (!snap) {
-      ['overview', 'board', 'issues', 'prs', 'ci', 'tests', 'ops'].forEach((id) => render(id, () => `<div class="skeleton">${STATE.status?.refreshing ? '<span class="spinner"></span>采集中…' : '暂无数据'}</div>`));
-      return;
-    }
-    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${STATE.tab}`));
-    // One tab's render bug must not blank the others: each tab is isolated and shows its own error.
-    const safe = (id, fn) => { try { render(id, fn); } catch (err) { console.error(err); render(id, () => `<div class="banner error"><span class="icon">⛔</span><div><div class="title">该标签页渲染出错</div><div class="mono">${esc(err && err.stack ? err.stack.split('\n').slice(0, 2).join(' | ') : String(err))}</div><div class="hint">其他标签页不受影响；请把这行反馈给维护者。</div></div></div>`); } };
-    safe('overview', () => renderOverview(snap));
-    safe('issues', () => renderIssues(snap.sections.issues));
-    safe('prs', () => renderPRs(snap.sections.prs));
-    safe('ci', () => renderCI(snap.sections.ci));
-    safe('tests', () => renderTests(snap.sections.tests));
-    safe('ops', () => renderOps(snap.sections.ops));
-    try { if (window.GSBBoard) window.GSBBoard.onSnapshot(snap); } catch (err) { console.error(err); }
-  }
-
-  function renderAll() { renderShell(); renderTabs(); }
-
-  // ------------------------------------------------------------ data flow
-  // Every request has a hard timeout and every code path ends in schedulePoll(), so a hung
-  // request, a proxy that drops a response, or a render exception can never freeze the page
-  // in the "采集中" state: the worst case is a visible error banner plus a retry a few seconds later.
-  const FETCH_TIMEOUT_MS = 20000;
-  async function fetchJson(url, opts = {}) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-    try {
-      const res = await fetch(url, { cache: 'no-store', ...opts, signal: ctrl.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.json();
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  async function load() {
-    try {
-      const doc = await fetchJson('/api/snapshot');
-      STATE.snap = doc.snapshot;
-      STATE.status = doc.status;
-      STATE.clientError = null;
-    } catch (err) {
-      STATE.clientError = err.name === 'AbortError'
-        ? `读取 /api/snapshot 超过 ${FETCH_TIMEOUT_MS / 1000} 秒没有响应（看板服务或端口转发可能卡住）`
-        : `无法读取看板服务：${err.message}`;
-      STATE.status = { ...(STATE.status || {}), refreshing: false };
-    }
-    try {
-      renderAll();
-    } catch (err) {
-      showRenderError(err);
-    }
-    schedulePoll();
-  }
-  function schedulePoll() {
-    clearTimeout(STATE.pollTimer);
-    const st = STATE.status || {};
-    // Quick retry after a client-side failure; 3s while a refresh runs; otherwise 60s to pick up auto refreshes.
-    const delay = STATE.clientError ? 5000 : st.refreshing ? 3000 : 60000;
-    STATE.pollTimer = setTimeout(load, delay);
-  }
-  async function refresh() {
-    if (STATE.status?.refreshing) return;
-    STATE.status = { ...(STATE.status || {}), refreshing: true, refresh_started: Date.now() / 1000 };
-    STATE.clientError = null;
-    renderShell();
-    try {
-      await fetchJson('/api/refresh', { method: 'POST' });
-    } catch (err) {
-      STATE.clientError = `触发刷新失败：${err.message}`;
-      STATE.status = { ...(STATE.status || {}), refreshing: false };
-      renderShell();
-    }
-    clearTimeout(STATE.pollTimer);
-    STATE.pollTimer = setTimeout(load, 1500);
-  }
-  function showRenderError(err) {
-    const banner = $('#global-banner');
-    const where = err && err.stack ? esc(err.stack.split('\n').slice(0, 3).join(' | ')) : esc(String(err));
-    banner.className = 'banner error';
-    banner.innerHTML = `<span class="icon">⛔</span><div><div class="title">页面渲染出错：数据已经拿到，但前端脚本在渲染时抛出异常</div><div class="mono">${where}</div><div class="hint">请把上面这行反馈给维护者；轮询仍在继续，点击「刷新」可重试。</div></div>`;
-    console.error(err);
-  }
-  // Progress ticker: while a refresh runs, show elapsed seconds so a 15–40s collection does not
-  // look like a hang. Only touches the button and the banner counter, not the whole page.
-  function tickProgress() {
-    const st = STATE.status || {};
-    const btn = $('#refresh-btn');
-    if (!st.refreshing) {
-      clearInterval(STATE.ticker);
-      STATE.ticker = null;
-      return;
-    }
-    const elapsed = st.refresh_started ? Math.max(0, Math.round(Date.now() / 1000 - st.refresh_started)) : 0;
-    btn.innerHTML = `<span class="spinner"></span>采集中 ${elapsed}s`;
-    const counter = $('#refresh-elapsed');
-    if (counter) counter.textContent = `${elapsed}`;
-    if (!STATE.ticker) STATE.ticker = setInterval(tickProgress, 1000);
-  }
-
-  // ------------------------------------------------------------ events
-  document.addEventListener('click', (ev) => {
-    const th = ev.target.closest('th.sortable');
-    if (th) {
-      const id = th.dataset.table, key = th.dataset.key;
-      const cur = STATE.sort[id];
-      STATE.sort[id] = cur && cur.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' };
-      renderTabs();
-      return;
-    }
-    const act = ev.target.closest('[data-action="refresh"]');
-    if (act) { ev.preventDefault(); refresh(); }
-  });
-  document.addEventListener('input', (ev) => {
-    const el = ev.target.closest('[data-filter]');
-    if (!el) return;
-    STATE.filters[el.dataset.filter] = el.value;
-    const focusSel = `[data-filter="${el.dataset.filter}"]`;
-    const pos = el.selectionStart;
-    renderTabs();
-    const again = document.querySelector(focusSel);
-    if (again && again.tagName === 'INPUT') { again.focus(); try { again.setSelectionRange(pos, pos); } catch (e) { /* select elements */ } }
-  });
-  $('#refresh-btn').addEventListener('click', refresh);
-  // Browsers throttle timers in background tabs; re-sync as soon as the tab is visible again.
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { clearTimeout(STATE.pollTimer); load(); } });
-  window.addEventListener('hashchange', () => { STATE.tab = location.hash.slice(1) || 'overview'; renderShell(); document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${STATE.tab}`)); });
-  // Tooltip layer: any element with data-tip.
-  const tipEl = $('#tooltip');
-  document.addEventListener('mousemove', (ev) => {
-    const el = ev.target.closest('[data-tip]');
-    if (!el) { tipEl.classList.add('hidden'); return; }
-    tipEl.textContent = el.dataset.tip;
-    tipEl.classList.remove('hidden');
-    const x = Math.min(ev.clientX + 14, window.innerWidth - tipEl.offsetWidth - 8);
-    const y = Math.min(ev.clientY + 14, window.innerHeight - tipEl.offsetHeight - 8);
-    tipEl.style.left = `${x}px`; tipEl.style.top = `${y}px`;
-  });
-
-  // Shared helpers for the board module (static/board.js).
-  window.GSB = { esc, ago, days, date, n, badge, labelChips, link, codeify, conclusionBadge, tip, empty, kv, CONCLUSION_NAME, refresh };
-  STATE.tab = location.hash.slice(1) || 'overview';
-  load();
-})();
+}
+$("#refresh").onclick = load;
+window.addEventListener("hashchange", render);
+$("#close-detail").onclick = () => $("#test-detail").close();
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-test]");
+  if (!btn || !data) return;
+  const r = data.quality.runs.find((r) => String(r.id) === btn.dataset.run),
+    t = r.tests[Number(btn.dataset.test)];
+  $("#detail-title").textContent = t.layer.toUpperCase() + " · " + t.name;
+  $("#detail-body").innerHTML =
+    `<p>${link(r.url, `${r.name} · Run #${r.id} / attempt ${r.attempt}`)}</p><p class="small-note">${date(r.updated_at)} · ${esc(r.sha)}</p><h3>${esc(countSummary(t))}</h3>${breakdown(t.counts)}<div class="table-wrap" style="margin-top:20px"><table><thead><tr><th>结果</th><th>用例</th><th>文件 / 项目</th></tr></thead><tbody>${t.cases.length ? t.cases.map((c) => `<tr><td>${badge(c.status)}</td><td class="title">${esc(c.name)}</td><td>${esc(c.file)}<span class="sub">${esc(c.project || "")}</span></td></tr>`).join("") : '<tr><td colspan="3" class="empty">此报告仅提供汇总，没有逐用例明细。</td></tr>'}</tbody></table></div><p class="small-note">最多展示 500 条用例；原始日志、截图和 trace 请从 GitHub 运行页查看。</p>`;
+  $("#test-detail").showModal();
+});
+load();
+setInterval(load, 60000);

@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Generate a static site and optionally publish its files atomically to gh-pages."""
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import shutil
+
+from gsb.github import GitHub, GitHubError, discover_token
+from gsb.project import REPO_RE, build_project
+
+ROOT = Path(__file__).resolve().parent
+
+
+def export_site(output, snapshot):
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    for name in ("index.html", "app.js", "style.css"):
+        shutil.copyfile(ROOT / "static" / name, output / name)
+    (output / "data").mkdir(exist_ok=True)
+    target = output / "data/snapshot.json"
+    tmp = target.with_suffix(".tmp")
+    tmp.write_text(json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    tmp.replace(target)
+    (output / ".nojekyll").write_text("")
+
+
+def publish(gh, site, repository, branch="gh-pages"):
+    if not REPO_RE.fullmatch(repository) or not REPO_RE.fullmatch("owner/" + branch):
+        raise ValueError("invalid publishing target")
+    prefix = f"/repos/{repository}"
+    if gh.get(prefix).get("private"):
+        raise ValueError("publishing target must be a public Pages repository")
+    try:
+        old = gh.get(prefix + "/git/ref/heads/" + branch)["object"]["sha"]
+    except GitHubError as err:
+        if err.status != 404:
+            raise
+        old = None
+    files = ["index.html", "app.js", "style.css", "data/snapshot.json", ".nojekyll"]
+    tree = [{"path": p, "mode": "100644", "type": "blob", "content": (Path(site) / p).read_text(encoding="utf-8")} for p in files]
+    for entry in tree:
+        if gh.token and gh.token in entry["content"]:
+            raise ValueError("credential detected in site")
+
+    def write(method, path, body):
+        return gh._request(method, gh._url(prefix + path, None), body=body)[0]
+
+    new_tree = write("POST", "/git/trees", {"tree": tree})
+    commit = write("POST", "/git/commits", {"message": "更新项目看板快照", "tree": new_tree["sha"], "parents": [old] if old else []})
+    if old:
+        write("PATCH", "/git/refs/heads/" + branch, {"sha": commit["sha"], "force": False})
+    else:
+        write("POST", "/git/refs", {"ref": "refs/heads/" + branch, "sha": commit["sha"]})
+    return commit["sha"]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", default="ScienceDiscovery/sciencediscovery")
+    parser.add_argument("--output", default=str(ROOT / "dist"))
+    parser.add_argument("--settings", default=str(ROOT / "board-config.json"))
+    parser.add_argument("--publish-repo")
+    parser.add_argument("--branch", default="gh-pages")
+    args = parser.parse_args()
+    token, _ = discover_token()
+    gh = GitHub(token, timeout=30)
+    try:
+        settings = json.loads(Path(args.settings).read_text())
+        snapshot = build_project(gh, args.repo, settings)
+        export_site(args.output, snapshot)
+        result = {"ok": True, "repo": args.repo, "generated_at": snapshot["generated_at"]}
+        if args.publish_repo:
+            if not token:
+                raise ValueError("publishing requires a token")
+            result["commit"] = publish(gh, args.output, args.publish_repo, args.branch)
+        print(json.dumps(result))
+    except (GitHubError, OSError, ValueError) as err:
+        # API errors can include request context; expose only a stable category.
+        print(json.dumps({"ok": False, "error": getattr(err, "kind", type(err).__name__)}))
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

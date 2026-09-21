@@ -1,0 +1,9 @@
+{
+  "review_sla_days": 3,
+  "stale_days": 30,
+  "workflows": {
+    "gate": ["^CI$", "gate", "门禁"],
+    "daily": ["nightly", "daily", "每日"],
+    "release": ["release", "version", "版本"]
+  }
+}

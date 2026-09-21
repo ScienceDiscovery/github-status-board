@@ -1,86 +1,84 @@
-# GitHub 状态看板（本地）
+# GitHub 项目交付看板
 
-跟踪一个 GitHub 仓库的 Issue、PR、CI、测试分布/覆盖与一般开源运维视图的本地 Web 面板。
-纯 Python 3 标准库 + 原生 JS，无第三方依赖，无构建步骤，只读，不写任何 GitHub 数据。
+部署在 GitHub Pages 的静态看板，以项目管理者的视角查看 Issue、PR、合并门禁、每日构建和版本测试，重点显示 E2E 的用例数与稳定通过率。页面只读取同站点的 `data/snapshot.json`，无需登录、后端服务或浏览器 Token。
 
-> A local, self-hosted dashboard for one GitHub repository: issues, pull requests,
-> CI health, test distribution/coverage and general open-source operations.
-> Python 3 standard library only — no dependencies, no build step, read-only against
-> the GitHub API. Everything runs on your own machine and binds to `127.0.0.1`.
+线上站点：<https://sciencediscovery.github.io/github-status-board/>。默认数据源为公开仓库 `ScienceDiscovery/sciencediscovery`。
 
-## 环境要求
+## 看板内容
 
-Python 3.10 或更新版本。可选装 [`gh`](https://cli.github.com/) 以复用它已登录的凭据。
+- 项目总览：开放 Issue、待合入 PR、最近 E2E 报告、最近版本；优先提示无人认领、长期无更新、评审积压和失败检查。
+- Issue 与 PR：按类型、编号、标题、负责人和标签检索；展示 PR 当前提交检查、评审、草稿、负责人及工作项年龄。
+- 构建与测试：分合并门禁、每日构建、版本验证，展示运行、任务、失败步骤、提交 SHA、run ID 和重跑 attempt。逐层列出 UT / ST / E2E 用例及通过、失败、跳过、重试通过数量；可打开用例明细和原始 GitHub 证据。
+- 版本验证：根据版本标签解析的提交 SHA 关联版本验证运行；发布成功不会自动标记为测试通过。
 
-## 启动
+所有时间按浏览器时区显示。快照超过两小时会提示过期；“刷新视图”只重新读取已发布快照。
 
-```bash
-git clone https://github.com/ScienceDiscovery/github-status-board.git
-cd github-status-board
+## 生成与预览
 
-GSB_REPO=<owner>/<repo> ./run.sh start   # 后台启动，默认 http://127.0.0.1:8790/
-./run.sh status|logs|restart|stop
-python3 server.py       # 前台运行（Ctrl-C 退出）
-python3 server.py --once   # 只采集一次并打印各区块状态，不起服务
-```
-
-不带 `GSB_REPO` 时跟踪默认仓库（见下表）。跟踪自己的仓库只需覆盖这一个变量。
-
-## 认证
-
-按以下顺序查找 token，任选一种即可：
-
-1. 环境变量 `GITHUB_TOKEN`；
-2. 环境变量 `GH_TOKEN`；
-3. `gh auth token`（已登录的 `gh` CLI）。
+Python 3.10+，采集器只用标准库。凭据仅来自 `GITHUB_TOKEN` / `GH_TOKEN` 或已登录的 `gh`。禁止将真实 Token 放入命令行参数、仓库、页面、日志或测试数据。
 
 ```bash
-export GITHUB_TOKEN=<你的 personal access token>   # 或先执行 gh auth login
+python3 publish.py --repo ScienceDiscovery/sciencediscovery
+python3 server.py                 # http://127.0.0.1:8790/
+# 或 ./run.sh once；./run.sh start|status|stop
 ```
 
-公开仓库只读所需权限：classic token 勾选 `public_repo`（要读 Actions 测试产物还需 `workflow` 对应的读取范围），fine-grained token 授予目标仓库的 Contents / Issues / Pull requests / Actions 只读权限；私有仓库需要完整 `repo`。
+生成目录 `dist/` 已忽略。预览服务只提供静态文件，不再提供旧版 `/api/*` 或本地看板字段编辑。
 
-未认证也能跑，但匿名限额 60 次/小时，而一次完整采集约 50 次调用，因此几乎必然触发限流。
+## GitHub Pages 发布
 
-token 只在内存中使用：不写入缓存、不写入日志、不出现在页面上，也不会随快照落盘。
-
-## 配置（环境变量）
-
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `GSB_REPO` | `openJiuwen-ai/sciencediscovery` | 跟踪的 owner/repo |
-| `GSB_HOST` / `GSB_PORT` | `127.0.0.1` / `8790` | 绑定地址与端口 |
-| `GSB_REFRESH_INTERVAL` | `600` | 自动刷新间隔（秒），0 关闭 |
-| `GSB_TEST_ARTIFACTS` | `ut-results,st-results,e2e-results` | 要解析的 Actions 测试产物名 |
-| `GSB_ARTIFACT_MAX_MB` | `80` | 单个产物下载上限 |
-| `GSB_REVIEW_SLA_DAYS` | `3` | 超过此天数无人评审的 PR 计为「等待过久」 |
-| `GSB_STALE_DAYS` | `30` | Issue 无更新超过此天数计为陈旧 |
-| `GSB_JOB_HISTORY_RUNS` | `12` | 逐 job 统计的主干 run 数 |
-| `GSB_LOCAL_CHECKOUT` | 无 | 文件树 API 失败时用本地 clone 统计测试分布 |
-| `GSB_CACHE_DIR` | `./.cache` | 快照与已解析产物的缓存目录 |
-| `GSB_DISK_CACHE` | `1` | 设为 `0` 时快照只在内存，不写磁盘 |
-| `GSB_DATA_DIR` | `./.data` | 看板本地字段 / 列配置 / 规则 / 别名（`board.json`） |
-
-## 看板
-
-「看板」标签页把仓库的开放 Issue、开放 PR 和最近关闭 / 合并的条目做成 GitHub Projects 风格的项目板：本地自定义字段（状态列可增删改排序并设 WIP 上限、优先级 P0–P3、迭代、备注），看板 / 表格两种视图，按状态 / 优先级 / 迭代 / 负责人 / 标签 / 里程碑 / 类型 / 作者分组，状态 / 优先级 / 迭代分组可拖拽，自动化规则（加入→待处理、指派→进行中、关联 PR→评审中、关闭或合并→已完成、重开→待处理）只会把卡片往后推、不会降级手动状态，详情抽屉按需读正文与交叉引用。全部字段只存本地 `.data/board.json`，不写回 GitHub；`POST /api/board/*` 需带 `X-Requested-With: github-status-board` 且同源。
-
-安全告警、流量、账号权限/登录名、仓库安全特性开关属于内存态数据：写入 `.cache/snapshot.json` 前会替换为 `{"redacted": true}` 标记（见 `gsb/snapshot.py` 的 `MEMORY_ONLY_PATHS`），重启后立即重新采集补齐。token 从不落盘。
-
-## 结构
-
-```
-server.py          HTTP 服务与路由（/, /static, /api/snapshot, /api/status, POST /api/refresh）
-gsb/github.py      GitHub REST/GraphQL 客户端、token 发现、错误分类（unauthorized/forbidden/rate_limited/...）
-gsb/collectors.py  五个区块采集器：issues / prs / ci / tests / ops
-gsb/testparse.py   测试树分类；run.log(TAP/unittest/pytest)、Playwright results.json、JUnit、覆盖率文件解析
-gsb/snapshot.py    并行采集、区块级错误封装、磁盘缓存、后台刷新
-static/            单页前端（index.html / app.js / style.css）
-run.sh             start/stop/restart/status/logs/once
+```bash
+python3 publish.py --repo ScienceDiscovery/sciencediscovery \
+  --publish-repo ScienceDiscovery/github-status-board
 ```
 
-`.cache/`、`.data/`、`.run/`、`.tmp/` 为运行时目录，只存在于本地，已在 `.gitignore` 中，不会进入版本库。
+发布器通过 Git Data API 原子提交五个文件到 `gh-pages`：`index.html`、`app.js`、`style.css`、`data/snapshot.json`、`.nojekyll`。首次在仓库 Settings → Pages 选择 `Deploy from a branch`、`gh-pages`、`/ (root)`。提交使用非强制更新；并发冲突会失败并保留上一版站点。
 
-## 许可证
+`main` 保存源码；`gh-pages` 保存站点。浏览器只下载静态资源；不访问 GitHub API，不连接 bot 管理端口。发布仅接受公开源仓库和公开目标仓库，不导出旧采集器的权限、流量、安全告警、原始日志、截图或 trace。
 
-[Apache License 2.0](LICENSE)。
+## bot 自动更新
+
+使用 `sciencediscovery_bot` 的可选 `docker-compose.board.yml`。bot 收到已验签且属于跟踪仓库的 Issue、PR、评审、push、workflow_run、workflow_job、check_run、check_suite、status、release 和标签变化事件时入队，后台运行本项目 `publish.py`；20 秒合并事件，发布间隔至少 60 秒，失败按 30～600 秒退避。启动及每小时兜底采集；队列状态持久化，容器重启后继续。
+
+在 bot 的本地 `.env` 配置（真实凭据只填本地，不提交）：
+
+```dotenv
+SDBOT_BOARD_REPO=ScienceDiscovery/github-status-board
+SDBOT_BOARD_TRACK_REPO=ScienceDiscovery/sciencediscovery
+SDBOT_BOARD_SOURCE_DIR_HOST=../github_status_board
+SDBOT_BOARD_GITHUB_TOKEN=
+```
+
+```bash
+# 在 bot 目录运行
+docker compose -f docker-compose.yml -f docker-compose.board.yml up -d --build
+```
+
+凭据需要源仓库的 Metadata / Issues / Pull requests / Actions 读取权限、目标看板仓库的 Contents 写权限。配置 Pages 是一次性的管理员操作；日常发布不需管理权限。bot 还必须配置 GitHub webhook secret，未配置则拒绝启用发布功能。优先使用专用、限定仓库且可轮换的凭据。管理员可在 bot 的 loopback `/api/status` 查看 `board.pending`、`running`、`last_success`、`commit` 和错误类别；公开 webhook 不返回这些信息。API 提交成功到 Pages 可见仍有部署延迟。
+
+## 工作流与报告契约
+
+看板读取现有 CI 证据，不替源仓库执行测试，也不会将缺失证据当成成功。默认按 `release` 事件／版本工作流归为版本验证、`schedule`／daily/nightly 归为每日构建，其余为门禁；可在 `board-config.json` 配置名称正则。
+
+Actions 产物名使用 `ut-results`、`st-results`、`e2e-results`（分片可追加后缀）。支持：
+
+1. Playwright `results.json` / `report.json`：优先使用最终 outcome，重试不增加用例数；预期失败按框架结果处理。
+2. JUnit XML：从 testcase 或最内层 testsuite 计数，避免父子汇总重复。
+3. `dashboard-summary.json`：字段 `tests`、`passed`、`failed`、`skipped`、`flaky` 均为非负整数，后四项之和必须等于 tests。
+4. `run.log`：兼容现有 CI 的 TAP / unittest / pytest 汇总，作为没有结构化报告时的后备来源。
+
+同一产物内只取一种报告格式，优先级为 summary、Playwright、JUnit、log。分片产物必须互不重叠，避免同时上传同一层的合并报告和分片。稳定通过率 = passed / tests；skipped 和 flaky 单列，不计稳定通过。零用例不显示 100%。
+
+报告只关联当前 run、SHA 和 attempt；重跑前的产物不会挪用。过期、下载失败、解析失败和未上传均显示未知数量。每个产物最多下载 80 MiB，展开内容最多 160 MiB / 3000 个条目，不解压到磁盘。明细最多 500 条，汇总保留完整数量。
+
+采集边界：开放 Issue 最多 500、开放 PR 最多 200、最近 100 个 Actions run、优先各工作流／阶段最新报告共 12 个 run、15 个 Release。PR 检查汇总受 GitHub GraphQL 分页限制，缺失时展示未知并提供原页面链接。列表上限不等于仓库总量；统计仅用于此快照范围内的管理判断。
+
+## 验证
+
+```bash
+python3 -m unittest discover -s tests -v
+node test/sync-e2e.mjs
+node .e2e/node_modules/playwright/cli.js test --config test/playwright.config.cjs
+```
+
+浏览器用例使用仓库固定 Playwright 版本和独立临时目录／端口，覆盖真实静态子路径、筛选、测试明细、缺失证据、过期状态、刷新、浏览器时区和窄屏布局。测试 fixture 只用于本地验收，不发布成项目运行结果。

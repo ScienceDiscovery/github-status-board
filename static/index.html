@@ -1,54 +1,65 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GitHub 状态看板</title>
-<link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-<header class="topbar">
-  <div class="brand">
-    <span class="brand-title">GitHub 状态看板</span>
-    <a id="repo-link" class="repo-link" href="#" target="_blank" rel="noopener">—</a>
-  </div>
-  <div class="meta" id="meta">载入中…</div>
-  <div class="actions">
-    <button id="refresh-btn" class="btn primary" type="button">刷新</button>
-  </div>
-</header>
-
-<div id="global-banner" class="banner hidden"></div>
-
-<nav class="tabs" id="tabs">
-  <a href="#overview" data-tab="overview">总览</a>
-  <a href="#board" data-tab="board">看板</a>
-  <a href="#issues" data-tab="issues">Issue</a>
-  <a href="#prs" data-tab="prs">PR</a>
-  <a href="#ci" data-tab="ci">CI</a>
-  <a href="#tests" data-tab="tests">测试</a>
-  <a href="#ops" data-tab="ops">运维</a>
-</nav>
-
-<main id="main">
-  <section id="tab-overview" class="tab"></section>
-  <section id="tab-board" class="tab"></section>
-  <section id="tab-issues" class="tab"></section>
-  <section id="tab-prs" class="tab"></section>
-  <section id="tab-ci" class="tab"></section>
-  <section id="tab-tests" class="tab"></section>
-  <section id="tab-ops" class="tab"></section>
-</main>
-
-<footer class="foot">
-  <span>本地看板 · 只读 · 数据来自 GitHub REST/GraphQL 与 Actions 产物</span>
-  <span id="foot-rate"></span>
-</footer>
-
-<aside id="drawer" class="drawer hidden" aria-label="卡片详情"></aside>
-<dialog id="board-settings" class="settings"></dialog>
-<div id="tooltip" class="tooltip hidden"></div>
-<script src="/static/app.js"></script>
-<script src="/static/board.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      name="description"
+      content="项目交付看板：Issue、PR 门禁、每日构建与版本测试，重点跟踪 E2E 质量。"
+    />
+    <title>项目交付看板 · ScienceDiscovery</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#overview"
+        ><span class="brand-mark">S</span> ScienceDiscovery
+        <span class="brand-sub">PROJECT DELIVERY</span></a
+      ><a
+        id="source-link"
+        class="external"
+        href="https://github.com/ScienceDiscovery/sciencediscovery"
+        target="_blank"
+        rel="noopener"
+        >打开 GitHub ↗</a
+      >
+    </header>
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">项目管理 / 交付与质量</p>
+          <h1>把进展与风险放在同一页。</h1>
+          <p id="repo-name" class="repo-name">正在加载项目…</p>
+        </div>
+        <div class="freshness">
+          <span id="freshness-badge" class="badge muted">读取快照</span>
+          <p id="updated-at">—</p>
+          <button id="refresh" class="button" type="button">刷新视图 ↻</button>
+        </div>
+      </section>
+      <div id="banner" role="status" class="banner hidden"></div>
+      <nav class="tabs" aria-label="看板视图">
+        <a href="#overview">项目总览</a><a href="#work">Issue 与 PR</a
+        ><a href="#quality">构建与测试</a><a href="#releases">版本验证</a>
+      </nav>
+      <section id="content" aria-live="polite">
+        <p class="empty">正在读取项目快照…</p>
+      </section>
+      <footer>
+        <span>静态项目看板 · bot 更新数据 · 时间按浏览器时区显示</span
+        ><span id="scope-note"></span>
+      </footer>
+    </main>
+    <dialog id="test-detail" aria-labelledby="detail-title">
+      <div class="dialog-head">
+        <div>
+          <p class="eyebrow">测试报告</p>
+          <h2 id="detail-title"></h2>
+        </div>
+        <button id="close-detail" class="button" type="button">关闭</button>
+      </div>
+      <div id="detail-body"></div>
+    </dialog>
+    <script src="./app.js"></script>
+  </body>
 </html>
