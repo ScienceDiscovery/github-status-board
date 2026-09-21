@@ -213,6 +213,10 @@ test('board fits viewport while columns and table scroll independently',async({p
   await page.locator('[data-bpref="view"] [data-val="board"]').click();
   await page.setViewportSize({width:390,height:640});
   expect(await viewportFits()).toBeTruthy();
+  const group=page.locator('[data-bpref="group"]');
+  expect(await group.locator('button').evaluateAll(buttons=>buttons.every(b=>b.clientHeight<40))).toBeTruthy();
+  await group.locator('[data-val="author"]').click();
+  await expect(group.locator('[data-val="author"]')).toHaveClass('on');
   await page.setViewportSize({width:1280,height:720});
   await page.locator('[data-tab="tests"]').click();
   await expect(page.locator('#tab-tests')).toBeVisible();
