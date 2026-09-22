@@ -587,21 +587,210 @@ def _tree_paths(ctx: Context, notes: list) -> tuple[list[str], str]:
     return [], "none"
 
 
+def _coverage_totals(groups: list[dict]) -> dict:
+    totals = {}
+    for metric in ("lines", "branches", "functions"):
+        covered = sum(int((group.get("totals") or {}).get(metric, {}).get("covered") or 0) for group in groups)
+        total = sum(int((group.get("totals") or {}).get(metric, {}).get("total") or 0) for group in groups)
+        totals[metric] = {"covered": covered, "total": total,
+                          "percentage": round(covered * 100 / total, 2) if total else None}
+    return totals
+
+
+def _coverage_value(totals: dict) -> dict:
+    value = {"format": "sciencediscovery-summary"}
+    for metric in ("lines", "branches", "functions"):
+        row = totals.get(metric) or {}
+        value[f"{metric}_pct"] = row.get("percentage")
+        value[f"{metric}_hit"] = row.get("covered")
+        value[f"{metric}_found"] = row.get("total")
+    return value
+
+
+def _coverage_language(artifact: dict, manifest: dict) -> str | None:
+    language = str(manifest.get("language") or "").lower()
+    if language in ("node", "python"):
+        return language
+    name = artifact.get("name") or ""
+    if name.startswith("node-coverage-summary-"):
+        return "node"
+    if name.startswith("python-coverage-summary-"):
+        return "python"
+    return None
+
+
+def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, language: str) -> dict | None:
+    prefix = f"{language}-coverage-summary-"
+    candidates = sorted(
+        (artifact for artifact in artifacts
+         if artifact.get("name", "").startswith(prefix) and not artifact.get("expired")),
+        key=lambda artifact: artifact.get("created_at") or "",
+        reverse=True,
+    )[:80]
+    entries = []
+    for artifact in candidates:
+        loaded = _load_artifact(ctx, artifact, notes)
+        manifest = (loaded or {}).get("coverage_manifest")
+        if not manifest or _coverage_language(artifact, manifest) != language:
+            continue
+        entries.append({"artifact": artifact, "manifest": manifest})
+    if not entries:
+        return None
+
+    default_entries = [entry for entry in entries if entry["artifact"].get("branch") == ctx.default_branch]
+    full_entries = [entry for entry in default_entries
+                    if entry["manifest"].get("authoritative") is True
+                    or entry["manifest"].get("mode") == "full"
+                    or "-nightly-" in entry["artifact"].get("name", "")]
+    baseline_entry = full_entries[0] if full_entries else None
+
+    if baseline_entry:
+        baseline_artifact = baseline_entry["artifact"]
+        baseline = baseline_entry["manifest"]
+        groups = {
+            group["name"]: {
+                **group,
+                "source_sha": baseline.get("source_sha"),
+                "updated_at": baseline.get("generated_at") or baseline_artifact.get("created_at"),
+                "update_kind": "full baseline",
+            }
+            for group in baseline.get("groups", []) if group.get("name")
+        }
+        increments = [
+            entry for entry in reversed(default_entries)
+            if (entry["artifact"].get("created_at") or "") > (baseline_artifact.get("created_at") or "")
+            and (entry["manifest"].get("mode") == "incremental"
+                 or (entry["manifest"].get("mode") is None
+                     and "-main-incremental-" in entry["artifact"].get("name", "")))
+        ]
+        applied = []
+        for entry in increments:
+            artifact, manifest = entry["artifact"], entry["manifest"]
+            changed = []
+            for group in manifest.get("groups", []):
+                if not group.get("name"):
+                    continue
+                groups[group["name"]] = {
+                    **group,
+                    "source_sha": manifest.get("source_sha"),
+                    "updated_at": manifest.get("generated_at") or artifact.get("created_at"),
+                    "update_kind": "main increment",
+                }
+                changed.append(group["name"])
+            if changed:
+                applied.append({"artifact": artifact["name"], "created_at": artifact.get("created_at"),
+                                "sha": manifest.get("source_sha"), "groups": changed})
+        current_groups = sorted(groups.values(), key=lambda group: group["name"])
+        current_totals = _coverage_totals(current_groups)
+        baseline_payload = {
+            "artifact": baseline_artifact["name"],
+            "created_at": baseline.get("generated_at") or baseline_artifact.get("created_at"),
+            "kind": "nightly" if "-nightly-" in baseline_artifact["name"] else "main full",
+            "sha": baseline.get("source_sha"),
+            "totals": baseline.get("totals") or {},
+            "groups": baseline.get("groups", []),
+        }
+        current = {
+            "kind": "incremental" if applied else "authoritative",
+            "totals": current_totals,
+            "groups": current_groups,
+            "increments": applied,
+        }
+    else:
+        latest = default_entries[0] if default_entries else entries[0]
+        artifact, manifest = latest["artifact"], latest["manifest"]
+        current_groups = [{
+            **group,
+            "source_sha": manifest.get("source_sha"),
+            "updated_at": manifest.get("generated_at") or artifact.get("created_at"),
+            "update_kind": "partial",
+        } for group in manifest.get("groups", []) if group.get("name")]
+        baseline_payload = None
+        current = {
+            "kind": "partial",
+            "totals": manifest.get("totals") or _coverage_totals(current_groups),
+            "groups": current_groups,
+            "increments": [],
+        }
+
+    history = [{
+        "artifact": entry["artifact"]["name"],
+        "created_at": entry["manifest"].get("generated_at") or entry["artifact"].get("created_at"),
+        "sha": entry["manifest"].get("source_sha"),
+        "totals": entry["manifest"].get("totals") or {},
+    } for entry in reversed(full_entries[:14])]
+
+    latest_pr = {}
+    for entry in entries:
+        match = re.match(rf"{language}-coverage-summary-pr-(\d+)-", entry["artifact"]["name"])
+        if match and match.group(1) not in latest_pr:
+            latest_pr[match.group(1)] = entry
+    pull_requests = []
+    for number, entry in list(latest_pr.items())[:10]:
+        artifact, manifest = entry["artifact"], entry["manifest"]
+        pull_requests.append({"number": int(number), "branch": artifact.get("branch"),
+                              "created_at": artifact.get("created_at"), "sha": manifest.get("source_sha"),
+                              "groups": manifest.get("groups", []), "totals": manifest.get("totals") or {}})
+
+    source_artifact = (baseline_payload or {}).get("artifact") or (default_entries[0] if default_entries else entries[0])["artifact"]["name"]
+    return {
+        "language": language,
+        "source": f"artifact:{source_artifact}",
+        "scope": (baseline_entry or entries[0])["manifest"].get("scope"),
+        "baseline": baseline_payload,
+        "current": current,
+        "history": history,
+        "pull_requests": pull_requests,
+        "value": _coverage_value(current["totals"]),
+    }
+
+
 def _coverage_probe(ctx: Context, artifacts: list[dict], paths: list[str], parsed: dict, notes: list) -> dict:
     """Try every coverage source in priority order and report what was attempted."""
     attempts = []
     result = {"source": None, "value": None, "attempts": attempts}
 
-    cov_arts = [a for a in artifacts if re.search(r"cover|lcov|codecov", a["name"], re.I) and not a.get("expired")]
+    languages = {}
+    for language in ("node", "python"):
+        dataset = _coverage_summary_dataset(ctx, artifacts, notes, language)
+        if dataset:
+            languages[language] = dataset
+    if languages:
+        combined_totals = _coverage_totals([
+            {"totals": dataset["current"]["totals"]} for dataset in languages.values()
+        ])
+        kinds = {dataset["current"]["kind"] for dataset in languages.values()}
+        result.update({
+            "source": "Actions coverage summaries",
+            "value": _coverage_value(combined_totals),
+            "current": {
+                "kind": "authoritative" if kinds == {"authoritative"} else "partial" if "partial" in kinds else "incremental",
+                "totals": combined_totals,
+            },
+            "languages": languages,
+        })
+        attempts.append({"step": "Actions 覆盖率摘要", "ok": True,
+                         "detail": "；".join(f"{name}: {dataset['source'].removeprefix('artifact:')}"
+                                             for name, dataset in languages.items())})
+        return result
+
+    cov_arts = sorted(
+        (a for a in artifacts if re.search(r"cover|lcov|codecov", a["name"], re.I) and not a.get("expired")),
+        key=lambda a: a.get("created_at") or "",
+        reverse=True,
+    )
+    # Show the default branch baseline when available; a newer PR artifact is only a fallback.
+    cov_arts.sort(key=lambda a: a.get("branch") != ctx.default_branch)
     if cov_arts:
         art = cov_arts[0]
+        artifact_label = art["name"]
         loaded = _load_artifact(ctx, art, notes)
         if loaded and loaded.get("coverage"):
-            result["source"] = f"artifact:{art['name']}"
+            result["source"] = f"artifact:{artifact_label}"
             result["value"] = loaded["coverage"][0]
-            attempts.append({"step": "Actions 覆盖率产物", "ok": True, "detail": art["name"]})
+            attempts.append({"step": "Actions 覆盖率产物", "ok": True, "detail": artifact_label})
             return result
-        attempts.append({"step": "Actions 覆盖率产物", "ok": False, "detail": f"产物 {art['name']} 中未找到可解析的覆盖率文件"})
+        attempts.append({"step": "Actions 覆盖率产物", "ok": False, "detail": f"产物 {artifact_label} 中未找到可解析的覆盖率文件"})
     else:
         attempts.append({"step": "Actions 覆盖率产物", "ok": False, "detail": "最近产物中没有名称含 coverage/lcov/codecov 的项"})
 
@@ -671,13 +860,17 @@ def collect_tests(ctx: Context) -> dict:
         note(notes, "package.json", err, "根 package.json")
 
     try:
-        arts_raw = gh.paginate(f"/repos/{repo}/actions/artifacts", {"per_page": 100}, max_pages=1, key="artifacts")
+        # Coverage history competes with every other CI artifact in this list. Keep
+        # enough metadata pages for daily baselines to remain discoverable during
+        # busy PR periods; payloads are still downloaded only on demand below.
+        arts_raw = gh.paginate(f"/repos/{repo}/actions/artifacts", {"per_page": 100}, max_pages=5, key="artifacts")
     except GitHubError as err:
         arts_raw = []
         note(notes, "artifacts", err, "Actions 产物列表")
     artifacts = [{"id": a["id"], "name": a["name"], "size": a.get("size_in_bytes"), "expired": a.get("expired"),
                   "created_at": a.get("created_at"), "expires_at": a.get("expires_at"), "url": a.get("url"),
-                  "run_id": (a.get("workflow_run") or {}).get("id"), "branch": (a.get("workflow_run") or {}).get("head_branch")}
+                  "run_id": (a.get("workflow_run") or {}).get("id"), "branch": (a.get("workflow_run") or {}).get("head_branch"),
+                  "sha": (a.get("workflow_run") or {}).get("head_sha")}
                  for a in arts_raw]
     # Prefer the newest artifact produced on the default branch; PR branches only as fallback.
     live = sorted((a for a in artifacts if not a["expired"]), key=lambda a: a["created_at"] or "", reverse=True)
@@ -705,6 +898,10 @@ def collect_tests(ctx: Context) -> dict:
     executed = []
     for name, p in parsed.items():
         if not p:
+            continue
+        if not any(p.get(key) for key in ("summary", "run_log", "playwright", "junit")):
+            # A coverage-only artifact is a data source for the coverage panel, not an
+            # executed test layer. Do not render it as an incomplete test result.
             continue
         entry = {"artifact": name, "layer": (p.get("summary") or {}).get("layer") or name.split("-")[0],
                  "status": (p.get("summary") or {}).get("status"), "run_id": p.get("run_id"), "branch": p.get("branch"),

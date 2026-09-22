@@ -18,7 +18,7 @@ for idx,kind in enumerate(('gate','daily','release')):
     runs.append(dict(id=10+idx,workflow_id=idx,name={'gate':'CI','daily':'Daily','release':'Release'}[kind],channel=kind,event={'gate':'pull_request','daily':'schedule','release':'release'}[kind],status='completed',conclusion='failure' if kind!='release' else 'success',branch='main',sha='a'*40,attempt=2,updated_at=time,url=base+'/actions/runs/'+str(10+idx),reports_status='available',jobs=[{'name':'E2E','status':'completed','conclusion':'failure','url':base+'/actions/runs/10','failed_steps':['Run browser journeys']}],tests=[{'name':'e2e-results','layer':'e2e','status':'available','counts':counts,'cases':[{'name':'创建项目','file':'test/create.spec.ts','project':'chromium','status':'passed'},{'name':'恢复会话','file':'test/session.spec.ts','project':'chromium','status':'flaky'}]}]))
 doc={'schema_version':1,'generated_at':time,'repository':{'name':repo,'url':base,'description':'浏览器验收数据','default_branch':'main'},'issues':{'open_count':1,'unassigned_count':1,'stale_count':0,'counts':{'opened_30d':4,'closed_30d':3},'items':[item]},'prs':{'open_count':1,'waiting_review_count':1,'draft_count':0,'merged_30d':2,'median_time_to_merge_h':3,'items':[pr]},'quality':{'runs':runs,'required_checks':['E2E'],'branch_protected':True},'releases':[{'tag':'v1.0','url':base+'/releases/tag/v1.0','sha':'a'*40,'published_at':time,'prerelease':False,'validation_run_ids':[12]},{'tag':'v0.9','url':base+'/releases/tag/v0.9','sha':'b'*40,'published_at':time,'prerelease':False,'validation_run_ids':[]}],'notices':[{'message':'部分补充信息不可读取，请以 GitHub 原页面为准。'}]}
 
-# Keep all nine pages exercised without contacting GitHub during acceptance tests.
+# Keep all ten pages exercised without contacting GitHub during acceptance tests.
 from datetime import datetime, timezone
 from unittest.mock import patch
 from gsb.board import BoardStore
@@ -35,15 +35,24 @@ for r in runs:
     r.update(title=r['name'],created_at=time,duration_s=120,actor='maintainer')
     r['jobs'][0].update(duration_s=120)
     r['tests'][0].update(artifact_id=r['id']+100,url=r['url']+'/artifacts/100',created_at=time)
-runs[0]['coverage']=[dict(format='lcov',lines_pct=80,lines_found=200,lines_hit=160,file='lcov.info',url=runs[0]['url'])]
 class GH:
     def get_text_file(self,*args): return '{"scripts":{"test":"node --test"}}'
+    def paginate(self,*args,**kwargs): return []
 cfg=Config(repo=repo)
 ctx=Context(GH(),cfg,datetime.now(timezone.utc),{'default_branch':'main'})
 with patch('gsb.public_sections._tree_paths',return_value=(['services/core/src/index.ts','services/core/tests/test_main.py','test/session.spec.ts','services/empty/index.ts'],'github:git-tree')):
     tests=public_tests(ctx,runs)
+node_totals=dict(lines=dict(covered=48878,total=58864,percentage=83.04),branches=dict(covered=13987,total=17548,percentage=79.71),functions=dict(covered=3928,total=4701,percentage=83.56))
+python_totals=dict(lines=dict(covered=5845,total=8932,percentage=65.44),branches=dict(covered=1507,total=3086,percentage=48.83))
+def coverage_language(name,totals,group):
+    baseline=dict(artifact=f'{name}-coverage-summary-main-incremental-mainsha',created_at=time,kind='main full',sha='a'*40,totals=totals,groups=[dict(name=group,files=4,totals=totals)])
+    current=dict(kind='authoritative',totals=totals,groups=[dict(name=group,files=4,totals=totals,source_sha='a'*40,updated_at=time,update_kind='full baseline')],increments=[])
+    return dict(language=name,source='artifact:'+baseline['artifact'],scope='fixture coverage scope',baseline=baseline,current=current,history=[dict(created_at=time,sha='a'*40,totals=totals)],pull_requests=[dict(number=3,branch='fix-timeout',created_at=time,sha='a'*40,groups=current['groups'],totals=totals)])
+combined=dict(lines=dict(covered=54723,total=67796,percentage=80.72),branches=dict(covered=15494,total=20634,percentage=75.09),functions=node_totals['functions'])
+tests['coverage']=dict(source='Actions coverage summaries',value=dict(format='sciencediscovery-summary',lines_pct=80.72,branches_pct=75.09,functions_pct=83.56),current=dict(kind='authoritative',totals=combined),languages=dict(node=coverage_language('node',node_totals,'packages/core'),python=coverage_language('python',python_totals,'services/evolve')),attempts=[dict(step='Actions 覆盖率摘要',ok=True,detail='Node.js + Python')])
+runs[0]['jobs'].append(dict(name='Coverage',status='completed',conclusion='success',url=runs[0]['url']+'/job/coverage',failed_steps=[],duration_s=385))
 rate=dict(success_rate=50,total=2,success=1,failure=1,cancelled=0,median_duration_s=120)
-ci=dict(default_branch='main',main=rate,pull_request=rate,red_streak_main=1,failures_7d=2,runs_sampled=3,job_history_runs=2,main_timeline=runs,latest_main=dict(run=runs[0],jobs=runs[0]['jobs']),workflows=[dict(name='CI',url=runs[0]['url'],path='.github/workflows/ci.yml',state='active',all=rate,main=rate,pull_request=rate,failures_7d=2,last_run=runs[0])],job_health=[dict(name='E2E',success_rate=50,runs=2,success=1,failure=1,cancelled=0,median_duration_s=120,last=runs[0],top_failed_steps=[dict(step='Run browser journeys',count=1)])],recent_runs=runs)
+ci=dict(default_branch='main',main=rate,pull_request=rate,red_streak_main=1,failures_7d=2,runs_sampled=3,job_history_runs=2,main_timeline=runs,latest_main=dict(run=runs[0],jobs=runs[0]['jobs']),workflows=[dict(name='CI',url=runs[0]['url'],path='.github/workflows/ci.yml',state='active',all=rate,main=rate,pull_request=rate,failures_7d=2,last_run=runs[0])],job_health=[dict(name='E2E',success_rate=50,runs=2,success=1,failure=1,cancelled=0,median_duration_s=120,last=runs[0],top_failed_steps=[dict(step='Run browser journeys',count=1)]),dict(name='Coverage',success_rate=100,runs=1,success=1,failure=0,cancelled=0,median_duration_s=385,last=runs[0],top_failed_steps=[])],recent_runs=runs)
 ops=dict(releases=dict(latest=None,count=0,items=[],tags=[],total_downloads=0,cadence_days=None,unreleased=None),branches=dict(default='main',protection=dict(enabled=True,required_reviews=1,required_checks=['E2E']),rulesets=[],items=[],count=1,stale=[]),public_advisories=[],community=dict(health_percentage=75,missing=['contributing'],files=dict(readme=True,contributing=False)),contributors=dict(count=2,total_commits=10,bus_factor_50=1,top=[dict(login='maintainer',contributions=8,share=80)]),activity=dict(weeks=[dict(week=1789819200,total=10)],commits_4w=10,commits_52w=10),recent_commits=[],commits_7d=3,stale_automation=dict(workflow=None))
 wrap=lambda value:dict(status='ok',data=value,notes=[],error=None)
 doc.update(repo=repo,repo_url=base,config=dict(artifact_names=['ut-results','e2e-results'],pr_idle_days=14),sections={k:wrap(v) for k,v in dict(repo=dict(description='浏览器验收数据',stars=10,forks=2,language='Python',license='MIT',default_branch='main',pushed_at=time),issues=issues,prs=prs,ci=ci,tests=tests,ops=ops).items()})

@@ -1,6 +1,6 @@
 # GitHub 项目状态看板
 
-静态 GitHub Pages 看板，展示 Issue、PR、门禁、每日构建、版本验证、UT / ST / E2E 指标及完整已采集历史。采集由看板仓 GitHub Actions 执行；Bot 负责接收 Webhook 和触发刷新。
+静态 GitHub Pages 看板，展示 Issue、PR、门禁、每日构建、版本验证、UT / ST / E2E 及 Node.js / Python 覆盖率指标。采集由看板仓 GitHub Actions 执行；Bot 负责接收 Webhook 和触发刷新。
 
 | 用途 | 数据源 | 站点 |
 | --- | --- | --- |
@@ -19,6 +19,8 @@ python3 server.py
 ```
 
 此兼容命令生成有限近期快照；完整历史由 `--incremental` 模式基于目标仓自己的 `.sync/` 续跑。两种模式不要同时写同一站点。
+
+Coverage 页从源仓 GitHub Actions 产物中读取 `node-coverage-summary-*` 和 `python-coverage-summary-*` JSON 摘要，分语言展示整仓汇总、趋势、路径指标与最近 PR 结果；看板本身不运行测试。
 
 ## 文档
 

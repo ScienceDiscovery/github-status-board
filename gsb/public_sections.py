@@ -3,10 +3,9 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 import json
 import re
-import urllib.request
 
 from .board import BoardStore
-from .collectors import collect_ci, _tree_paths, OPS_BLOCKS
+from .collectors import collect_ci, _coverage_probe, _tree_paths, OPS_BLOCKS
 from .github import GitHubError
 from .testparse import summarize_tree, package_of
 
@@ -102,27 +101,45 @@ def public_tests(ctx, runs):
                                         'projects': sorted({c['project'] for c in report.get('cases', []) if c.get('project')}),
                                         **{k: report[k] for k in ('commands', 'packages') if k in report}},
                              'note': None if counts else '此运行没有可核验的用例数量。'})
-    coverage = {'source': None, 'value': None, 'attempts': []}
-    for run in runs:
-        values = run.get('coverage', [])
-        if values:
-            value = values[0]
-            coverage.update(source=f"Actions run {run['id']} / attempt {run['attempt']} · {run['sha'][:12]}", value=value)
+    try:
+        paginate = getattr(ctx.gh, 'paginate', None)
+        raw_artifacts = paginate(
+            f'/repos/{ctx.repo}/actions/artifacts', {'per_page': 100}, max_pages=5, key='artifacts'
+        ) if paginate else []
+    except GitHubError:
+        raw_artifacts = []
+        notes.append({'key': 'coverage-artifacts'})
+    coverage_artifacts = [{
+        'id': artifact['id'],
+        'name': artifact['name'],
+        'size': artifact.get('size_in_bytes'),
+        'expired': artifact.get('expired'),
+        'created_at': artifact.get('created_at'),
+        'expires_at': artifact.get('expires_at'),
+        'url': artifact.get('url'),
+        'run_id': (artifact.get('workflow_run') or {}).get('id'),
+        'branch': (artifact.get('workflow_run') or {}).get('head_branch'),
+        'sha': (artifact.get('workflow_run') or {}).get('head_sha'),
+    } for artifact in raw_artifacts]
+    coverage = _coverage_probe(ctx, coverage_artifacts, paths, {}, notes) if hasattr(ctx.gh, 'get') else {
+        'source': None,
+        'value': None,
+        'attempts': [{'step': 'Actions 覆盖率摘要', 'ok': False, 'detail': '测试替身未提供 GitHub 数据接口。'}],
+    }
+    # Preserve the generic run-level fallback for repositories that expose
+    # coverage through an existing test artifact rather than our summary
+    # manifests. ScienceDiscovery normally takes the manifest path above.
+    if not coverage.get('source'):
+        for run in runs:
+            values = run.get('coverage') or []
+            if not values:
+                continue
+            coverage_source = f"Actions run {run['id']} / attempt {run['attempt']} · {run['sha'][:12]}"
+            coverage.update(source=coverage_source, value=values[0])
+            coverage.setdefault('attempts', []).insert(0, {
+                'step': 'Actions 测试产物', 'ok': True, 'detail': coverage_source,
+            })
             break
-    coverage['attempts'].append({'step': 'Actions 覆盖率产物 / 测试产物内嵌报告', 'ok': bool(coverage['value']), 'detail': '仅使用当前 run / SHA / attempt 的 lcov、Istanbul 或 Cobertura 报告。'})
-    if not coverage['value']:
-        try:
-            request = urllib.request.Request(f'https://api.codecov.io/api/v2/github/{ctx.cfg.owner}/repos/{ctx.cfg.name}/', headers={'User-Agent': 'github-status-board'})
-            with urllib.request.urlopen(request, timeout=10) as response:
-                doc = json.load(response)
-            value = (doc.get('totals') or {}).get('coverage')
-            if isinstance(value, (int, float)) and 0 <= value <= 100:
-                coverage.update(source='Codecov 公共汇总（未关联本次构建）', value={'format': 'codecov', 'lines_pct': value})
-            coverage['attempts'].append({'step': 'Codecov 公共 API', 'ok': bool(coverage['value']), 'detail': '独立的仓库汇总，不作为本次构建的门禁依据。'})
-        except Exception:
-            coverage['attempts'].append({'step': 'Codecov 公共 API', 'ok': False, 'detail': '未获得可读取的公共覆盖率汇总。'})
-    configs = [p for p in paths if re.search(r'(^|/)(\.nycrc|\.c8rc|codecov\.ya?ml|\.codecov\.ya?ml)|coverage-summary|lcov\.info', p, re.I)]
-    coverage['attempts'].append({'step': '仓库覆盖率配置', 'ok': bool(configs), 'detail': ', '.join(configs[:10]) or '文件树中未发现独立覆盖率配置；配置存在也不代表已测得覆盖率。'})
     return {'notes': notes, 'tree_source': source, 'tree': {k: v for k, v in tree.items() if k != 'inventory'} if tree else None,
             'inventory': [{**row, 'ci_cases': package_counts.get(row['package'], {}).get('tests'), 'ci_failed': package_counts.get(row['package'], {}).get('failed')} for row in (tree or {}).get('inventory', [])],
             'test_scripts': scripts, 'artifacts_recent': artifacts[:30], 'executed': executed, 'coverage': coverage}
