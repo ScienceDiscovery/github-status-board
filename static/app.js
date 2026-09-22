@@ -452,13 +452,11 @@
     }
 
     const overall = cov.current?.totals || {};
-    const nodeFunctions = languages.node?.current?.totals?.functions || {};
     const overallKind = cov.current?.kind === 'authoritative' ? '权威完整结果' : cov.current?.kind === 'incremental' ? '增量估算' : '部分结果';
     html += sectionHead('Coverage', `${overallKind} · Node.js 与 Python 分开采集，整仓行/分支按计数合并`);
     html += tiles([
       { label: '整仓行覆盖率', value: pct(overall.lines?.percentage), tone: 'good', sub: `${n(overall.lines?.covered)} / ${n(overall.lines?.total)}` },
       { label: '整仓分支覆盖率', value: pct(overall.branches?.percentage), sub: `${n(overall.branches?.covered)} / ${n(overall.branches?.total)}` },
-      { label: 'Node.js 函数覆盖率', value: pct(nodeFunctions.percentage), sub: `${n(nodeFunctions.covered)} / ${n(nodeFunctions.total)}` },
       { label: '数据集', value: Object.keys(languages).length, tone: Object.keys(languages).length === 2 ? 'good' : 'warn', sub: Object.keys(languages).map((key) => key === 'node' ? 'Node.js' : 'Python').join(' + ') },
     ]);
 

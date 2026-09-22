@@ -134,6 +134,8 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await page.screenshot({path:shot('tests-desktop'),fullPage:true});
   await page.locator('[data-tab="coverage"]').click();
   await expect(page.locator('#tab-coverage')).toContainText('整仓行覆盖率');
+  await expect(page.locator('#tab-coverage .tiles').first().locator('.tile')).toHaveCount(3);
+  await expect(page.locator('#tab-coverage .tiles').first()).not.toContainText('Node.js 函数覆盖率');
   await expect(page.locator('#tab-coverage')).toContainText('80.7%');
   await expect(page.locator('#tab-coverage')).toContainText('Node.js');
   await expect(page.locator('#tab-coverage')).toContainText('83.0%');
