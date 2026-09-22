@@ -1,6 +1,6 @@
 /* 看板标签页：GitHub Projects 风格的本地项目板。
- * 数据 = 快照里的 Issue/PR + 本地字段（状态/优先级/迭代/备注），由 /api/board 装配；
- * 拖拽、字段编辑、列设置都只写本地 .data/board.json，不写回 GitHub。 */
+ * 数据 = 快照里的 Issue/PR + 本地字段（状态/优先级/迭代/备注），由静态快照和浏览器字段装配；
+ * 拖拽、字段编辑、列设置都只写当前浏览器存储，不写回 GitHub。 */
 (() => {
   'use strict';
   const H = window.GSB;
@@ -24,16 +24,7 @@
   const savePrefs = () => { try { localStorage.setItem(LS_KEY, JSON.stringify(B.prefs)); } catch (e) { /* private mode */ } };
 
   // ------------------------------------------------------------ data access
-  async function fetchJson(url, opts = {}) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 20000);
-    try {
-      const res = await fetch(url, { cache: 'no-store', ...opts, signal: ctrl.signal });
-      const doc = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(doc.error || `HTTP ${res.status}`);
-      return doc;
-    } finally { clearTimeout(timer); }
-  }
+  async function fetchJson(url, opts={}) { return window.GSBLocalBoard.request(url, opts); }
   async function post(url, body) {
     const doc = await fetchJson(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': MARKER }, body: JSON.stringify(body) });
     if (doc.board) { B.data = doc.board; B.error = null; render(); if (B.drawer) renderDrawer(); }
@@ -46,7 +37,7 @@
   }
   function onSnapshot(snap) {
     if (!snap) return;
-    if (snap.generated_at !== B.snapshotAt) { B.snapshotAt = snap.generated_at; load(); } else render();
+    if (snap.generated_at !== B.snapshotAt) { B.snapshotAt = snap.generated_at; B.details = {}; load(); } else render();
   }
   async function mutate(fn) {
     try { await fn(); flash(''); } catch (err) { flash(`操作失败：${err.message}`); }
@@ -173,7 +164,7 @@
       <span class="grow"></span>
       <button class="btn small" data-baction="history">最近变更 (${d.history.length})</button>
       <button class="btn small" data-baction="settings">列与规则</button>
-      <button class="btn small" data-baction="reload">重新装配</button>
+      <button class="btn small" data-baction="reload">重新装配</button><button class="btn small" data-local-export>导出字段</button><label class="btn small">导入字段<input type="file" accept="application/json,.json" data-local-import hidden></label>
     </div>
     <div class="board-filters">
       <input type="search" data-bfilter="q" placeholder="搜索编号 / 标题 / 备注" value="${esc(f.q)}">
@@ -204,17 +195,28 @@
     if (!root) return;
     if (B.error && !B.data) { root.innerHTML = `<div class="banner error"><span class="icon">⛔</span><div><div class="title">看板数据不可用</div><div>${esc(B.error)}</div></div><div class="banner-actions"><button class="btn small" data-baction="reload">重试</button></div></div>`; return; }
     if (!B.data) { root.innerHTML = `<div class="skeleton"><span class="spinner"></span>装配看板…</div>`; return; }
+    if(B.data.storage_warning) B.error=B.data.storage_warning;
     const items = filtered();
-    let html = toolbarHtml(items);
+    let html = '<div class="board-controls"><p class="board-local-note">GitHub 工作项由快照更新；优先级、迭代、备注和列设置仅保存在本浏览器，不会同步给其他成员。</p>'+toolbarHtml(items);
     if (B.error) html += `<div class="banner warn"><span class="icon">▲</span><div>${esc(B.error)}</div></div>`;
     if (B.historyOpen) html += historyHtml();
-    if (B.prefs.view === 'table') html += `<div class="card">${tableHtml(items)}</div>`;
+    html += '</div>';
+    if (B.prefs.view === 'table') html += `<div class="card board-table-panel">${tableHtml(items)}</div>`;
     else {
       const cols = columns(items);
       html += `<div class="board ${B.prefs.equal ? 'equal' : ''}">${cols.map((c) => columnHtml(c, B.prefs.group)).join('')}</div>`;
     }
     html += `<div class="muted small board-foot">数据：快照 ${ago(B.data.snapshot_generated_at)} 的 Issue/PR + 本地字段（${B.data.counts.issues} Issue · ${B.data.counts.prs} PR，含最近 ${esc(String(B.data.rules.closed_window_days))} 天关闭的）。拖拽只改本地字段，不写回 GitHub。</div>`;
+    // Preserve the independent scroll areas when fields or the snapshot update.
+    const scrollKey = el => el.classList.contains('bcol-body')
+      ? 'column:' + el.parentElement.dataset.group + ':' + el.parentElement.dataset.key : el.classList.contains('board') ? 'board' : el.className;
+    const scrollable = '.board, .board-controls, .board-table, .bcol-body';
+    const positions = new Map([...root.querySelectorAll(scrollable)].map(el => [scrollKey(el), [el.scrollLeft, el.scrollTop]]));
     root.innerHTML = html;
+    root.querySelectorAll(scrollable).forEach(el => {
+      const pos = positions.get(scrollKey(el));
+      if (pos) [el.scrollLeft, el.scrollTop] = pos;
+    });
   }
 
   // ------------------------------------------------------------ drawer
@@ -242,7 +244,7 @@
         <label>状态<select data-dfield="status">${opts(d.fields.status.options, i.status, '未分类')}</select></label>
         <label>优先级<select data-dfield="priority">${opts(d.fields.priority.options, i.priority, '无')}</select></label>
         <label>迭代<input data-dfield="iteration" list="iteration-list-d" value="${esc(i.iteration || '')}" placeholder="如 2026-W39"><datalist id="iteration-list-d">${(d.facets.iterations || []).map((x) => `<option value="${esc(x)}">`).join('')}</datalist></label>
-        <label class="wide">备注<textarea data-dfield="note" rows="2" placeholder="只保存在本地看板">${esc(i.note || '')}</textarea></label>
+        <label class="wide">备注<textarea data-dfield="note" rows="2" placeholder="只保存在本浏览器">${esc(i.note || '')}</textarea></label>
       </div>
       ${i.status_by && i.status_by !== 'manual' ? `<div class="muted small">状态由规则设置（${esc(i.status_by)}）；手动改动后规则不再降级它。</div>` : ''}
       <h4>关联</h4>
@@ -286,11 +288,11 @@
       <td class="row-actions"><button type="button" data-srow="up">↑</button><button type="button" data-srow="down">↓</button><button type="button" data-srow="del" class="danger">删除</button></td></tr>`;
     const statusSel = (key) => `<select name="${key}">${['', ...d.fields.status.options.map((o) => o.name)].map((nm) => `<option value="${esc(nm)}"${d.rules[key] === nm ? ' selected' : ''}>${nm || '（不启用）'}</option>`).join('')}</select>`;
     dlg.innerHTML = `<form method="dialog" id="settings-form">
-      <div class="dlg-head"><h3>看板列与规则</h3><span class="muted">只影响本地看板，不写回 GitHub</span></div>
+      <div class="dlg-head"><h3>看板列与规则</h3><span class="muted">只保存在本浏览器，不共享给其他成员</span></div>
       <section><h4>状态列 <span class="muted small">顺序即看板顺序；WIP 上限按开放卡计</span></h4>
         <table class="settings-table"><thead><tr><th>名称</th><th>颜色</th><th>WIP 上限</th><th>说明</th><th></th></tr></thead><tbody id="status-rows">${d.fields.status.options.map(row).join('')}</tbody></table>
         <button type="button" class="btn small" data-baction="add-status">添加列</button></section>
-      <section><h4>自动化规则 <span class="muted small">对应 GitHub Projects 的内置 workflow</span></h4>
+      <section><h4>自动化规则 <span class="muted small">根据快照更新本浏览器中的状态</span></h4>
         <div class="rules-grid">
           <label>加入看板时 → ${statusSel('default_status')}</label>
           <label><input type="checkbox" name="assigned_to_doing" ${d.rules.assigned_to_doing ? 'checked' : ''}> Issue 被指派 → ${statusSel('doing_status')}</label>
@@ -395,6 +397,11 @@
     if (clear) { B.prefs.filters[clear.dataset.bclear] = ''; savePrefs(); render(); return; }
     const th = t.closest?.('th[data-bsort]');
     if (th) { const k = th.dataset.bsort; B.sort = B.sort.key === k ? { key: k, dir: B.sort.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'asc' }; render(); return; }
+    const rowBtn = t.closest?.('[data-srow]');
+    if (rowBtn) {
+      const tr = rowBtn.closest('tr'), op = rowBtn.dataset.srow;
+      if (op === 'del') tr.remove(); else if (op === 'up' && tr.previousElementSibling) tr.previousElementSibling.before(tr); else if (op === 'down' && tr.nextElementSibling) tr.nextElementSibling.after(tr);
+    }
     const act = t.closest?.('[data-baction]');
     if (!act) return;
     const a = act.dataset.baction;
@@ -406,11 +413,7 @@
     else if (a === 'cancel-settings') $('#board-settings').close();
     else if (a === 'add-status') $('#status-rows').insertAdjacentHTML('beforeend', `<tr data-orig=""><td><input name="name" placeholder="新列" required maxlength="40"></td><td><select name="color">${['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8'].map((c) => `<option value="${c}">${c}</option>`).join('')}</select></td><td><input name="limit" type="number" min="0" placeholder="无" size="4"></td><td><input name="description" placeholder="说明"></td><td class="row-actions"><button type="button" data-srow="up">↑</button><button type="button" data-srow="down">↓</button><button type="button" data-srow="del" class="danger">删除</button></td></tr>`);
     else if (a === 'add-alias') $('#alias-rows').insertAdjacentHTML('beforeend', '<tr><td><input name="alias-login" placeholder="login"></td><td><input name="alias-name" placeholder="显示名"></td><td class="row-actions"><button type="button" data-srow="del" class="danger">删除</button></td></tr>');
-    const rowBtn = t.closest?.('[data-srow]');
-    if (rowBtn) {
-      const tr = rowBtn.closest('tr'), op = rowBtn.dataset.srow;
-      if (op === 'del') tr.remove(); else if (op === 'up' && tr.previousElementSibling) tr.previousElementSibling.before(tr); else if (op === 'down' && tr.nextElementSibling) tr.nextElementSibling.after(tr);
-    }
+
   });
   document.addEventListener('input', (ev) => {
     const el = ev.target;
@@ -444,5 +447,16 @@
     if (Math.abs(ev.deltaY) > Math.abs(ev.deltaX)) { board.scrollLeft += ev.deltaY; ev.preventDefault(); }
   }, { passive: false });
 
+  document.addEventListener('click',ev=>{
+    if(!ev.target.closest('[data-local-export]'))return;
+    const blob=new Blob([window.GSBLocalBoard.export()],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download='board-fields.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
+  document.addEventListener('change',async ev=>{
+    if(!ev.target.matches('[data-local-import]'))return;
+    try {const file=ev.target.files[0];if(!file)return;if(file.size>5*1024*1024)throw Error('导入文件超过 5 MiB');window.GSBLocalBoard.import(await file.text());await load();}
+    catch(err){flash('导入失败：'+err.message);}
+  });
   window.GSBBoard = { onSnapshot, load, render };
+  if(H.snapshot())onSnapshot(H.snapshot());
 })();

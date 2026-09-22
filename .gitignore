@@ -5,6 +5,8 @@
 .data/
 .run/
 .tmp/
+dist/
+.e2e/
 
 # Python
 __pycache__/

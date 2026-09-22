@@ -120,6 +120,7 @@ def collect_repo(ctx: Context) -> dict:
 # ----------------------------------------------------------------- issues
 def _slim_issue(item: dict, now: datetime) -> dict:
     return {
+        "body": (item.get("body") or "")[:50000],
         "number": item.get("number"),
         "title": item.get("title"),
         "url": item.get("html_url"),
@@ -256,6 +257,7 @@ def _linked_issues(item: dict) -> list[int]:
 
 def _slim_pr(item: dict, now: datetime) -> dict:
     return {
+        "body": (item.get("body") or "")[:50000],
         "linked_issues": _linked_issues(item),
         "number": item.get("number"),
         "title": item.get("title"),
@@ -886,7 +888,7 @@ def collect_tests(ctx: Context) -> dict:
 
 def _ops_releases(ctx: Context, notes: list) -> dict:
     gh, repo, now, default = ctx.gh, ctx.repo, ctx.now, ctx.default_branch
-    releases = gh.paginate(f"/repos/{repo}/releases", {"per_page": 20}, max_pages=1)
+    releases = [r for r in gh.paginate(f"/repos/{repo}/releases", {"per_page": 20}, max_pages=1) if not r.get("draft")]
     tags = gh.paginate(f"/repos/{repo}/tags", {"per_page": 30}, max_pages=1)
     rel_list = [{"tag": r.get("tag_name"), "name": r.get("name"), "url": r.get("html_url"), "draft": r.get("draft"),
                  "prerelease": r.get("prerelease"), "published_at": r.get("published_at"), "author": _user(r.get("author")),

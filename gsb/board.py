@@ -9,7 +9,9 @@ the way a GitHub Project adds fields to items without changing the issue itself:
 - ``note``      free text.
 
 Items are never written back to GitHub. Field values, column order, automation
-rules, history and display aliases live in ``.data/board.json`` next to the code.
+rules, history and display aliases historically lived in ``.data/board.json``.
+Public export uses ``persist=False`` to derive only GitHub defaults; browser-local
+editing is implemented in ``static/board-local.js``.
 
 Automation mirrors the built-in GitHub Projects workflows:
 
@@ -84,11 +86,12 @@ class BoardError(ValueError):
 class BoardStore:
     """Thread-safe local state with atomic JSON persistence."""
 
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, *, persist: bool = True):
         self.cfg = cfg
+        self.persist = persist
         self.path = cfg.data_dir / "board.json"
         self.lock = threading.RLock()
-        self.state = self._load()
+        self.state = self._load() if persist else self._default_state()
 
     # ------------------------------------------------------------ persistence
     def _default_state(self) -> dict:
@@ -125,6 +128,8 @@ class BoardStore:
 
     def _save(self) -> None:
         self.state["updated_at"] = _now_iso()
+        if not self.persist:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
             os.chmod(self.path.parent, 0o700)

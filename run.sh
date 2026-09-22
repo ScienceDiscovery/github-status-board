@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-command lifecycle for the local GitHub status board.
 #   ./run.sh start|stop|restart|status|logs|once
-# Environment (all optional): GSB_REPO, GSB_PORT, GSB_HOST, GITHUB_TOKEN, GSB_REFRESH_INTERVAL
+# Environment (all optional): GSB_PORT, GSB_HOST (preview); GITHUB_TOKEN (generation only)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,7 +47,7 @@ case "${1:-start}" in
   status)
     if is_running; then
       echo "running pid $(cat "$PID_FILE") at http://$HOST:$PORT/"
-      curl -fsS "http://$HOST:$PORT/api/status" && echo
+      curl -fsS "http://$HOST:$PORT/data/snapshot.json" && echo
     else
       echo "not running"; exit 1
     fi
@@ -57,7 +57,7 @@ case "${1:-start}" in
     ;;
   once)
     shift
-    exec python3 "$HERE/server.py" --once "$@"
+    exec python3 "$HERE/publish.py" "$@"
     ;;
   *)
     echo "usage: $0 {start|stop|restart|status|logs|once}" >&2
