@@ -2,11 +2,28 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from gsb.github import GitHubError
 from publish import export_site, publish, deployment_for, ROOT
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_cli_separates_source_and_destination_credentials(self):
+        import publish as publisher
+        from types import SimpleNamespace
+        source, destination = SimpleNamespace(token='read-token'), SimpleNamespace(token='write-token')
+        with patch('sys.argv',['publish.py','--repo','example/source','--publish-repo','example/board']), \
+             patch.dict('os.environ',{'GSB_PUBLISH_TOKEN':'write-token'}), \
+             patch.object(publisher,'discover_token',return_value=('read-token','env')), \
+             patch.object(publisher,'GitHub',side_effect=[source,destination]), \
+             patch.object(publisher,'build_project',return_value={'generated_at':'now'}) as build, \
+             patch.object(publisher,'export_site'), \
+             patch.object(publisher,'publish',return_value='a'*40) as commit, patch('builtins.print'):
+            self.assertEqual(publisher.main(),0)
+        self.assertIs(build.call_args.args[0],source)
+        self.assertIs(commit.call_args.args[0],destination)
+        self.assertEqual(commit.call_args.kwargs['source_token'],'read-token')
+
     def test_production_and_test_cannot_be_published_to_each_others_site(self):
         settings = json.loads((ROOT / 'board-config.json').read_text())
         production = deployment_for('OPENJIUWEN-AI/sciencediscovery', settings, 'ScienceDiscovery/github-status-board')
@@ -29,7 +46,9 @@ class PublishingTests(unittest.TestCase):
         calls=[]
         class GH:
             token='test-secret-for-publishing'
-            def get(self,path): return {'object':{'sha':'old'}} if '/git/' in path else {'private':False}
+            def get(self,path):
+                if '/git/commits/' in path: return {'tree':{'sha':'existing-source-tree'}}
+                return {'object':{'sha':'old'}} if '/git/' in path else {'private':False}
             def _url(self,path,_): return path
             def _request(self,method,path,body):
                 calls.append((method,path,body))
@@ -37,16 +56,37 @@ class PublishingTests(unittest.TestCase):
         (self.site/'.env').write_text('private local file')
         self.assertEqual(publish(GH(),self.site,'example/board'),'new-commit')
         files=calls[0][2]['tree']
-        self.assertEqual({f['path'] for f in files},{'index.html','app.js','style.css','report.js','board.js','board-local.js','data/snapshot.json','.nojekyll'})
+        self.assertEqual({f['path'] for f in files},{'site/'+p for p in ('index.html','app.js','style.css','report.js','board.js','board-local.js','data/snapshot.json','.nojekyll')})
+        self.assertEqual(calls[0][2]['base_tree'],'existing-source-tree')
+        self.assertTrue(calls[2][1].endswith('/git/refs/heads/main'))
         self.assertEqual(calls[1][2]['parents'],['old'])
         self.assertEqual(calls[2][2],{'sha':'new-commit','force':False})
     def test_credential_in_content_prevents_remote_write(self):
         class GH:
             token='test-secret-for-publishing'
-            def get(self,path): return {'object':{'sha':'old'}} if '/git/' in path else {'private':False}
+            def get(self,path):
+                if '/git/commits/' in path: return {'tree':{'sha':'existing-source-tree'}}
+                return {'object':{'sha':'old'}} if '/git/' in path else {'private':False}
             def _request(self,*a,**k): raise AssertionError('must not write')
         (self.site/'data/snapshot.json').write_text(json.dumps({'title':GH.token}))
         with self.assertRaises(ValueError): publish(GH(),self.site,'example/board')
+        (self.site/'data/snapshot.json').write_text(json.dumps({'title':'source-read-token'}))
+        with self.assertRaises(ValueError): publish(GH(),self.site,'example/board',source_token='source-read-token')
+    def test_conflict_is_not_force_updated_or_retried_on_another_branch(self):
+        writes=[]
+        class GH:
+            token=''
+            def get(self,path):
+                if '/git/commits/' in path: return {'tree':{'sha':'base'}}
+                return {'object':{'sha':'old'}} if '/git/' in path else {'private':False}
+            def _url(self,path,_): return path
+            def _request(self,method,path,body):
+                writes.append((method,path,body))
+                if method=='PATCH': raise GitHubError('conflict', status=422)
+                return {'sha':'new'},None,200
+        with self.assertRaises(GitHubError): publish(GH(),self.site,'example/board')
+        self.assertEqual(len(writes),3)
+        self.assertFalse(writes[-1][2]['force'])
     def test_private_target_refused(self):
         class GH:
             token=''

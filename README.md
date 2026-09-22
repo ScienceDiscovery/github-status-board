@@ -7,7 +7,7 @@
 | 正式 | `openJiuwen-ai/sciencediscovery` | `ScienceDiscovery/github-status-board` | <https://sciencediscovery.github.io/github-status-board/> |
 | 测试 | `ScienceDiscovery/sciencediscovery` | `ScienceDiscovery/github-status-board-test` | <https://sciencediscovery.github.io/github-status-board-test/> |
 
-默认数据源是正式仓。两个仓各自维护 `main` 源码与 `gh-pages` 站点，页面顶栏显示正式／测试及完整源仓名。`board-config.json` 保存映射；发布器拒绝将正式数据写到测试目标，反之亦然。
+默认数据源是正式仓。两个仓各自维护 `main` 源码与 `site/` 站点，GitHub Actions 负责部署，页面顶栏显示正式／测试及完整源仓名。`board-config.json` 保存映射；发布器拒绝将正式数据写到测试目标，反之亦然。
 
 ## 看板内容
 
@@ -63,9 +63,9 @@ python3 publish.py --repo ScienceDiscovery/sciencediscovery \
   --output dist/test --publish-repo ScienceDiscovery/github-status-board-test
 ```
 
-发布器通过 Git Data API 原子提交八个文件到 `gh-pages`：`index.html`、`app.js`、`board.js`、`board-local.js`、`report.js`、`style.css`、`data/snapshot.json`、`.nojekyll`。首次在仓库 Settings → Pages 选择 `Deploy from a branch`、`gh-pages`、`/ (root)`。提交使用非强制更新；并发冲突会失败并保留上一版站点。
+发布器通过 Git Data API 基于已有 tree 原子更新 main 的 `site/` 中八个文件：`index.html`、`app.js`、`board.js`、`board-local.js`、`report.js`、`style.css`、`data/snapshot.json`、`.nojekyll`。首次在仓库 Settings → Pages 选择 **GitHub Actions**。`.github/workflows/pages.yml` 监听 main 的 site 更新，使用 Actions 的 GITHUB_TOKEN 上传 site 并部署 Pages；也支持 workflow_dispatch 手动发布。提交使用非强制更新；并发冲突会失败并保留上一版站点。
 
-`main` 保存源码；`gh-pages` 保存站点。浏览器只下载静态资源；不访问 GitHub API，不连接 bot 管理端口。发布仅接受公开源仓库和公开目标仓库，不导出采集账号权限、私有流量和安全告警、原始日志、截图或 trace。
+`main` 同时保存源码、工作流和 site 快照，Bot 只改 site 文件，保留其他内容；历史 gh-pages 分支不再发布。正式和测试仓各自保留自己的 site，更新公共源码时只同步源码／工作流变更，不相互强制覆盖 main。浏览器只下载静态资源；不访问 GitHub API，不连接 bot 管理端口。发布仅接受公开源仓库和公开目标仓库，不导出采集账号权限、私有流量和安全告警、原始日志、截图或 trace。
 
 ## bot 自动更新
 
@@ -77,7 +77,8 @@ python3 publish.py --repo ScienceDiscovery/sciencediscovery \
 SDBOT_REPOS=openJiuwen-ai/sciencediscovery,ScienceDiscovery/sciencediscovery
 SDBOT_BOARD_TARGETS='{"openJiuwen-ai/sciencediscovery":"ScienceDiscovery/github-status-board","ScienceDiscovery/sciencediscovery":"ScienceDiscovery/github-status-board-test"}'
 SDBOT_BOARD_SOURCE_DIR_HOST=../github_status_board
-SDBOT_BOARD_GITHUB_TOKEN=
+SDBOT_GITHUB_APP_ID=
+SDBOT_GITHUB_APP_PRIVATE_KEY=
 ```
 
 ```bash
@@ -85,7 +86,7 @@ SDBOT_BOARD_GITHUB_TOKEN=
 docker compose -f docker-compose.yml -f docker-compose.board.yml up -d --build
 ```
 
-凭据需要源仓库的 Metadata / Issues / Pull requests / Actions 读取权限、目标看板仓库的 Contents 写权限。配置 Pages 是一次性的管理员操作；日常发布不需管理权限。bot 还必须配置 GitHub webhook secret，未配置则拒绝启用发布功能。优先使用专用、限定仓库且可轮换的凭据。管理员可在 bot 的 loopback `/api/status` 查看 `board.targets` 中每个站点的 `pending`、`running`、`last_success`、`commit` 和错误类别；公开 webhook 不返回这些信息。API 提交成功到 Pages 可见仍有部署延迟。
+App 必须安装到源仓和看板仓：源仓需 Metadata / Contents / Issues / Pull requests / Actions / Checks / Commit statuses 读取权限，目标需 Contents 写权限。Bot 用 App ID 和本地 RSA 私钥按仓库查找 installation，每轮新取短期令牌；源仓只读令牌通过 GITHUB_TOKEN 传入 publish.py，目标仓写令牌通过 GSB_PUBLISH_TOKEN 传入，支持两个仓位于不同组织。App 私钥不会传给采集器或 Actions。配置 Pages 是一次性的管理员操作；日常提交不需 Pages 管理或 Workflows 写权限。bot 还必须配置 GitHub webhook secret，未配置则拒绝启用发布功能。旧 SDBOT_BOARD_GITHUB_TOKEN 模式仍兼容，与 App 模式互斥；命令行手工发布可继续使用 gh 登录，同一个令牌将用于读取与提交。管理员可在 bot 的 loopback `/api/status` 查看 `board.targets` 中每个站点的 `pending`、`running`、`last_success`、`commit` 和错误类别；公开 webhook 不返回这些信息。API 提交成功仅表示内容已入仓，Pages 部署结果以 Deploy dashboard Pages 工作流为准。Actions 所需权限是 contents read / pages write / id-token write，上传目录仅 site；无需额外保存个人凭据或 App 私钥到 Actions。
 
 ## 工作流与报告契约
 
