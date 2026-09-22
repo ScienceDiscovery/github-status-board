@@ -69,6 +69,10 @@ python3 publish.py --repo ScienceDiscovery/sciencediscovery \
 
 ## bot 自动更新
 
+除了现有本机采集路径，也支持由 Cloudflare Workers Bot 触发本仓 `collect.yml`，在 GitHub Actions 内执行 Python 采集，再提交 site 并发布 Pages。所需权限、Secrets、正式／测试隔离和运行状态见 [Actions 采集说明](docs/actions-collection.md)。本节后续命令仍针对本机 Compose 采集方式。
+
+### Node / Compose 本机采集
+
 使用 `sciencediscovery_bot` 的可选 `docker-compose.board.yml`。bot 收到已验签且属于跟踪仓库的 Issue、PR、评审、push、workflow_run、workflow_job、check_run、check_suite、status、release 和标签变化事件时入队，后台运行本项目 `publish.py`；20 秒合并事件，发布间隔至少 60 秒，失败按 30～600 秒退避。启动及每小时兜底采集；两个源仓的队列、工作线程、重试和输出目录独立，容器重启后继续。其他仓的 webhook 只归档，不触发更新。
 
 在 bot 的本地 `.env` 配置（真实凭据只填本地，不提交）：
@@ -86,7 +90,7 @@ SDBOT_GITHUB_APP_PRIVATE_KEY=
 docker compose -f docker-compose.yml -f docker-compose.board.yml up -d --build
 ```
 
-App 必须安装到源仓和看板仓：源仓需 Metadata / Contents / Issues / Pull requests / Actions / Checks / Commit statuses 读取权限，目标需 Contents 写权限。Bot 用 App ID 和本地 RSA 私钥按仓库查找 installation，每轮新取短期令牌；源仓只读令牌通过 GITHUB_TOKEN 传入 publish.py，目标仓写令牌通过 GSB_PUBLISH_TOKEN 传入，支持两个仓位于不同组织。App 私钥不会传给采集器或 Actions。配置 Pages 是一次性的管理员操作；日常提交不需 Pages 管理或 Workflows 写权限。bot 还必须配置 GitHub webhook secret，未配置则拒绝启用发布功能。旧 SDBOT_BOARD_GITHUB_TOKEN 模式仍兼容，与 App 模式互斥；命令行手工发布可继续使用 gh 登录，同一个令牌将用于读取与提交。管理员可在 bot 的 loopback `/api/status` 查看 `board.targets` 中每个站点的 `pending`、`running`、`last_success`、`commit` 和错误类别；公开 webhook 不返回这些信息。API 提交成功仅表示内容已入仓，Pages 部署结果以 Deploy dashboard Pages 工作流为准。Actions 所需权限是 contents read / pages write / id-token write，上传目录仅 site；无需额外保存个人凭据或 App 私钥到 Actions。
+App 必须安装到源仓和看板仓：源仓需 Metadata / Contents / Issues / Pull requests / Actions / Checks / Commit statuses 读取权限，目标需 Contents 写权限。Bot 用 App ID 和本地 RSA 私钥按仓库查找 installation，每轮新取短期令牌；源仓只读令牌通过 GITHUB_TOKEN 传入 publish.py，目标仓写令牌通过 GSB_PUBLISH_TOKEN 传入，支持两个仓位于不同组织。这种本机采集模式下，App 私钥不会传给 Python 采集器或 Pages 工作流。配置 Pages 是一次性的管理员操作；日常提交不需 Pages 管理或 Workflows 写权限。bot 还必须配置 GitHub webhook secret，未配置则拒绝启用发布功能。旧 SDBOT_BOARD_GITHUB_TOKEN 模式仍兼容，与 App 模式互斥；命令行手工发布可继续使用 gh 登录，同一个令牌将用于读取与提交。管理员可在 bot 的 loopback `/api/status` 查看 `board.targets` 中每个站点的 `pending`、`running`、`last_success`、`commit` 和错误类别；公开 webhook 不返回这些信息。API 提交成功仅表示内容已入仓，Pages 部署结果以 Deploy dashboard Pages 工作流为准。Pages 工作流所需权限是 contents read / pages write / id-token write，上传目录仅 site；Pages 部署本身无需额外保存个人凭据或 App 私钥。使用上方 Actions 采集模式时，采集工作流仍需要其文档列出的 App ID 和私钥 Secret。
 
 ## 工作流与报告契约
 
