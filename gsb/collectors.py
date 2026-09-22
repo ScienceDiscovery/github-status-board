@@ -530,27 +530,25 @@ def collect_ci(ctx: Context) -> dict:
 
 
 # ------------------------------------------------------------------ tests
-def _artifact_cache_path(cfg: Config, artifact_id: int, repo: str) -> Path:
-    repo_key = re.sub(r"[^A-Za-z0-9_.-]+", "--", repo)
-    return cfg.cache_dir / "artifacts" / repo_key / f"{artifact_id}-v{PARSER_VERSION}.json"
+def _artifact_cache_path(cfg: Config, artifact_id: int) -> Path:
+    return cfg.cache_dir / "artifacts" / f"{artifact_id}-v{PARSER_VERSION}.json"
 
 
 def _load_artifact(ctx: Context, art: dict, notes: list) -> dict | None:
     """Download + parse an artifact once; later refreshes read the parsed JSON from disk."""
-    artifact_repo = art.get("repo") or ctx.repo
-    cache = _artifact_cache_path(ctx.cfg, art["id"], artifact_repo)
+    cache = _artifact_cache_path(ctx.cfg, art["id"])
     if cache.exists():
         try:
             return json.loads(cache.read_text("utf-8"))
         except ValueError:
             pass
     try:
-        blob = ctx.gh.download_artifact(artifact_repo, art["id"], max_bytes=ctx.cfg.artifact_max_bytes)
+        blob = ctx.gh.download_artifact(ctx.repo, art["id"], max_bytes=ctx.cfg.artifact_max_bytes)
     except GitHubError as err:
         note(notes, f"artifact:{art['name']}", err, f"下载产物 {art['name']}")
         return None
     parsed = parse_artifact_zip(art["name"], blob)
-    parsed.update({"id": art["id"], "repo": artifact_repo, "run_id": art.get("run_id"), "created_at": art.get("created_at"),
+    parsed.update({"id": art["id"], "run_id": art.get("run_id"), "created_at": art.get("created_at"),
                    "url": art.get("url"), "expires_at": art.get("expires_at"), "branch": art.get("branch")})
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(parsed, ensure_ascii=False), "utf-8")
@@ -671,7 +669,7 @@ def _coverage_probe(ctx: Context, artifacts: list[dict], paths: list[str], parse
                                       "groups": manifest.get("groups", []), "totals": manifest.get("totals") or {}})
 
         result.update({
-            "source": f"artifact:{baseline_artifact.get('repo') or ctx.repo}/{baseline_artifact['name']}",
+            "source": f"artifact:{baseline_artifact['name']}",
             "value": _coverage_value(current_totals),
             "baseline": {"artifact": baseline_artifact["name"],
                          "created_at": baseline.get("generated_at") or baseline_artifact.get("created_at"),
@@ -695,7 +693,7 @@ def _coverage_probe(ctx: Context, artifacts: list[dict], paths: list[str], parse
     cov_arts.sort(key=lambda a: a.get("branch") != ctx.default_branch)
     if cov_arts:
         art = cov_arts[0]
-        artifact_label = f"{art.get('repo') or ctx.repo}/{art['name']}"
+        artifact_label = art["name"]
         loaded = _load_artifact(ctx, art, notes)
         if loaded and loaded.get("coverage"):
             result["source"] = f"artifact:{artifact_label}"
@@ -779,26 +777,11 @@ def collect_tests(ctx: Context) -> dict:
     except GitHubError as err:
         arts_raw = []
         note(notes, "artifacts", err, "Actions 产物列表")
-    artifacts = [{"id": a["id"], "name": a["name"], "repo": repo, "size": a.get("size_in_bytes"), "expired": a.get("expired"),
+    artifacts = [{"id": a["id"], "name": a["name"], "size": a.get("size_in_bytes"), "expired": a.get("expired"),
                   "created_at": a.get("created_at"), "expires_at": a.get("expires_at"), "url": a.get("url"),
                   "run_id": (a.get("workflow_run") or {}).get("id"), "branch": (a.get("workflow_run") or {}).get("head_branch"),
                   "sha": (a.get("workflow_run") or {}).get("head_sha")}
                  for a in arts_raw]
-    coverage_artifacts = list(artifacts)
-    coverage_repo = cfg.coverage_repo or repo
-    if coverage_repo.lower() != repo.lower():
-        try:
-            coverage_raw = gh.paginate(f"/repos/{coverage_repo}/actions/artifacts", {"per_page": 100}, max_pages=1, key="artifacts")
-            coverage_artifacts.extend([
-                {"id": a["id"], "name": a["name"], "repo": coverage_repo, "size": a.get("size_in_bytes"),
-                 "expired": a.get("expired"), "created_at": a.get("created_at"), "expires_at": a.get("expires_at"),
-                 "url": a.get("url"), "run_id": (a.get("workflow_run") or {}).get("id"),
-                 "branch": (a.get("workflow_run") or {}).get("head_branch"),
-                 "sha": (a.get("workflow_run") or {}).get("head_sha")}
-                for a in coverage_raw
-            ])
-        except GitHubError as err:
-            note(notes, "coverage-artifacts", err, f"覆盖率产物列表（{coverage_repo}）")
     # Prefer the newest artifact produced on the default branch; PR branches only as fallback.
     live = sorted((a for a in artifacts if not a["expired"]), key=lambda a: a["created_at"] or "", reverse=True)
     live.sort(key=lambda a: a["branch"] != ctx.default_branch)  # stable: default branch first, newest first inside
@@ -864,7 +847,7 @@ def collect_tests(ctx: Context) -> dict:
             entry["note"] = f"产物只有 {p.get('entries', 0)} 个文件、{p.get('bytes', 0)} 字节，没有结果文件；对应 run 可能失败或被取消。"
         executed.append(entry)
 
-    coverage = _coverage_probe(ctx, coverage_artifacts, paths, parsed, notes)
+    coverage = _coverage_probe(ctx, artifacts, paths, parsed, notes)
 
     # Structural proxy: which packages have any tests, and how many CI cases ran per package.
     ci_cases_by_pkg = {}

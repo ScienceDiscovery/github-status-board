@@ -1,13 +1,11 @@
 import io
 import json
-import tempfile
 import unittest
 import zipfile
 from datetime import datetime
-from pathlib import Path
 from unittest.mock import patch
 
-from gsb.collectors import Context, _artifact_cache_path, _coverage_probe, _load_artifact
+from gsb.collectors import Context, _coverage_probe
 from gsb.config import Config
 from gsb.testparse import parse_artifact_zip, parse_coverage_file
 
@@ -33,13 +31,6 @@ end_of_record
 
 
 class CoverageParserTests(unittest.TestCase):
-    def test_coverage_defaults_to_tracked_repository(self):
-        with patch.dict("os.environ", {"GSB_REPO": "example/project"}, clear=True):
-            cfg = Config.from_env()
-
-        self.assertEqual(cfg.repo, "example/project")
-        self.assertEqual(cfg.coverage_repo, "example/project")
-
     def test_lcov_includes_line_branch_and_function_totals(self):
         coverage = parse_coverage_file("lcov.info", LCOV.encode())
 
@@ -59,7 +50,6 @@ class CoverageParserTests(unittest.TestCase):
                 "scope": "Built Node.js workspace tests",
                 "totals": {"lines": {"covered": 26, "total": 30, "percentage": 86.67}},
             }))
-            archive.writestr("coverage/summary.md", "# Node test coverage\n")
 
         parsed = parse_artifact_zip("node-coverage-deadbeef", blob.getvalue())
 
@@ -125,43 +115,14 @@ class CoverageParserTests(unittest.TestCase):
         self.assertEqual(loader.call_args.args[1]["id"], 1)
         self.assertEqual(result["value"]["lines_pct"], 81)
 
-    def test_external_coverage_artifact_uses_its_own_repo_and_cache_namespace(self):
-        blob = io.BytesIO()
-        with zipfile.ZipFile(blob, "w") as archive:
-            archive.writestr("coverage/lcov.info", LCOV)
-
-        class GitHubStub:
-            def __init__(self):
-                self.downloads = []
-
-            def download_artifact(self, repo, artifact_id, *, max_bytes):
-                self.downloads.append((repo, artifact_id, max_bytes))
-                return blob.getvalue()
-
-        with tempfile.TemporaryDirectory() as directory:
-            cfg = Config(cache_dir=Path(directory))
-            github = GitHubStub()
-            ctx = Context(gh=github, cfg=cfg, now=datetime(2026, 9, 21))
-            artifact = {"id": 42, "name": "sciencediscovery-coverage-deadbeef", "repo": "ScienceDiscovery/github-status-board"}
-
-            parsed = _load_artifact(ctx, artifact, [])
-
-            self.assertEqual(github.downloads[0][:2], ("ScienceDiscovery/github-status-board", 42))
-            self.assertEqual(parsed["repo"], "ScienceDiscovery/github-status-board")
-            self.assertTrue(_artifact_cache_path(cfg, 42, artifact["repo"]).exists())
-            self.assertNotEqual(
-                _artifact_cache_path(cfg, 42, artifact["repo"]),
-                _artifact_cache_path(cfg, 42, "openJiuwen-ai/sciencediscovery"),
-            )
-
     def test_main_group_summaries_compose_over_latest_nightly_baseline(self):
         artifacts = [
             {"id": 3, "name": "node-coverage-summary-pr-17-prsha", "branch": "feature/x",
-             "created_at": "2026-09-22T12:00:00Z", "repo": "example/project"},
+             "created_at": "2026-09-22T12:00:00Z"},
             {"id": 2, "name": "node-coverage-summary-main-incremental-mainsha", "branch": "main",
-             "created_at": "2026-09-22T11:00:00Z", "repo": "example/project"},
+             "created_at": "2026-09-22T11:00:00Z"},
             {"id": 1, "name": "node-coverage-summary-nightly-base", "branch": "main",
-             "created_at": "2026-09-22T03:30:00Z", "repo": "example/project"},
+             "created_at": "2026-09-22T03:30:00Z"},
         ]
         metric = lambda covered, total: {  # noqa: E731 - compact fixture
             "lines": {"covered": covered, "total": total, "percentage": covered * 100 / total},
