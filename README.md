@@ -2,7 +2,12 @@
 
 部署在 GitHub Pages 的静态看板，以项目管理者的视角查看 Issue、PR、合并门禁、每日构建和版本测试，重点显示 E2E 的用例数与稳定通过率。页面只读取同站点的 `data/snapshot.json`，无需登录、后端服务或浏览器 Token。
 
-线上站点：<https://sciencediscovery.github.io/github-status-board/>。默认数据源为公开仓库 `ScienceDiscovery/sciencediscovery`。
+| 用途 | 数据源 | 看板仓库 | 线上站点 |
+| --- | --- | --- | --- |
+| 正式 | `openJiuwen-ai/sciencediscovery` | `ScienceDiscovery/github-status-board` | <https://sciencediscovery.github.io/github-status-board/> |
+| 测试 | `ScienceDiscovery/sciencediscovery` | `ScienceDiscovery/github-status-board-test` | <https://sciencediscovery.github.io/github-status-board-test/> |
+
+默认数据源是正式仓。两个仓各自维护 `main` 源码与 `gh-pages` 站点，页面顶栏显示正式／测试及完整源仓名。`board-config.json` 保存映射；发布器拒绝将正式数据写到测试目标，反之亦然。
 
 ## 看板内容
 
@@ -37,7 +42,7 @@
 Python 3.10+，采集器只用标准库。凭据仅来自 `GITHUB_TOKEN` / `GH_TOKEN` 或已登录的 `gh`。禁止将真实 Token 放入命令行参数、仓库、页面、日志或测试数据。
 
 ```bash
-python3 publish.py --repo ScienceDiscovery/sciencediscovery
+python3 publish.py --repo openJiuwen-ai/sciencediscovery
 python3 server.py                 # http://127.0.0.1:8790/
 # 或 ./run.sh once；./run.sh start|status|stop
 ```
@@ -47,8 +52,15 @@ python3 server.py                 # http://127.0.0.1:8790/
 ## GitHub Pages 发布
 
 ```bash
-python3 publish.py --repo ScienceDiscovery/sciencediscovery \
+python3 publish.py --repo openJiuwen-ai/sciencediscovery \
   --publish-repo ScienceDiscovery/github-status-board
+```
+
+测试站点单独发布：
+
+```bash
+python3 publish.py --repo ScienceDiscovery/sciencediscovery \
+  --output dist/test --publish-repo ScienceDiscovery/github-status-board-test
 ```
 
 发布器通过 Git Data API 原子提交八个文件到 `gh-pages`：`index.html`、`app.js`、`board.js`、`board-local.js`、`report.js`、`style.css`、`data/snapshot.json`、`.nojekyll`。首次在仓库 Settings → Pages 选择 `Deploy from a branch`、`gh-pages`、`/ (root)`。提交使用非强制更新；并发冲突会失败并保留上一版站点。
@@ -57,13 +69,13 @@ python3 publish.py --repo ScienceDiscovery/sciencediscovery \
 
 ## bot 自动更新
 
-使用 `sciencediscovery_bot` 的可选 `docker-compose.board.yml`。bot 收到已验签且属于跟踪仓库的 Issue、PR、评审、push、workflow_run、workflow_job、check_run、check_suite、status、release 和标签变化事件时入队，后台运行本项目 `publish.py`；20 秒合并事件，发布间隔至少 60 秒，失败按 30～600 秒退避。启动及每小时兜底采集；队列状态持久化，容器重启后继续。
+使用 `sciencediscovery_bot` 的可选 `docker-compose.board.yml`。bot 收到已验签且属于跟踪仓库的 Issue、PR、评审、push、workflow_run、workflow_job、check_run、check_suite、status、release 和标签变化事件时入队，后台运行本项目 `publish.py`；20 秒合并事件，发布间隔至少 60 秒，失败按 30～600 秒退避。启动及每小时兜底采集；两个源仓的队列、工作线程、重试和输出目录独立，容器重启后继续。其他仓的 webhook 只归档，不触发更新。
 
 在 bot 的本地 `.env` 配置（真实凭据只填本地，不提交）：
 
 ```dotenv
-SDBOT_BOARD_REPO=ScienceDiscovery/github-status-board
-SDBOT_BOARD_TRACK_REPO=ScienceDiscovery/sciencediscovery
+SDBOT_REPOS=openJiuwen-ai/sciencediscovery,ScienceDiscovery/sciencediscovery
+SDBOT_BOARD_TARGETS='{"openJiuwen-ai/sciencediscovery":"ScienceDiscovery/github-status-board","ScienceDiscovery/sciencediscovery":"ScienceDiscovery/github-status-board-test"}'
 SDBOT_BOARD_SOURCE_DIR_HOST=../github_status_board
 SDBOT_BOARD_GITHUB_TOKEN=
 ```
@@ -73,7 +85,7 @@ SDBOT_BOARD_GITHUB_TOKEN=
 docker compose -f docker-compose.yml -f docker-compose.board.yml up -d --build
 ```
 
-凭据需要源仓库的 Metadata / Issues / Pull requests / Actions 读取权限、目标看板仓库的 Contents 写权限。配置 Pages 是一次性的管理员操作；日常发布不需管理权限。bot 还必须配置 GitHub webhook secret，未配置则拒绝启用发布功能。优先使用专用、限定仓库且可轮换的凭据。管理员可在 bot 的 loopback `/api/status` 查看 `board.pending`、`running`、`last_success`、`commit` 和错误类别；公开 webhook 不返回这些信息。API 提交成功到 Pages 可见仍有部署延迟。
+凭据需要源仓库的 Metadata / Issues / Pull requests / Actions 读取权限、目标看板仓库的 Contents 写权限。配置 Pages 是一次性的管理员操作；日常发布不需管理权限。bot 还必须配置 GitHub webhook secret，未配置则拒绝启用发布功能。优先使用专用、限定仓库且可轮换的凭据。管理员可在 bot 的 loopback `/api/status` 查看 `board.targets` 中每个站点的 `pending`、`running`、`last_success`、`commit` 和错误类别；公开 webhook 不返回这些信息。API 提交成功到 Pages 可见仍有部署延迟。
 
 ## 工作流与报告契约
 

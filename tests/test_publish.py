@@ -3,7 +3,19 @@ from pathlib import Path
 import tempfile
 import unittest
 from gsb.github import GitHubError
-from publish import export_site, publish
+from publish import export_site, publish, deployment_for, ROOT
+
+
+class DeploymentTests(unittest.TestCase):
+    def test_production_and_test_cannot_be_published_to_each_others_site(self):
+        settings = json.loads((ROOT / 'board-config.json').read_text())
+        production = deployment_for('OPENJIUWEN-AI/sciencediscovery', settings, 'ScienceDiscovery/github-status-board')
+        experiment = deployment_for('ScienceDiscovery/sciencediscovery', settings, 'ScienceDiscovery/github-status-board-test')
+        self.assertEqual(production['label'], '正式')
+        self.assertEqual(experiment['label'], '测试')
+        for source, wrong in [('openJiuwen-ai/sciencediscovery', experiment), ('ScienceDiscovery/sciencediscovery', production)]:
+            with self.assertRaises(ValueError):
+                deployment_for(source, settings, wrong['repository'])
 
 ROOT=Path(__file__).resolve().parents[1]
 class PublishingTests(unittest.TestCase):
