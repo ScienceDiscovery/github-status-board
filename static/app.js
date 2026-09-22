@@ -215,7 +215,8 @@
     else if (f.issueLabel) rows = rows.filter((i) => i.labels.some((l) => l.name === f.issueLabel));
     if (f.issueAssignee === '__none__') rows = rows.filter((i) => !i.assignees.length);
     else if (f.issueAssignee) rows = rows.filter((i) => i.assignees.includes(f.issueAssignee));
-    html += sectionHead('全部开放 Issue', `${rows.length} / ${d.items.length}`);
+    if(d.preview_total>d.items.length)html += `<p>当前列表 ${d.items.length} / ${d.preview_total} · <a href="#history">查看全部历史</a></p>`;
+    html += sectionHead('开放 Issue', `${rows.length} / ${d.items.length}`);
     html += `<div class="card"><div class="filters">
       <input type="text" data-filter="issueQ" placeholder="搜索编号 / 标题 / 作者" value="${esc(f.issueQ)}">
       <select data-filter="issueLabel"><option value="">全部标签</option><option value="__none__" ${f.issueLabel === '__none__' ? 'selected' : ''}>无标签</option>${labels.map((l) => `<option ${f.issueLabel === l ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
@@ -518,6 +519,7 @@
     safe('tests', () => renderTests(snap.sections.tests));
     safe('ops', () => renderOps(snap.sections.ops));
     window.GSBQuality?.render();
+    window.GSBHistory?.render();
     try { if (window.GSBBoard) window.GSBBoard.onSnapshot(snap); } catch (err) { console.error(err); }
   }
 
@@ -545,6 +547,7 @@
       if(!doc.sections || !doc.board)throw new Error('快照格式尚未更新，请稍后刷新');
       STATE.snap=doc;STATE.status={refreshing:false};
       window.GSBQuality?.setSnapshot(doc);
+      window.GSBHistory?.setSnapshot(doc);
       window.GSBLocalBoard?.setSnapshot(doc);
       STATE.clientError = null;
     } catch (err) {
@@ -605,7 +608,7 @@
   $('#refresh-btn').addEventListener('click', refresh);
   // Browsers throttle timers in background tabs; re-sync as soon as the tab is visible again.
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { clearTimeout(STATE.pollTimer); load(); } });
-  window.addEventListener('hashchange', () => { STATE.tab = location.hash.slice(1) || 'overview'; renderShell(); document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${STATE.tab}`)); });
+  window.addEventListener('hashchange', () => { STATE.tab = location.hash.slice(1) || 'overview'; renderShell(); window.GSBHistory?.render(); document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${STATE.tab}`)); });
   // Tooltip layer: any element with data-tip.
   const tipEl = $('#tooltip');
   document.addEventListener('mousemove', (ev) => {

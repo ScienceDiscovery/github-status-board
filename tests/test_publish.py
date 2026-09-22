@@ -56,7 +56,7 @@ class PublishingTests(unittest.TestCase):
         (self.site/'.env').write_text('private local file')
         self.assertEqual(publish(GH(),self.site,'example/board'),'new-commit')
         files=calls[0][2]['tree']
-        self.assertEqual({f['path'] for f in files},{'site/'+p for p in ('index.html','app.js','style.css','report.js','board.js','board-local.js','data/snapshot.json','.nojekyll')})
+        self.assertEqual({f['path'] for f in files},{'site/'+p for p in ('index.html','app.js','style.css','report.js','board.js','board-local.js','history.js','data/snapshot.json','.nojekyll')})
         self.assertEqual(calls[0][2]['base_tree'],'existing-source-tree')
         self.assertTrue(calls[2][1].endswith('/git/refs/heads/main'))
         self.assertEqual(calls[1][2]['parents'],['old'])

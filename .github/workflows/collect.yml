@@ -1,6 +1,8 @@
 name: Collect dashboard data
-run-name: Collect dashboard (${{ inputs.request_id || 'manual' }})
+run-name: Collect dashboard (${{ inputs.request_id || github.event_name }})
 on:
+  schedule:
+    - cron: '17,47 * * * *'
   workflow_dispatch:
     inputs:
       source_repository:
@@ -66,6 +68,6 @@ jobs:
           GSB_PUBLISH_TOKEN: ${{ steps.target.outputs.token }}
           SOURCE_REPOSITORY: ${{ steps.context.outputs.source }}
           TARGET_REPOSITORY: ${{ steps.context.outputs.target }}
-        run: python3 publish.py --repo "$SOURCE_REPOSITORY" --publish-repo "$TARGET_REPOSITORY" --output .tmp/collected-site
+        run: python3 publish.py --repo "$SOURCE_REPOSITORY" --publish-repo "$TARGET_REPOSITORY" --output .tmp/collected-site --incremental
       # The App-authored site commit triggers pages.yml. Do not replace the write
       # token with GITHUB_TOKEN: its push would not trigger that second workflow.

@@ -2,7 +2,7 @@ const { test, expect } = require('../.e2e/node_modules/@playwright/test');
 const { resolve } = require('node:path');
 const shot = name => resolve(__dirname, '../.e2e/' + name + '.png');
 
-test('all nine pages render; only static requests and no promotional copy', async ({ page }) => {
+test('all existing pages render; only static requests and no promotional copy', async ({ page }) => {
   const requests = [], errors = [];
   page.on('request', r => requests.push(r.url()));
   page.on('pageerror', e => errors.push(e.message));
@@ -14,7 +14,7 @@ test('all nine pages render; only static requests and no promotional copy', asyn
   await expect(page.locator('#global-banner')).toContainText('超过两小时');
   await expect(page.locator('body')).not.toContainText('把进展与风险放在同一页');
   await page.screenshot({path:shot('overview-desktop'),fullPage:true});
-  await expect(page.locator('.topbar #tabs a')).toHaveCount(9);
+  await expect(page.locator('.topbar #tabs a')).toHaveCount(10);
   await expect(page.locator('body > footer')).toHaveCount(0);
   await expect(page.locator('body')).not.toContainText('GitHub Pages 静态看板 · GitHub 数据只读');
   await expect(page.locator('#global-banner')).not.toContainText('部分补充信息不可读取');

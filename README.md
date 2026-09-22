@@ -1,122 +1,37 @@
-# GitHub 项目交付看板
+# GitHub 项目状态看板
 
-部署在 GitHub Pages 的静态看板，以项目管理者的视角查看 Issue、PR、合并门禁、每日构建和版本测试，重点显示 E2E 的用例数与稳定通过率。页面只读取同站点的 `data/snapshot.json`，无需登录、后端服务或浏览器 Token。
+静态 GitHub Pages 看板，展示 Issue、PR、门禁、每日构建、版本验证、UT / ST / E2E 指标及完整已采集历史。采集由看板仓 GitHub Actions 执行；Bot 负责接收 Webhook 和触发刷新。
 
-| 用途 | 数据源 | 看板仓库 | 线上站点 |
-| --- | --- | --- | --- |
-| 正式 | `openJiuwen-ai/sciencediscovery` | `ScienceDiscovery/github-status-board` | <https://sciencediscovery.github.io/github-status-board/> |
-| 测试 | `ScienceDiscovery/sciencediscovery` | `ScienceDiscovery/github-status-board-test` | <https://sciencediscovery.github.io/github-status-board-test/> |
+| 用途 | 数据源 | 站点 |
+| --- | --- | --- |
+| 正式 | openJiuwen-ai/sciencediscovery | https://sciencediscovery.github.io/github-status-board/ |
+| 测试 | ScienceDiscovery/sciencediscovery | https://sciencediscovery.github.io/github-status-board-test/ |
 
-默认数据源是正式仓。两个仓各自维护 `main` 源码与 `site/` 站点，GitHub Actions 负责部署，页面顶栏显示正式／测试及完整源仓名。`board-config.json` 保存映射；发布器拒绝将正式数据写到测试目标，反之亦然。
+## 使用
 
-## 看板内容
+在目标仓 Actions 手动运行 **Collect dashboard data**，或由 Bot 触发；每小时第 17、47 分钟自动续跑。采集提交 `site/` 后，**Deploy dashboard Pages** 发布站点。首次配置见 [Actions 采集](docs/actions-collection.md)。
 
-保留原看板的七个页面，并增加构建报告和版本验证：
-
-| 页面 | 功能 |
-| --- | --- |
-| 总览 | Issue / PR 积压、主干 CI、测试与覆盖率、版本、社区健康度及待关注事项 |
-| 看板 | Issue / PR 卡片与表格，按状态、优先级、迭代、负责人、标签、里程碑、类型、作者分组；筛选、拖拽、正文与关联项 |
-| Issue | 新增／关闭趋势、年龄与标签分布、负责人负载、里程碑、陈旧／零回复／未指派项，列表搜索与排序 |
-| PR | 当前提交检查、评审人与评审决定、冲突、草稿、等待评审、合入中位与 P90 时长、最近合并 |
-| CI | 主干与 PR 成功率、运行时间线、Workflow / Job 健康、失败步骤、耗时、分支筛选 |
-| 测试 | 测试文件的层／语言／包分布、实际执行用例与失败明细、覆盖率及来源、包级测试缺口、测试脚本 |
-| 运维 | Release / Tag、发布节奏与资产下载、未发布提交、分支／保护／rulesets、社区资料、贡献与提交活跃度、陈旧治理 |
-| 构建报告 | 合并门禁、每日构建、版本验证的 run / SHA / attempt、任务和 UT / ST / E2E 报告，稳定通过／失败／跳过／重试通过及用例明细 |
-| 版本验证 | 根据标签解析的提交 SHA 关联版本验证运行；发布成功不自动标记测试通过 |
-
-标签位于顶栏，快照更新时间靠右。看板页固定为视口高度，列内和表格分别滚动；其他页面按内容自然滚动。
-
-所有时间按浏览器时区显示。快照超过两小时会提示过期；“刷新视图”只重新读取已发布快照。GitHub 没有相应数据时保留未知状态，不编造统计。
-
-### 自定义字段
-
-状态、优先级、迭代、备注、列顺序与 WIP 上限、自动状态规则、成员别名和变更记录保存在当前浏览器，按仓库隔离。状态／优先级／迭代支持拖拽，其余 GitHub 字段只读。关闭、重新打开、认领和关联 PR 的规则按新快照更新，保留手动状态。
-
-这些字段不会同步给其他成员，不写回 GitHub；清除浏览器数据会删除它们。通过“导出字段／导入字段”备份或迁移，也可导入旧版 `.data/board.json`。发布器不会读取或公开旧本地字段。卡片和正文只涵盖快照已采集的工作项，关闭窗口设置不能补取快照以外的历史。
-
-安全告警与访问／克隆流量保留跳转入口，在 GitHub 内按成员权限查看。公开站点只列出已公开的安全公告，不导出私有告警、流量、未发布的 Release 草稿或采集账号信息。
-
-## 生成与预览
-
-Python 3.10+，采集器只用标准库。凭据仅来自 `GITHUB_TOKEN` / `GH_TOKEN` 或已登录的 `gh`。禁止将真实 Token 放入命令行参数、仓库、页面、日志或测试数据。
+本地快速预览（Python 3.10+，凭据来自环境或已登录的 gh）：
 
 ```bash
 python3 publish.py --repo openJiuwen-ai/sciencediscovery
-python3 server.py                 # http://127.0.0.1:8790/
-# 或 ./run.sh once；./run.sh start|status|stop
+python3 server.py
 ```
 
-生成目录 `dist/` 已忽略。预览服务只提供静态文件，不提供旧版 `/api/*`；字段编辑直接保存在浏览器。
+此兼容命令生成有限近期快照；完整历史由 `--incremental` 模式基于目标仓自己的 `.sync/` 续跑。两种模式不要同时写同一站点。
 
-## GitHub Pages 发布
+## 文档
 
-```bash
-python3 publish.py --repo openJiuwen-ai/sciencediscovery \
-  --publish-repo ScienceDiscovery/github-status-board
-```
+[文档目录](docs/README.md) · [增量同步与历史](docs/incremental-history.md) · [Actions 配置](docs/actions-collection.md) · [测试报告契约](docs/test-reports.md)
 
-测试站点单独发布：
-
-```bash
-python3 publish.py --repo ScienceDiscovery/sciencediscovery \
-  --output dist/test --publish-repo ScienceDiscovery/github-status-board-test
-```
-
-发布器通过 Git Data API 基于已有 tree 原子更新 main 的 `site/` 中八个文件：`index.html`、`app.js`、`board.js`、`board-local.js`、`report.js`、`style.css`、`data/snapshot.json`、`.nojekyll`。首次在仓库 Settings → Pages 选择 **GitHub Actions**。`.github/workflows/pages.yml` 监听 main 的 site 更新，使用 Actions 的 GITHUB_TOKEN 上传 site 并部署 Pages；也支持 workflow_dispatch 手动发布。提交使用非强制更新；并发冲突会失败并保留上一版站点。
-
-`main` 同时保存源码、工作流和 site 快照，Bot 只改 site 文件，保留其他内容；历史 gh-pages 分支不再发布。正式和测试仓各自保留自己的 site，更新公共源码时只同步源码／工作流变更，不相互强制覆盖 main。浏览器只下载静态资源；不访问 GitHub API，不连接 bot 管理端口。发布仅接受公开源仓库和公开目标仓库，不导出采集账号权限、私有流量和安全告警、原始日志、截图或 trace。
-
-## bot 自动更新
-
-除了现有本机采集路径，也支持由 Cloudflare Workers Bot 触发本仓 `collect.yml`，在 GitHub Actions 内执行 Python 采集，再提交 site 并发布 Pages。所需权限、Secrets、正式／测试隔离和运行状态见 [Actions 采集说明](docs/actions-collection.md)。本节后续命令仍针对本机 Compose 采集方式。
-
-### Node / Compose 本机采集
-
-使用 `sciencediscovery_bot` 的可选 `docker-compose.board.yml`。bot 收到已验签且属于跟踪仓库的 Issue、PR、评审、push、workflow_run、workflow_job、check_run、check_suite、status、release 和标签变化事件时入队，后台运行本项目 `publish.py`；20 秒合并事件，发布间隔至少 60 秒，失败按 30～600 秒退避。启动及每小时兜底采集；两个源仓的队列、工作线程、重试和输出目录独立，容器重启后继续。其他仓的 webhook 只归档，不触发更新。
-
-在 bot 的本地 `.env` 配置（真实凭据只填本地，不提交）：
-
-```dotenv
-SDBOT_REPOS=openJiuwen-ai/sciencediscovery,ScienceDiscovery/sciencediscovery
-SDBOT_BOARD_TARGETS='{"openJiuwen-ai/sciencediscovery":"ScienceDiscovery/github-status-board","ScienceDiscovery/sciencediscovery":"ScienceDiscovery/github-status-board-test"}'
-SDBOT_BOARD_SOURCE_DIR_HOST=../github_status_board
-SDBOT_GITHUB_APP_ID=
-SDBOT_GITHUB_APP_PRIVATE_KEY=
-```
-
-```bash
-# 在 bot 目录运行
-docker compose -f docker-compose.yml -f docker-compose.board.yml up -d --build
-```
-
-App 必须安装到源仓和看板仓：源仓需 Metadata / Contents / Issues / Pull requests / Actions / Checks / Commit statuses 读取权限，目标需 Contents 写权限。Bot 用 App ID 和本地 RSA 私钥按仓库查找 installation，每轮新取短期令牌；源仓只读令牌通过 GITHUB_TOKEN 传入 publish.py，目标仓写令牌通过 GSB_PUBLISH_TOKEN 传入，支持两个仓位于不同组织。这种本机采集模式下，App 私钥不会传给 Python 采集器或 Pages 工作流。配置 Pages 是一次性的管理员操作；日常提交不需 Pages 管理或 Workflows 写权限。bot 还必须配置 GitHub webhook secret，未配置则拒绝启用发布功能。旧 SDBOT_BOARD_GITHUB_TOKEN 模式仍兼容，与 App 模式互斥；命令行手工发布可继续使用 gh 登录，同一个令牌将用于读取与提交。管理员可在 bot 的 loopback `/api/status` 查看 `board.targets` 中每个站点的 `pending`、`running`、`last_success`、`commit` 和错误类别；公开 webhook 不返回这些信息。API 提交成功仅表示内容已入仓，Pages 部署结果以 Deploy dashboard Pages 工作流为准。Pages 工作流所需权限是 contents read / pages write / id-token write，上传目录仅 site；Pages 部署本身无需额外保存个人凭据或 App 私钥。使用上方 Actions 采集模式时，采集工作流仍需要其文档列出的 App ID 和私钥 Secret。
-
-## 工作流与报告契约
-
-看板读取现有 CI 证据，不替源仓库执行测试，也不会将缺失证据当成成功。默认按 `release` 事件／版本工作流归为版本验证、`schedule`／daily/nightly 归为每日构建，其余为门禁；可在 `board-config.json` 配置名称正则。
-
-Actions 产物名使用 `ut-results`、`st-results`、`e2e-results`（分片可追加后缀）。支持：
-
-1. Playwright `results.json` / `report.json`：优先使用最终 outcome，重试不增加用例数；预期失败按框架结果处理。
-2. JUnit XML：从 testcase 或最内层 testsuite 计数，避免父子汇总重复。
-3. `dashboard-summary.json`：字段 `tests`、`passed`、`failed`、`skipped`、`flaky` 均为非负整数，后四项之和必须等于 tests。
-4. `run.log`：兼容现有 CI 的 TAP / unittest / pytest 汇总，作为没有结构化报告时的后备来源。
-
-同一产物内只取一种报告格式，优先级为 summary、Playwright、JUnit、log。分片产物必须互不重叠，避免同时上传同一层的合并报告和分片。用例数按报告中的测试实例（包含浏览器项目）计数，不是测试文件数；重试不重复计数。稳定通过率 = passed / tests；skipped 和 flaky 单列，不计稳定通过。零用例不显示 100%。
-
-覆盖率支持 Actions 产物中的 lcov、Istanbul summary 和 Cobertura；若只能读取 Codecov 公共汇总，会明确标记未关联本次构建。测试文件比值不当作行覆盖率；包级用例只来自完整可定位的结构化报告或日志中的包级计数，原始日志与命令不发布。
-
-报告只关联当前 run、SHA 和 attempt；重跑前的产物不会挪用。过期、下载失败、解析失败和未上传均显示未知数量。每个产物最多下载 80 MiB，下载受整次读取时间预算约束；持续缓慢传输也会中止并标记不可读取，不阻断整站更新。展开内容最多 160 MiB / 3000 个条目，不解压到磁盘。明细最多 500 条，汇总保留完整数量。
-
-采集边界：开放 Issue 最多 500、开放 PR 最多 200、最近 100 个 Actions run、优先各工作流／阶段最新报告共 12 个 run、15 个 Release。PR 检查汇总受 GitHub GraphQL 分页限制，缺失时展示未知并提供原页面链接。列表上限不等于仓库总量；统计仅用于此快照范围内的管理判断。
+看板的状态、优先级、迭代、备注与列设置保存在本浏览器，按源仓隔离；可导入／导出字段。浏览器不持有 GitHub 凭据，不连接 Bot，也不写回 GitHub。
 
 ## 验证
 
 ```bash
-python3 -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 node test/sync-e2e.mjs
 node .e2e/node_modules/playwright/cli.js test --config test/playwright.config.cjs
 ```
 
-浏览器用例使用仓库固定 Playwright 版本和独立临时目录／端口，覆盖九个页面、真实静态子路径、筛选／排序、拖拽与字段持久化、列配置、导入导出、测试明细、缺失证据、过期状态、刷新、浏览器时区和窄屏布局。测试 fixture 只用于本地验收，不发布成项目运行结果。
+修改功能时同步更新对应文档。测试使用独立临时数据，禁止将 fixture 发布为真实看板数据。

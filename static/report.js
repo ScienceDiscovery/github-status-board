@@ -113,7 +113,7 @@ function quality() {
   const runs = data.quality.runs.filter(
     (r) => lane === "all" || r.channel === lane,
   );
-  return `${heading("构建与测试证据", "运行结果和测试用例结果分别判断")}<div class="filters"><label>阶段 <select id="lane" aria-label="阶段"><option value="all">全部阶段</option><option value="gate">合并门禁</option><option value="daily">每日构建</option><option value="release">版本验证</option></select></label><span class="muted">稳定通过率 = 通过 ÷ 总用例；跳过与重试通过单列</span></div>${runs.length ? runs.slice(0, 30).map(runCard).join("") : '<div class="card empty">此阶段尚无 Actions 运行记录。接入对应工作流后，这里会展示提交、任务和测试报告。</div>'}<p class="small-note">最多展示最近 100 次运行中的 30 次；优先读取各阶段／工作流最新报告，最多 12 次。重跑只使用当前 attempt 产生的产物。</p>`;
+  return `${heading("构建与测试证据", "运行结果和测试用例结果分别判断")}<div class="filters"><label>阶段 <select id="lane" aria-label="阶段"><option value="all">全部阶段</option><option value="gate">合并门禁</option><option value="daily">每日构建</option><option value="release">版本验证</option></select></label><span class="muted">稳定通过率 = 通过 ÷ 总用例；跳过与重试通过单列</span></div>${runs.length ? runs.slice(0, 30).map(runCard).join("") : '<div class="card empty">此阶段尚无 Actions 运行记录。接入对应工作流后，这里会展示提交、任务和测试报告。</div>'}<p class="small-note">此页展示近期运行。<a href="#history">历史数据</a>可按运行和 attempt 查看全部已采集指标。</p>`;
 }
 function releases() {
   return `${heading("版本验证", "仅关联版本提交 SHA 一致的版本验证运行")}<div class="card">${
@@ -145,7 +145,7 @@ document.addEventListener("click", (e) => {
     t = r.tests[Number(btn.dataset.test)];
   $("#detail-title").textContent = t.layer.toUpperCase() + " · " + t.name;
   $("#detail-body").innerHTML =
-    `<p>${link(r.url, `${r.name} · Run #${r.id} / attempt ${r.attempt}`)}</p><p class="small-note">${date(r.updated_at)} · ${esc(r.sha)}</p><h3>${esc(countSummary(t))}</h3>${breakdown(t.counts)}<div class="table-wrap" style="margin-top:20px"><table><thead><tr><th>结果</th><th>用例</th><th>文件 / 项目</th></tr></thead><tbody>${t.cases.length ? t.cases.map((c) => `<tr><td>${badge(c.status)}</td><td class="title">${esc(c.name)}</td><td>${esc(c.file)}<span class="sub">${esc(c.project || "")}</span></td></tr>`).join("") : '<tr><td colspan="3" class="empty">此报告仅提供汇总，没有逐用例明细。</td></tr>'}</tbody></table></div><p class="small-note">最多展示 500 条用例；原始日志、截图和 trace 请从 GitHub 运行页查看。</p>`;
+    `<p>${link(r.url, `${r.name} · Run #${r.id} / attempt ${r.attempt}`)}</p><p class="small-note">${date(r.updated_at)} · ${esc(r.sha)}</p><h3>${esc(countSummary(t))}</h3>${breakdown(t.counts)}<div class="table-wrap" style="margin-top:20px"><table><thead><tr><th>结果</th><th>用例</th><th>文件 / 项目</th></tr></thead><tbody>${(t.cases || []).length ? t.cases.map((c) => `<tr><td>${badge(c.status)}</td><td class="title">${esc(c.name)}</td><td>${esc(c.file)}<span class="sub">${esc(c.project || "")}</span></td></tr>`).join("") : '<tr><td colspan="3" class="empty">此报告仅提供汇总，没有逐用例明细。</td></tr>'}</tbody></table></div><p class="small-note">原始日志、逐用例记录、截图和 trace 请从 GitHub 运行页查看；历史指标独立保留。</p>`;
   $("#test-detail").showModal();
 });
 window.GSBQuality={

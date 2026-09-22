@@ -7,11 +7,13 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 
 from gsb.github import GitHub, GitHubError, discover_token
 from gsb.project import REPO_RE, build_project
 
 ROOT = Path(__file__).resolve().parent
+STATIC_FILES = ("index.html", "app.js", "style.css", "report.js", "board.js", "board-local.js", "history.js")
 
 
 def deployment_for(repo, settings, target=None):
@@ -25,7 +27,7 @@ def deployment_for(repo, settings, target=None):
 def export_site(output, snapshot):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    for name in ("index.html", "app.js", "style.css", "report.js", "board.js", "board-local.js"):
+    for name in STATIC_FILES:
         shutil.copyfile(ROOT / "static" / name, output / name)
     (output / "data").mkdir(exist_ok=True)
     target = output / "data/snapshot.json"
@@ -45,7 +47,7 @@ def publish(gh, site, repository, branch="main", *, source_token=None):
     # source files and workflows; the bot's Contents token changes only site/.
     old = gh.get(prefix + "/git/ref/heads/" + branch)["object"]["sha"]
     base_tree = gh.get(prefix + "/git/commits/" + old)["tree"]["sha"]
-    files = ["index.html", "app.js", "style.css", "report.js", "board.js", "board-local.js", "data/snapshot.json", ".nojekyll"]
+    files = [*STATIC_FILES, "data/snapshot.json", ".nojekyll"]
     tree = [{"path": "site/" + p, "mode": "100644", "type": "blob", "content": (Path(site) / p).read_text(encoding="utf-8")} for p in files]
     for entry in tree:
         if any(token and token in entry["content"] for token in (gh.token, source_token)):
@@ -60,6 +62,35 @@ def publish(gh, site, repository, branch="main", *, source_token=None):
     return commit["sha"]
 
 
+def publish_batch(gh, repository, branch, base, files, *, source_token=None):
+    """Commit checkpoints and public data on the exact checkout we collected."""
+    import re
+    if not REPO_RE.fullmatch(repository) or not REPO_RE.fullmatch("owner/" + branch) or not re.fullmatch("[0-9a-f]{40}", base):
+        raise ValueError("invalid publication base")
+    prefix = f"/repos/{repository}"
+    if gh.get(prefix).get("private"):
+        raise ValueError("publishing target must be public")
+    if gh.get(prefix + "/git/ref/heads/" + branch)["object"]["sha"] != base:
+        raise ValueError("publication conflict; retry from latest checkout")
+    for path, content in files.items():
+        allowed = path in {"site/" + x for x in (*STATIC_FILES, "data/snapshot.json", ".nojekyll")} or path in {".sync/state.json", ".sync/aggregate.json", ".sync/supplements.json"} or re.fullmatch(r"site/data/history/(manifest\.json|(?:index|records)/(?:issues|prs|runs|releases)/[0-9]{12}\.json)", path)
+        if not allowed or any(t and t in content for t in (gh.token, source_token)):
+            raise ValueError("unsafe public file")
+    if not files:
+        return None
+    def write(method, path, body):
+        return gh._request(method, gh._url(prefix + path, None), body=body)[0]
+    entries = []
+    for path, content in sorted(files.items()):
+        # Blob requests keep large issue bodies out of a single giant tree body.
+        blob = write("POST", "/git/blobs", {"content": content, "encoding": "utf-8"})
+        entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob["sha"]})
+    tree = write("POST", "/git/trees", {"base_tree": gh.get(prefix + "/git/commits/" + base)["tree"]["sha"], "tree": entries})
+    commit = write("POST", "/git/commits", {"message": "增量同步看板数据与进度", "tree": tree["sha"], "parents": [base]})
+    write("PATCH", "/git/refs/heads/" + branch, {"sha": commit["sha"], "force": False})
+    return commit["sha"]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default="openJiuwen-ai/sciencediscovery")
@@ -67,6 +98,8 @@ def main():
     parser.add_argument("--settings", default=str(ROOT / "board-config.json"))
     parser.add_argument("--publish-repo")
     parser.add_argument("--branch", default="main")
+    parser.add_argument("--incremental", action="store_true", help="resume .sync/ from this checkout")
+    parser.add_argument("--request-budget", type=int, default=180)
     args = parser.parse_args()
     token, _ = discover_token()
     publish_token = os.environ.get("GSB_PUBLISH_TOKEN", "").strip() or token
@@ -74,7 +107,14 @@ def main():
     try:
         settings = json.loads(Path(args.settings).read_text())
         deployment = deployment_for(args.repo, settings, args.publish_repo)
-        snapshot = build_project(gh, args.repo, settings)
+        sync = None
+        if args.incremental:
+            from gsb.sync import Sync
+            from gsb.incremental_project import build_snapshot
+            sync = Sync(gh, ROOT, args.repo, settings, requests=args.request_budget).collect()
+            snapshot = build_snapshot(sync)
+        else:
+            snapshot = build_project(gh, args.repo, settings)
         if deployment:
             snapshot["deployment"] = deployment
         export_site(args.output, snapshot)
@@ -83,7 +123,18 @@ def main():
             if not publish_token:
                 raise ValueError("publishing requires a token")
             publisher = GitHub(publish_token, timeout=30)
-            result["commit"] = publish(publisher, args.output, args.publish_repo, args.branch, source_token=token)
+            if sync:
+                from gsb.history import encode
+                files = sync.files()
+                files.update({"site/" + name: (Path(args.output) / name).read_text() for name in (*STATIC_FILES, ".nojekyll")})
+                files["site/data/snapshot.json"] = encode(snapshot)
+                files = {path: content for path, content in files.items() if not (ROOT / path).exists() or (ROOT / path).read_text() != content}
+                base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+                result["commit"] = publish_batch(publisher, args.publish_repo, args.branch, base, files, source_token=token)
+                result["sync"] = sync.progress()
+                result["changed_files"] = len(files)
+            else:
+                result["commit"] = publish(publisher, args.output, args.publish_repo, args.branch, source_token=token)
         print(json.dumps(result))
     except (GitHubError, OSError, ValueError) as err:
         # API errors can include request context; expose only a stable category.

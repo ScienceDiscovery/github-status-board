@@ -2,7 +2,7 @@ name: Dashboard checks
 on:
   push:
     branches: [main]
-    paths-ignore: ['site/**']
+    paths-ignore: ['site/**', '.sync/**']
   pull_request:
   workflow_dispatch:
 permissions:

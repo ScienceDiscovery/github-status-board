@@ -37,13 +37,14 @@ def slim_run(run, rules):
             "reports_status": "not_inspected"}
 
 
-def run_details(gh, cfg, run):
+def run_details(gh, cfg, run, *, cache=None, parser_version=None):
     base = f"/repos/{cfg.repo}/actions/runs/{run['id']}"
     try:
         jobs = gh.paginate(base + f"/attempts/{run['attempt']}/jobs", key="jobs", max_pages=2)
         run["jobs"] = [{"name": j.get("name"), "status": j.get("status"), "conclusion": j.get("conclusion"),
                         "url": j.get("html_url"), "failed_steps": [s["name"] for s in j.get("steps", []) if s.get("conclusion") == "failure"]}
                        for j in jobs]
+        run["jobs_status"] = "available"
     except GitHubError:
         run["jobs_status"] = "unavailable"
     try:
@@ -52,9 +53,13 @@ def run_details(gh, cfg, run):
         run["reports_status"] = "unavailable"
         return run
     run["reports_status"] = "missing"
+    cached = {str(t["artifact_id"]): t for t in (cache or {}).get("tests", [])}
+    run["tests"] = []
     for artifact in artifacts:
         name = artifact["name"]
         if not re.search(r"results|junit|playwright|test.report|dashboard|coverage|lcov|codecov", name, re.I):
+            continue
+        if run.get("next_started_at") and artifact.get("created_at", "") >= run["next_started_at"]:
             continue
         association = artifact.get("workflow_run") or {}
         if association.get("head_sha") and association["head_sha"] != run["sha"]:
@@ -62,7 +67,12 @@ def run_details(gh, cfg, run):
         # Artifacts survive reruns. Never attribute an earlier attempt to this one.
         if run["attempt"] > 1 and artifact.get("created_at", "") < (run.get("started_at") or ""):
             continue
-        entry = {"name": name, "layer": artifact_layer(name), "artifact_id": artifact["id"],
+        previous = cached.get(str(artifact["id"]))
+        identity = [run["id"], run["attempt"], artifact["id"], artifact.get("digest"), artifact.get("updated_at"), parser_version]
+        if previous and previous.get("counts") is not None and (previous.get("cache_key") == identity or artifact.get("expired")):
+            run["tests"].append(previous)
+            continue
+        entry = {"cache_key": identity, "name": name, "layer": artifact_layer(name), "artifact_id": artifact["id"],
                  "created_at": artifact.get("created_at"), "url": run["url"] + f"/artifacts/{artifact['id']}",
                  "status": "expired" if artifact.get("expired") else "unavailable", "counts": None, "cases": []}
         if not artifact.get("expired"):
@@ -82,9 +92,13 @@ def run_details(gh, cfg, run):
                             entry[key] = parsed[key]
                 else:
                     entry["status"] = "no_counts"
-            except (GitHubError, ValueError, OSError, zipfile.BadZipFile, RuntimeError):
-                pass
+            except (GitHubError, ValueError, OSError, zipfile.BadZipFile, RuntimeError) as error:
+                entry["error"] = getattr(error, "kind", type(error).__name__)
         run["tests"].append(entry)
+    # Deleting/expiring an artifact must not erase previously observed counts.
+    for key, previous in cached.items():
+        if previous.get("counts") is not None and not any(str(t["artifact_id"]) == key for t in run["tests"]):
+            run["tests"].append(previous)
     if run["tests"]:
         run["reports_status"] = "available" if all(t["counts"] is not None for t in run["tests"]) else "partial"
     return run

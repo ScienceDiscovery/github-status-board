@@ -176,6 +176,10 @@ def collect_issues(ctx: Context) -> dict:
             counts[key] = None
             note(notes, f"search:{key}", err, f"搜索计数 {key}")
 
+    return summarize_issues(issues, closed_recent, catalog, counts, cfg, notes, len(raw) >= cfg.issue_pages * 100)
+
+
+def summarize_issues(issues, closed_recent, catalog, counts, cfg, notes=None, truncated=False):
     label_counts: Counter = Counter()
     for issue in issues:
         for label in issue["labels"]:
@@ -201,7 +205,7 @@ def collect_issues(ctx: Context) -> dict:
     return {
         "notes": notes,
         "open_count": len(issues),
-        "truncated": len(raw) >= cfg.issue_pages * 100,
+        "truncated": truncated,
         "counts": counts,
         "median_age_days": round(statistics.median(ages), 1) if ages else None,
         "oldest_age_days": max(ages) if ages else None,
@@ -344,6 +348,10 @@ def collect_prs(ctx: Context) -> dict:
         raw_closed = []
         note(notes, "closed", err, "最近关闭的 PR")
     closed = [_slim_pr(p, now) for p in raw_closed]
+    return summarize_prs(prs, closed, cfg, now, notes)
+
+
+def summarize_prs(prs, closed, cfg, now, notes=None):
     merged = [p for p in closed if p["merged_at"]]
     cutoff = now - timedelta(days=30)
     merged_30d = [p for p in merged if (parse_ts(p["merged_at"]) or cutoff) >= cutoff]

@@ -354,3 +354,11 @@ body.board-page { height: 100vh; height: 100dvh; overflow: hidden; display: flex
   .meta { font-size: 10px; }
   .board-page main { padding: 10px 12px; }
 }
+
+/* History keeps index loading independent of the operational dashboard. */
+.history-progress,.history-pager{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:16px 0}
+.history-filters{flex-wrap:wrap}.history-filters label{display:flex;align-items:center;gap:8px;white-space:nowrap}.history-filters input{min-width:220px;max-width:100%;padding:8px;border:1px solid var(--line);border-radius:6px}
+.history-record{margin-bottom:12px}.history-record h3{overflow-wrap:anywhere}.history-record code{overflow-wrap:anywhere}
+.history-body{white-space:pre-wrap;overflow-wrap:anywhere;max-height:480px;overflow:auto;font:inherit;background:var(--bg);padding:14px}
+.history-metric{display:flex;flex-direction:column;gap:5px;padding:10px 0}.history-record summary{cursor:pointer}
+@media(max-width:600px){.history-filters label{width:100%}.history-filters input{min-width:0;width:auto;flex:1}.history-record .run-head{align-items:flex-start}.history-progress{gap:8px}}

@@ -54,3 +54,24 @@ empty=json.loads(json.dumps(doc));empty['quality']['runs']=[];empty['releases']=
 empty['sections']={k:dict(status='error',data=None,notes=[],error=dict(kind='error',message='结果未知')) for k in empty['sections']}
 empty['board']['items']=[];empty['details']={}
 export_site(root/'.e2e/site/empty',empty)
+
+# Complete-history fixture exceeds both the old Issue cap and one browser page.
+from gsb.history import History, encode
+history_root=root/'.e2e/history-fixture'
+history=History(history_root)
+for number in range(1, 626):
+    row={**item,'number':number,'title':f'历史 Issue {number}','url':base+f'/issues/{number}', 'body':'历史正文 <script>unsafe()</script>'}
+    history.put('issues',row)
+for r in runs:
+    r=json.loads(json.dumps(r))
+    for t in r['tests']:t.pop('cases',None)
+    history.put('runs',r)
+history.files()
+path=root/'.e2e/site/github-status-board/data/snapshot.json'
+full=json.loads(path.read_text());full['history']={'manifest':'./data/history/manifest.json'}
+full['sync']={'complete':False,'totals':history.manifest['totals'],'pending':3,'failed':1}
+path.write_text(encode(full))
+for name,content in history.files().items():
+    if not name.startswith('site/'):continue
+    target=root/'.e2e/site/github-status-board'/name.removeprefix('site/')
+    target.parent.mkdir(parents=True,exist_ok=True);target.write_text(content)
