@@ -14,7 +14,7 @@ Issue / PR 的开放及关闭记录不设保留条数上限。Actions 保存 run
 - `.sync/aggregate.json`：可撤销贡献的全量计数，Issue/PR 按状态和日，运行按工作流、阶段和日。
 - `.sync/supplements.json`：每日刷新一次的公开运维、测试文件分布和覆盖率信息。
 - `site/data/history/records/<类型>/<编号段>.json`：完整记录或小型指标。Issue/PR 每 100 个编号一段；run 按稳定 ID 段保存，每个 attempt 独立键。
-- `site/data/history/index/`：对应分片的搜索摘要；manifest 给出类型、计数和内容版本。只重写变化分片。
+- `site/data/history/index/`：对应分片的搜索摘要；`catalog/` 合并相邻稀疏索引，避免每几个 run 发起一次 HTTP 请求。manifest 给出类型、计数和内容版本。只重写变化分片和对应目录。
 - `site/data/snapshot.json`：当前汇总及轻量页面预览。
 
 进度和数据以同一准确 checkout HEAD 为父提交，使用 Git Data API 非强制更新 main。中断或提交冲突不会发布半套进度；重新运行从最新 main 重新取数，幂等 upsert 不重计。`.sync/` 不在 Pages 上传目录，但仓库公开，因此其中所有内容同样必须可公开。禁止写入本机路径、令牌或私有数据。

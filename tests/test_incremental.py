@@ -115,6 +115,16 @@ class SyncTests(unittest.TestCase):
         row=h.get('issues',1);row['body']='changed';h.put('issues',row)
         self.assertNotEqual(old['shards']['issues/000000000000']['revision'],h.manifest['shards']['issues/000000000000']['revision'])
         self.assertFalse(any('000000000002' in p for p in h.files()))
+    def test_sparse_run_indexes_are_bundled_without_losing_record_paths(self):
+        history=History(self.root)
+        for n in (1000001,2000001,9000001):history.put('runs',slim_run(run(n),{}))
+        files=history.files()
+        self.assertEqual(len(history.manifest['shards']),3)
+        self.assertEqual(len(history.manifest['catalogs']),1)
+        catalog=json.loads(next(v for k,v in files.items() if '/catalog/' in k))
+        self.assertEqual(len(catalog),3)
+        self.assertEqual(len({row['record'] for row in catalog}),3)
+
     def test_existing_metrics_migrate_without_cases_or_false_full_history(self):
         old=slim_run(run(),{});old['tests']=[dict(artifact_id=1,name='e2e',layer='e2e',counts={'tests':2},cases=[{'name':'DO-NOT-PUBLISH'}])]
         path=self.root/'site/data/snapshot.json';path.parent.mkdir(parents=True);path.write_text(encode({'repository':{'name':REPO},'quality':{'runs':[old]}}))

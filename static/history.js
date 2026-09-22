@@ -54,12 +54,16 @@
       if (!snapshot?.history) { result.innerHTML=progress();return; }
       if (!manifest) manifest = await json(`./data/history/manifest.json?v=${encodeURIComponent(version)}`);
       const shards = Object.values(manifest.shards).filter(s=>s.kind===kind);
-      await pooled(shards, async shard => {
-        const key=shard.index+'?v='+shard.revision;
+      const catalogs = Object.values(manifest.catalogs || {}).filter(s=>s.kind===kind);
+      const sources = catalogs.length ? catalogs : shards.map(s=>({...s,path:s.index}));
+      await pooled(sources, async shard => {
+        const key=shard.path+'?v='+shard.revision;
         if(!indexes.has(key)) indexes.set(key, await json('./data/history/'+key));
       });
       const term = query.toLocaleLowerCase();
-      const matches = shards.flatMap(shard => Object.entries(indexes.get(shard.index+'?v='+shard.revision)).map(([key,row])=>({key,row,shard})))
+      const matches = (catalogs.length
+        ? sources.flatMap(s=>indexes.get(s.path+'?v='+s.revision).map(e=>({key:e.key,row:e.row,shard:{records:e.record,revision:e.revision}})))
+        : shards.flatMap(shard=>Object.entries(indexes.get(shard.index+'?v='+shard.revision)).map(([key,row])=>({key,row,shard}))))
         .filter(({row})=>(!status || (row.state||row.conclusion||row.status)===status) && (!term || [row.number,row.id,row.title,row.name,row.author,row.branch,row.sha,row.tag].join(' ').toLocaleLowerCase().includes(term)))
         .sort((a,b)=>(b.row.updated_at||b.row.created_at||'').localeCompare(a.row.updated_at||a.row.created_at||'') || b.key.localeCompare(a.key));
       page = Math.min(page, Math.max(0, Math.ceil(matches.length/25)-1));

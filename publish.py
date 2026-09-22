@@ -73,7 +73,7 @@ def publish_batch(gh, repository, branch, base, files, *, source_token=None):
     if gh.get(prefix + "/git/ref/heads/" + branch)["object"]["sha"] != base:
         raise ValueError("publication conflict; retry from latest checkout")
     for path, content in files.items():
-        allowed = path in {"site/" + x for x in (*STATIC_FILES, "data/snapshot.json", ".nojekyll")} or path in {".sync/state.json", ".sync/aggregate.json", ".sync/supplements.json"} or re.fullmatch(r"site/data/history/(manifest\.json|(?:index|records)/(?:issues|prs|runs|releases)/[0-9]{12}\.json)", path)
+        allowed = path in {"site/" + x for x in (*STATIC_FILES, "data/snapshot.json", ".nojekyll")} or path in {".sync/state.json", ".sync/aggregate.json", ".sync/supplements.json"} or re.fullmatch(r"site/data/history/(manifest\.json|(?:index|records|catalog)/(?:issues|prs|runs|releases)/[0-9]{12}\.json)", path)
         if not allowed or any(t and t in content for t in (gh.token, source_token)):
             raise ValueError("unsafe public file")
     if not files:

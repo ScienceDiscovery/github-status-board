@@ -104,6 +104,24 @@ class History:
         return [self.get(kind, key) for key, _ in (rows if limit is None else rows[:limit])]
 
     def files(self):
+        # GitHub run IDs are global and sparse within one repository. Bundle
+        # their tiny search indexes to avoid one HTTP request per few runs.
+        groups = {}
+        for bucket, info in self.manifest["shards"].items():
+            kind, number = bucket.split("/")
+            group = f"{kind}/{int(number) // (100 if kind == 'runs' else 10):012d}"
+            groups.setdefault(group, []).append(bucket)
+        catalogs = self.manifest.setdefault("catalogs", {})
+        for group, buckets in groups.items():
+            if group in catalogs and not any(f"site/data/history/records/{b}.json" in self.changed for b in buckets):
+                continue
+            entries = [{"key": key, "row": row, "record": self.manifest["shards"][b]["records"],
+                        "revision": self.manifest["shards"][b]["revision"]}
+                       for b in buckets for key, row in self._index(b).items()]
+            content = encode(entries)
+            self.changed[f"site/data/history/catalog/{group}.json"] = content
+            catalogs[group] = {"kind": group.split("/")[0], "path": f"catalog/{group}.json", "count": len(entries),
+                               "revision": hashlib.sha256(content.encode()).hexdigest()[:16]}
         if self.changed:
             self.changed["site/data/history/manifest.json"] = encode(self.manifest)
             self.changed[".sync/aggregate.json"] = encode(self.aggregate)

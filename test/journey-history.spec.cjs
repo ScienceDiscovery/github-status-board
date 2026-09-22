@@ -36,7 +36,7 @@ test('history is lazy and a failed shard can be retried', async({page})=>{
   await expect(page.locator('#tab-overview .lane')).toHaveCount(3);
   expect(historyRequests).toBe(0);
   let fail=true;
-  await page.route('**/history/index/**',route=>fail?route.fulfill({status:503,body:'unavailable'}):route.continue());
+  await page.route('**/history/catalog/**',route=>fail?route.fulfill({status:503,body:'unavailable'}):route.continue());
   await page.getByRole('link',{name:'历史数据',exact:true}).click();
   await expect(page.locator('#history-result')).toContainText('历史数据读取失败');
   fail=false;await page.getByRole('button',{name:'重试',exact:true}).click();
