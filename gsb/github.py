@@ -230,21 +230,30 @@ class GitHub:
         if status not in (301, 302, 303, 307, 308) or not location:
             raise GitHubError(f"artifact download did not redirect (HTTP {status})", kind="error", url=url)
         req = urllib.request.Request(location, headers={"User-Agent": USER_AGENT})
+        deadline = time.monotonic() + self.timeout
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 length = resp.headers.get("Content-Length")
                 if length and int(length) > max_bytes:
                     raise GitHubError(f"artifact too large ({int(length)} bytes > {max_bytes})", kind="error",
                                       hint="提高 GSB_ARTIFACT_MAX_MB 或缩小产物。", url=url)
-                data = resp.read(max_bytes + 1)
-                if len(data) > max_bytes:
-                    raise GitHubError(f"artifact exceeds {max_bytes} bytes", kind="error",
-                                      hint="提高 GSB_ARTIFACT_MAX_MB 或缩小产物。", url=url)
-                return data
+                # Socket timeouts only bound idle reads. A slow, continuously streaming
+                # trace archive must not monopolize the publication worker indefinitely.
+                data = bytearray()
+                while True:
+                    if time.monotonic() >= deadline:
+                        raise GitHubError("artifact download exceeded time budget", kind="network", url=url)
+                    chunk = resp.read1(min(64 * 1024, max_bytes + 1 - len(data)))
+                    if not chunk:
+                        return bytes(data)
+                    data.extend(chunk)
+                    if len(data) > max_bytes:
+                        raise GitHubError(f"artifact exceeds {max_bytes} bytes", kind="error",
+                                          hint="提高 GSB_ARTIFACT_MAX_MB 或缩小产物。", url=url)
         except urllib.error.HTTPError as err:
             raise GitHubError(f"artifact blob download failed: HTTP {err.code}", kind="error", url=url) from None
-        except urllib.error.URLError as err:
-            raise GitHubError(f"network error: {err.reason}", kind="network", url=url) from None
+        except (urllib.error.URLError, TimeoutError) as err:
+            raise GitHubError("artifact download unavailable", kind="network", url=url) from None
 
     def get_text_file(self, repo: str, path: str, ref: str | None = None) -> str | None:
         """Raw file content via the contents API, or ``None`` when it does not exist."""

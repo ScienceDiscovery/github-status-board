@@ -13,6 +13,14 @@ from gsb.project import REPO_RE, build_project
 ROOT = Path(__file__).resolve().parent
 
 
+def deployment_for(repo, settings, target=None):
+    deployment = next((value for source, value in settings.get("deployments", {}).items()
+                       if source.lower() == repo.lower()), None)
+    if deployment and target and target.lower() != deployment["repository"].lower():
+        raise ValueError("source repository does not match publishing destination")
+    return deployment
+
+
 def export_site(output, snapshot):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
@@ -58,7 +66,7 @@ def publish(gh, site, repository, branch="gh-pages"):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", default="ScienceDiscovery/sciencediscovery")
+    parser.add_argument("--repo", default="openJiuwen-ai/sciencediscovery")
     parser.add_argument("--output", default=str(ROOT / "dist"))
     parser.add_argument("--settings", default=str(ROOT / "board-config.json"))
     parser.add_argument("--publish-repo")
@@ -68,7 +76,10 @@ def main():
     gh = GitHub(token, timeout=30)
     try:
         settings = json.loads(Path(args.settings).read_text())
+        deployment = deployment_for(args.repo, settings, args.publish_repo)
         snapshot = build_project(gh, args.repo, settings)
+        if deployment:
+            snapshot["deployment"] = deployment
         export_site(args.output, snapshot)
         result = {"ok": True, "repo": args.repo, "generated_at": snapshot["generated_at"]}
         if args.publish_repo:

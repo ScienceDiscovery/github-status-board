@@ -224,3 +224,34 @@ test('board fits viewport while columns and table scroll independently',async({p
   await page.mouse.move(900,650);await page.mouse.wheel(0,500);
   await expect.poll(()=>page.evaluate(()=>scrollY)).toBeGreaterThan(0);
 });
+
+test('production and test sites show their source and isolate browser fields', async ({page}) => {
+  let repo='openJiuwen-ai/sciencediscovery', label='正式';
+  await page.route('**/data/snapshot.json*', async route => {
+    const response=await route.fetch(), snapshot=await response.json();
+    snapshot.repo=repo; snapshot.repo_url='https://github.com/'+repo;
+    snapshot.deployment={label};
+    await route.fulfill({response,json:snapshot});
+  });
+  async function note(value) {
+    await page.locator('[data-open="issue:1"]').click();
+    if(value!==undefined) {
+      await page.locator('[data-dfield="note"]').fill(value);
+      await page.locator('[data-dfield="note"]').press('Tab');
+    }
+  }
+  await page.goto('/github-status-board/#board');
+  await expect(page.locator('.brand-title')).toHaveText('正式 · GitHub 状态看板');
+  await note('正式项目备注');
+  await page.locator('[data-baction="close-drawer"]').click();
+  repo='ScienceDiscovery/sciencediscovery'; label='测试';
+  await page.reload();
+  await expect(page.locator('.brand-title')).toHaveText('测试 · GitHub 状态看板');
+  await expect(page.locator('#repo-link')).toHaveText(repo);
+  await note();
+  await expect(page.locator('[data-dfield="note"]')).toHaveValue('');
+  await page.locator('[data-baction="close-drawer"]').click();
+  repo='openJiuwen-ai/sciencediscovery'; label='正式';
+  await page.reload(); await note();
+  await expect(page.locator('[data-dfield="note"]')).toHaveValue('正式项目备注');
+});
