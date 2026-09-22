@@ -21,6 +21,7 @@
 | PR | 当前提交检查、评审人与评审决定、冲突、草稿、等待评审、合入中位与 P90 时长、最近合并 |
 | CI | 主干与 PR 成功率、运行时间线、Workflow / Job 健康、失败步骤、耗时、分支筛选 |
 | 测试 | 测试文件的层／语言／包分布、实际执行用例与失败明细、覆盖率及来源、包级测试缺口、测试脚本 |
+| Coverage | Node.js / Python 整仓汇总、完整运行趋势、路径覆盖率和最近 PR 的受影响模块覆盖率 |
 | 运维 | Release / Tag、发布节奏与资产下载、未发布提交、分支／保护／rulesets、社区资料、贡献与提交活跃度、陈旧治理 |
 | 构建报告 | 合并门禁、每日构建、版本验证的 run / SHA / attempt、任务和 UT / ST / E2E 报告，稳定通过／失败／跳过／重试通过及用例明细 |
 | 版本验证 | 根据标签解析的提交 SHA 关联版本验证运行；发布成功不自动标记测试通过 |
@@ -103,7 +104,7 @@ Actions 产物名使用 `ut-results`、`st-results`、`e2e-results`（分片可�
 
 覆盖率支持 Actions 产物中的 lcov、Istanbul summary 和 Cobertura；若只能读取 Codecov 公共汇总，会明确标记未关联本次构建。测试文件比值不当作行覆盖率；包级用例只来自完整可定位的结构化报告或日志中的包级计数，原始日志与命令不发布。
 
-ScienceDiscovery 的 `node-coverage-summary-*` JSON 产物还会在 Coverage 页展示 nightly 趋势、路径指标和最近 PR 结果；main 增量合成值会标记为估算。该指标仅覆盖 Node 测试。
+ScienceDiscovery 的 `node-coverage-summary-*` 和 `python-coverage-summary-*` JSON 产物会在 Coverage 页分语言展示完整运行趋势、路径指标和最近 PR 结果，并按已覆盖／总计数生成整仓行与分支汇总。artifact 名称只用于识别语言和 PR；是否为完整权威结果以摘要中的 `mode` / `authoritative` 字段为准。main 增量合成值会明确标记为估算。
 
 报告只关联当前 run、SHA 和 attempt；重跑前的产物不会挪用。过期、下载失败、解析失败和未上传均显示未知数量。每个产物最多下载 80 MiB，下载受整次读取时间预算约束；持续缓慢传输也会中止并标记不可读取，不阻断整站更新。展开内容最多 160 MiB / 3000 个条目，不解压到磁盘。明细最多 500 条，汇总保留完整数量。
 
@@ -117,4 +118,4 @@ node test/sync-e2e.mjs
 node .e2e/node_modules/playwright/cli.js test --config test/playwright.config.cjs
 ```
 
-浏览器用例使用仓库固定 Playwright 版本和独立临时目录／端口，覆盖九个页面、真实静态子路径、筛选／排序、拖拽与字段持久化、列配置、导入导出、测试明细、缺失证据、过期状态、刷新、浏览器时区和窄屏布局。测试 fixture 只用于本地验收，不发布成项目运行结果。
+浏览器用例使用仓库固定 Playwright 版本和独立临时目录／端口，覆盖十个页面、真实静态子路径、筛选／排序、拖拽与字段持久化、列配置、导入导出、测试明细、覆盖率、缺失证据、过期状态、刷新、浏览器时区和窄屏布局。测试 fixture 只用于本地验收，不发布成项目运行结果。

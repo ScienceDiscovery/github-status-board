@@ -599,91 +599,171 @@ def _coverage_value(totals: dict) -> dict:
     return value
 
 
+def _coverage_language(artifact: dict, manifest: dict) -> str | None:
+    language = str(manifest.get("language") or "").lower()
+    if language in ("node", "python"):
+        return language
+    name = artifact.get("name") or ""
+    if name.startswith("node-coverage-summary-"):
+        return "node"
+    if name.startswith("python-coverage-summary-"):
+        return "python"
+    return None
+
+
+def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, language: str) -> dict | None:
+    prefix = f"{language}-coverage-summary-"
+    candidates = sorted(
+        (artifact for artifact in artifacts
+         if artifact.get("name", "").startswith(prefix) and not artifact.get("expired")),
+        key=lambda artifact: artifact.get("created_at") or "",
+        reverse=True,
+    )[:80]
+    entries = []
+    for artifact in candidates:
+        loaded = _load_artifact(ctx, artifact, notes)
+        manifest = (loaded or {}).get("coverage_manifest")
+        if not manifest or _coverage_language(artifact, manifest) != language:
+            continue
+        entries.append({"artifact": artifact, "manifest": manifest})
+    if not entries:
+        return None
+
+    default_entries = [entry for entry in entries if entry["artifact"].get("branch") == ctx.default_branch]
+    full_entries = [entry for entry in default_entries
+                    if entry["manifest"].get("authoritative") is True
+                    or entry["manifest"].get("mode") == "full"
+                    or "-nightly-" in entry["artifact"].get("name", "")]
+    baseline_entry = full_entries[0] if full_entries else None
+
+    if baseline_entry:
+        baseline_artifact = baseline_entry["artifact"]
+        baseline = baseline_entry["manifest"]
+        groups = {
+            group["name"]: {
+                **group,
+                "source_sha": baseline.get("source_sha"),
+                "updated_at": baseline.get("generated_at") or baseline_artifact.get("created_at"),
+                "update_kind": "full baseline",
+            }
+            for group in baseline.get("groups", []) if group.get("name")
+        }
+        increments = [
+            entry for entry in reversed(default_entries)
+            if (entry["artifact"].get("created_at") or "") > (baseline_artifact.get("created_at") or "")
+            and (entry["manifest"].get("mode") == "incremental"
+                 or (entry["manifest"].get("mode") is None
+                     and "-main-incremental-" in entry["artifact"].get("name", "")))
+        ]
+        applied = []
+        for entry in increments:
+            artifact, manifest = entry["artifact"], entry["manifest"]
+            changed = []
+            for group in manifest.get("groups", []):
+                if not group.get("name"):
+                    continue
+                groups[group["name"]] = {
+                    **group,
+                    "source_sha": manifest.get("source_sha"),
+                    "updated_at": manifest.get("generated_at") or artifact.get("created_at"),
+                    "update_kind": "main increment",
+                }
+                changed.append(group["name"])
+            if changed:
+                applied.append({"artifact": artifact["name"], "created_at": artifact.get("created_at"),
+                                "sha": manifest.get("source_sha"), "groups": changed})
+        current_groups = sorted(groups.values(), key=lambda group: group["name"])
+        current_totals = _coverage_totals(current_groups)
+        baseline_payload = {
+            "artifact": baseline_artifact["name"],
+            "created_at": baseline.get("generated_at") or baseline_artifact.get("created_at"),
+            "kind": "nightly" if "-nightly-" in baseline_artifact["name"] else "main full",
+            "sha": baseline.get("source_sha"),
+            "totals": baseline.get("totals") or {},
+            "groups": baseline.get("groups", []),
+        }
+        current = {
+            "kind": "incremental" if applied else "authoritative",
+            "totals": current_totals,
+            "groups": current_groups,
+            "increments": applied,
+        }
+    else:
+        latest = default_entries[0] if default_entries else entries[0]
+        artifact, manifest = latest["artifact"], latest["manifest"]
+        current_groups = [{
+            **group,
+            "source_sha": manifest.get("source_sha"),
+            "updated_at": manifest.get("generated_at") or artifact.get("created_at"),
+            "update_kind": "partial",
+        } for group in manifest.get("groups", []) if group.get("name")]
+        baseline_payload = None
+        current = {
+            "kind": "partial",
+            "totals": manifest.get("totals") or _coverage_totals(current_groups),
+            "groups": current_groups,
+            "increments": [],
+        }
+
+    history = [{
+        "artifact": entry["artifact"]["name"],
+        "created_at": entry["manifest"].get("generated_at") or entry["artifact"].get("created_at"),
+        "sha": entry["manifest"].get("source_sha"),
+        "totals": entry["manifest"].get("totals") or {},
+    } for entry in reversed(full_entries[:14])]
+
+    latest_pr = {}
+    for entry in entries:
+        match = re.match(rf"{language}-coverage-summary-pr-(\d+)-", entry["artifact"]["name"])
+        if match and match.group(1) not in latest_pr:
+            latest_pr[match.group(1)] = entry
+    pull_requests = []
+    for number, entry in list(latest_pr.items())[:10]:
+        artifact, manifest = entry["artifact"], entry["manifest"]
+        pull_requests.append({"number": int(number), "branch": artifact.get("branch"),
+                              "created_at": artifact.get("created_at"), "sha": manifest.get("source_sha"),
+                              "groups": manifest.get("groups", []), "totals": manifest.get("totals") or {}})
+
+    source_artifact = (baseline_payload or {}).get("artifact") or (default_entries[0] if default_entries else entries[0])["artifact"]["name"]
+    return {
+        "language": language,
+        "source": f"artifact:{source_artifact}",
+        "scope": (baseline_entry or entries[0])["manifest"].get("scope"),
+        "baseline": baseline_payload,
+        "current": current,
+        "history": history,
+        "pull_requests": pull_requests,
+        "value": _coverage_value(current["totals"]),
+    }
+
+
 def _coverage_probe(ctx: Context, artifacts: list[dict], paths: list[str], parsed: dict, notes: list) -> dict:
     """Try every coverage source in priority order and report what was attempted."""
     attempts = []
     result = {"source": None, "value": None, "attempts": attempts}
 
-    summaries = sorted(
-        (a for a in artifacts if a["name"].startswith("node-coverage-summary-") and not a.get("expired")),
-        key=lambda a: a.get("created_at") or "", reverse=True,
-    )
-    nightly_artifacts = [a for a in summaries if a["name"].startswith("node-coverage-summary-nightly-")][:14]
-    nightly = []
-    for artifact in nightly_artifacts:
-        loaded = _load_artifact(ctx, artifact, notes)
-        manifest = (loaded or {}).get("coverage_manifest")
-        if manifest:
-            nightly.append({"artifact": artifact, "manifest": manifest})
-
-    if nightly:
-        baseline_entry = nightly[0]
-        baseline_artifact, baseline = baseline_entry["artifact"], baseline_entry["manifest"]
-        groups = {
-            group["name"]: {**group, "source_sha": baseline.get("source_sha"),
-                            "updated_at": baseline.get("generated_at") or baseline_artifact.get("created_at"),
-                            "update_kind": "nightly"}
-            for group in baseline.get("groups", []) if group.get("name")
-        }
-        increments = [
-            artifact for artifact in summaries
-            if artifact["name"].startswith("node-coverage-summary-main-incremental-")
-            and (artifact.get("created_at") or "") > (baseline_artifact.get("created_at") or "")
-        ][:30]
-        applied = []
-        for artifact in reversed(increments):
-            loaded = _load_artifact(ctx, artifact, notes)
-            manifest = (loaded or {}).get("coverage_manifest")
-            if not manifest:
-                continue
-            changed = []
-            for group in manifest.get("groups", []):
-                if not group.get("name"):
-                    continue
-                groups[group["name"]] = {**group, "source_sha": manifest.get("source_sha"),
-                                         "updated_at": manifest.get("generated_at") or artifact.get("created_at"),
-                                         "update_kind": "main increment"}
-                changed.append(group["name"])
-            if changed:
-                applied.append({"artifact": artifact["name"], "created_at": artifact.get("created_at"),
-                                "sha": manifest.get("source_sha"), "groups": changed})
-
-        current_groups = sorted(groups.values(), key=lambda group: group["name"])
-        current_totals = _coverage_totals(current_groups)
-        history = []
-        for entry in reversed(nightly):
-            manifest, artifact = entry["manifest"], entry["artifact"]
-            history.append({"created_at": manifest.get("generated_at") or artifact.get("created_at"),
-                            "sha": manifest.get("source_sha"), "totals": manifest.get("totals") or {}})
-
-        latest_pr = {}
-        for artifact in summaries:
-            match = re.match(r"node-coverage-summary-pr-(\d+)-", artifact["name"])
-            if match and match.group(1) not in latest_pr:
-                latest_pr[match.group(1)] = artifact
-        pull_requests = []
-        for number, artifact in list(latest_pr.items())[:10]:
-            loaded = _load_artifact(ctx, artifact, notes)
-            manifest = (loaded or {}).get("coverage_manifest")
-            if manifest:
-                pull_requests.append({"number": int(number), "branch": artifact.get("branch"),
-                                      "created_at": artifact.get("created_at"), "sha": manifest.get("source_sha"),
-                                      "groups": manifest.get("groups", []), "totals": manifest.get("totals") or {}})
-
+    languages = {}
+    for language in ("node", "python"):
+        dataset = _coverage_summary_dataset(ctx, artifacts, notes, language)
+        if dataset:
+            languages[language] = dataset
+    if languages:
+        combined_totals = _coverage_totals([
+            {"totals": dataset["current"]["totals"]} for dataset in languages.values()
+        ])
+        kinds = {dataset["current"]["kind"] for dataset in languages.values()}
         result.update({
-            "source": f"artifact:{baseline_artifact['name']}",
-            "value": _coverage_value(current_totals),
-            "baseline": {"artifact": baseline_artifact["name"],
-                         "created_at": baseline.get("generated_at") or baseline_artifact.get("created_at"),
-                         "sha": baseline.get("source_sha"), "totals": baseline.get("totals") or {},
-                         "groups": baseline.get("groups", [])},
-            "current": {"kind": "incremental" if applied else "authoritative", "totals": current_totals,
-                        "groups": current_groups, "increments": applied},
-            "history": history,
-            "pull_requests": pull_requests,
+            "source": "Actions coverage summaries",
+            "value": _coverage_value(combined_totals),
+            "current": {
+                "kind": "authoritative" if kinds == {"authoritative"} else "partial" if "partial" in kinds else "incremental",
+                "totals": combined_totals,
+            },
+            "languages": languages,
         })
         attempts.append({"step": "Actions 覆盖率摘要", "ok": True,
-                         "detail": f"{baseline_artifact['name']}；叠加 {len(applied)} 次 main 增量"})
+                         "detail": "；".join(f"{name}: {dataset['source'].removeprefix('artifact:')}"
+                                             for name, dataset in languages.items())})
         return result
 
     cov_arts = sorted(

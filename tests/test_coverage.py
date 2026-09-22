@@ -148,11 +148,50 @@ class CoverageParserTests(unittest.TestCase):
                    side_effect=lambda _ctx, artifact, _notes: {"coverage_manifest": manifests[artifact["id"]]}):
             result = _coverage_probe(ctx, artifacts, [], {}, [])
 
-        self.assertEqual(result["baseline"]["totals"]["lines"]["percentage"], 65)
-        self.assertEqual(result["current"]["kind"], "incremental")
-        self.assertEqual(result["current"]["totals"]["lines"]["percentage"], 85)
-        self.assertEqual(result["pull_requests"][0]["number"], 17)
-        self.assertEqual(result["pull_requests"][0]["groups"][0]["name"], "packages/b")
+        node = result["languages"]["node"]
+        self.assertEqual(node["baseline"]["totals"]["lines"]["percentage"], 65)
+        self.assertEqual(node["current"]["kind"], "incremental")
+        self.assertEqual(node["current"]["totals"]["lines"]["percentage"], 85)
+        self.assertEqual(node["pull_requests"][0]["number"], 17)
+        self.assertEqual(node["pull_requests"][0]["groups"][0]["name"], "packages/b")
+
+    def test_full_main_artifacts_are_authoritative_for_node_and_python(self):
+        artifacts = [
+            {"id": 2, "name": "python-coverage-summary-main-incremental-mainsha", "branch": "main",
+             "created_at": "2026-09-22T07:31:00Z"},
+            {"id": 1, "name": "node-coverage-summary-main-incremental-mainsha", "branch": "main",
+             "created_at": "2026-09-22T07:30:00Z"},
+        ]
+        node_totals = {
+            "lines": {"covered": 80, "total": 100, "percentage": 80},
+            "branches": {"covered": 30, "total": 50, "percentage": 60},
+            "functions": {"covered": 9, "total": 10, "percentage": 90},
+        }
+        python_totals = {
+            "lines": {"covered": 60, "total": 100, "percentage": 60},
+            "branches": {"covered": 20, "total": 50, "percentage": 40},
+        }
+        manifests = {
+            1: {"schema_version": 1, "language": "node", "mode": "full", "authoritative": True,
+                "source_sha": "mainsha", "groups": [{"name": "packages/example", "files": 1,
+                                                        "totals": node_totals}], "totals": node_totals},
+            2: {"schema_version": 1, "language": "python", "mode": "full", "authoritative": True,
+                "source_sha": "mainsha", "groups": [{"name": "services/example", "files": 1,
+                                                        "totals": python_totals}], "totals": python_totals},
+        }
+        ctx = Context(gh=object(), cfg=Config(), now=datetime(2026, 9, 22),
+                      repo_meta={"default_branch": "main"})
+
+        with patch("gsb.collectors._load_artifact",
+                   side_effect=lambda _ctx, artifact, _notes: {"coverage_manifest": manifests[artifact["id"]]}):
+            result = _coverage_probe(ctx, artifacts, [], {}, [])
+
+        self.assertEqual(result["current"]["kind"], "authoritative")
+        self.assertEqual(result["value"]["lines_pct"], 70)
+        self.assertEqual(result["value"]["branches_pct"], 50)
+        self.assertEqual(result["value"]["functions_pct"], 90)
+        self.assertEqual(result["languages"]["node"]["baseline"]["kind"], "main full")
+        self.assertEqual(result["languages"]["python"]["baseline"]["kind"], "main full")
 
 
 if __name__ == "__main__":
