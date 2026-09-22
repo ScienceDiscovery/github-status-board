@@ -484,7 +484,9 @@
     btn.textContent=btn.disabled?'读取中…':'刷新视图';
     if(snap){
       $('#repo-link').textContent=snap.repo;$('#repo-link').href=snap.repo_url;
-      document.title=snap.repo+' · GitHub 状态看板';
+      const label=snap.deployment?.label;
+      $('.brand-title').textContent=label ? label+' · GitHub 状态看板' : 'GitHub 状态看板';
+      document.title=snap.repo+' · '+$('.brand-title').textContent;
       $('#meta').textContent=date(snap.generated_at);
       $('#meta').dateTime=snap.generated_at;
       $('#meta').title='按浏览器时区显示';
