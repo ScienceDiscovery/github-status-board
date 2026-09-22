@@ -20,7 +20,7 @@ from collections import defaultdict
 from xml.etree import ElementTree
 
 # Bump when parser output changes so cached artifact parses are redone.
-PARSER_VERSION = 4
+PARSER_VERSION = 5
 
 # ---------------------------------------------------------------------- tree
 TEST_FILE_RE = re.compile(
@@ -374,8 +374,9 @@ def parse_coverage_file(name: str, data: bytes) -> dict | None:
 # ------------------------------------------------------------ artifact zips
 def parse_artifact_zip(name: str, blob: bytes) -> dict:
     """Open an artifact and run every parser that applies. Never raises on content errors."""
-    result = {"name": name, "bytes": len(blob), "entries": 0, "summary": None, "run_log": None,
-              "playwright": None, "junit": [], "coverage": [], "journeys": 0}
+    result = {"name": name, "bytes": len(blob), "entries": 0, "summary": None,
+              "coverage_manifest": None, "run_log": None, "playwright": None,
+              "junit": [], "coverage": [], "journeys": 0}
     try:
         zf = zipfile.ZipFile(io.BytesIO(blob))
     except zipfile.BadZipFile:
@@ -387,10 +388,16 @@ def parse_artifact_zip(name: str, blob: bytes) -> dict:
     for entry in names:
         base = entry.rsplit("/", 1)[-1]
         try:
-            if base == "summary.json" and result["summary"] is None:
-                # Coverage artifacts may also contain a generic summary.json. Only CI layer
-                # summaries belong in the executed-test rollup.
-                result["summary"] = _slim_summary(json.loads(zf.read(entry)))
+            if base == "summary.json":
+                doc = json.loads(zf.read(entry))
+                if (isinstance(doc, dict) and doc.get("schema_version") == 1
+                        and isinstance(doc.get("groups"), list)):
+                    # The root coverage manifest owns the aggregate and group rows. Per-group
+                    # summary.json files deliberately do not replace it.
+                    result["coverage_manifest"] = doc
+                elif result["summary"] is None:
+                    # Only CI layer summaries belong in the executed-test rollup.
+                    result["summary"] = _slim_summary(doc)
             elif base == "run.log" and result["run_log"] is None:
                 result["run_log"] = parse_run_log(zf.read(entry).decode("utf-8", "replace"))
             elif (entry.endswith("test-results/results.json") or base == "results.json") and result["playwright"] is None:

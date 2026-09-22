@@ -64,14 +64,17 @@ token 只在内存中使用：不写入缓存、不写入日志、不出现在�
 
 ## ScienceDiscovery 覆盖率接入
 
-ScienceDiscovery 主仓自己的 `Node coverage` GitHub Actions 工作流每周一在默认分支运行，也支持
-手动触发；覆盖率基础设施首次合入 `main` 时会立即运行一次。工作流执行 `pnpm coverage:node`，
-上传 `node-coverage-<source-sha>` 产物并保留 90 天。覆盖率不是 PR 门禁，也不替代现有 UT / ST /
-E2E 层。
+ScienceDiscovery 主仓自己的 `Node coverage` GitHub Actions 工作流分两层运行：PR 和合入 `main`
+时只跑受影响的 Node 工作区及其传递依赖方；每天 03:30（Asia/Shanghai）和手动触发时跑完整
+Node 范围。测试失败会让检查失败，但覆盖率百分比暂不设置阈值。它不替代现有 UT / ST / E2E 层。
 
-看板默认从 `GSB_REPO` 读取该 Actions 产物中的 `lcov.info`，显示行、分支、函数覆盖率及命中/总数。
-该产物不需要加入 `GSB_TEST_ARTIFACTS`；后者只用于 ScienceDiscovery 发布的 UT / ST / E2E 执行
-结果。只有产物确实发布到另一个仓库时，才需要通过 `GSB_COVERAGE_REPO` 指向那个仓库。
+摘要产物 `node-coverage-summary-*` 保留 90 天，LCOV 明细产物 `node-coverage-lcov-*` 保留 30 天。
+看板默认从 `GSB_REPO` 读取摘要：Coverage 标签页显示 nightly 趋势、路径/工作区的行/分支/函数
+覆盖率及最近 PR 的受影响模块结果；主页显示最新完整基线，或在后续 main 增量存在时明确标注
+“增量估算”。每日完整运行是唯一权威整仓 Node 基线。
+
+覆盖率产物不需要加入 `GSB_TEST_ARTIFACTS`；后者只用于 ScienceDiscovery 发布的 UT / ST / E2E
+执行结果。只有产物确实发布到另一个仓库时，才需要通过 `GSB_COVERAGE_REPO` 指向那个仓库。
 
 token 需要拥有 ScienceDiscovery 的 Actions 只读权限。工作流首次成功上传产物后，刷新看板即可
 看到数据；页面默认每 10 分钟自动刷新，也可以手动刷新。Node 覆盖率不含浏览器 TSX、Python 和

@@ -579,10 +579,112 @@ def _tree_paths(ctx: Context, notes: list) -> tuple[list[str], str]:
     return [], "none"
 
 
+def _coverage_totals(groups: list[dict]) -> dict:
+    totals = {}
+    for metric in ("lines", "branches", "functions"):
+        covered = sum(int((group.get("totals") or {}).get(metric, {}).get("covered") or 0) for group in groups)
+        total = sum(int((group.get("totals") or {}).get(metric, {}).get("total") or 0) for group in groups)
+        totals[metric] = {"covered": covered, "total": total,
+                          "percentage": round(covered * 100 / total, 2) if total else None}
+    return totals
+
+
+def _coverage_value(totals: dict) -> dict:
+    value = {"format": "sciencediscovery-summary"}
+    for metric in ("lines", "branches", "functions"):
+        row = totals.get(metric) or {}
+        value[f"{metric}_pct"] = row.get("percentage")
+        value[f"{metric}_hit"] = row.get("covered")
+        value[f"{metric}_found"] = row.get("total")
+    return value
+
+
 def _coverage_probe(ctx: Context, artifacts: list[dict], paths: list[str], parsed: dict, notes: list) -> dict:
     """Try every coverage source in priority order and report what was attempted."""
     attempts = []
     result = {"source": None, "value": None, "attempts": attempts}
+
+    summaries = sorted(
+        (a for a in artifacts if a["name"].startswith("node-coverage-summary-") and not a.get("expired")),
+        key=lambda a: a.get("created_at") or "", reverse=True,
+    )
+    nightly_artifacts = [a for a in summaries if a["name"].startswith("node-coverage-summary-nightly-")][:14]
+    nightly = []
+    for artifact in nightly_artifacts:
+        loaded = _load_artifact(ctx, artifact, notes)
+        manifest = (loaded or {}).get("coverage_manifest")
+        if manifest:
+            nightly.append({"artifact": artifact, "manifest": manifest})
+
+    if nightly:
+        baseline_entry = nightly[0]
+        baseline_artifact, baseline = baseline_entry["artifact"], baseline_entry["manifest"]
+        groups = {
+            group["name"]: {**group, "source_sha": baseline.get("source_sha"),
+                            "updated_at": baseline.get("generated_at") or baseline_artifact.get("created_at"),
+                            "update_kind": "nightly"}
+            for group in baseline.get("groups", []) if group.get("name")
+        }
+        increments = [
+            artifact for artifact in summaries
+            if artifact["name"].startswith("node-coverage-summary-main-incremental-")
+            and (artifact.get("created_at") or "") > (baseline_artifact.get("created_at") or "")
+        ][:30]
+        applied = []
+        for artifact in reversed(increments):
+            loaded = _load_artifact(ctx, artifact, notes)
+            manifest = (loaded or {}).get("coverage_manifest")
+            if not manifest:
+                continue
+            changed = []
+            for group in manifest.get("groups", []):
+                if not group.get("name"):
+                    continue
+                groups[group["name"]] = {**group, "source_sha": manifest.get("source_sha"),
+                                         "updated_at": manifest.get("generated_at") or artifact.get("created_at"),
+                                         "update_kind": "main increment"}
+                changed.append(group["name"])
+            if changed:
+                applied.append({"artifact": artifact["name"], "created_at": artifact.get("created_at"),
+                                "sha": manifest.get("source_sha"), "groups": changed})
+
+        current_groups = sorted(groups.values(), key=lambda group: group["name"])
+        current_totals = _coverage_totals(current_groups)
+        history = []
+        for entry in reversed(nightly):
+            manifest, artifact = entry["manifest"], entry["artifact"]
+            history.append({"created_at": manifest.get("generated_at") or artifact.get("created_at"),
+                            "sha": manifest.get("source_sha"), "totals": manifest.get("totals") or {}})
+
+        latest_pr = {}
+        for artifact in summaries:
+            match = re.match(r"node-coverage-summary-pr-(\d+)-", artifact["name"])
+            if match and match.group(1) not in latest_pr:
+                latest_pr[match.group(1)] = artifact
+        pull_requests = []
+        for number, artifact in list(latest_pr.items())[:10]:
+            loaded = _load_artifact(ctx, artifact, notes)
+            manifest = (loaded or {}).get("coverage_manifest")
+            if manifest:
+                pull_requests.append({"number": int(number), "branch": artifact.get("branch"),
+                                      "created_at": artifact.get("created_at"), "sha": manifest.get("source_sha"),
+                                      "groups": manifest.get("groups", []), "totals": manifest.get("totals") or {}})
+
+        result.update({
+            "source": f"artifact:{baseline_artifact.get('repo') or ctx.repo}/{baseline_artifact['name']}",
+            "value": _coverage_value(current_totals),
+            "baseline": {"artifact": baseline_artifact["name"],
+                         "created_at": baseline.get("generated_at") or baseline_artifact.get("created_at"),
+                         "sha": baseline.get("source_sha"), "totals": baseline.get("totals") or {},
+                         "groups": baseline.get("groups", [])},
+            "current": {"kind": "incremental" if applied else "authoritative", "totals": current_totals,
+                        "groups": current_groups, "increments": applied},
+            "history": history,
+            "pull_requests": pull_requests,
+        })
+        attempts.append({"step": "Actions 覆盖率摘要", "ok": True,
+                         "detail": f"{baseline_artifact['name']}；叠加 {len(applied)} 次 main 增量"})
+        return result
 
     cov_arts = sorted(
         (a for a in artifacts if re.search(r"cover|lcov|codecov", a["name"], re.I) and not a.get("expired")),
@@ -670,7 +772,10 @@ def collect_tests(ctx: Context) -> dict:
         note(notes, "package.json", err, "根 package.json")
 
     try:
-        arts_raw = gh.paginate(f"/repos/{repo}/actions/artifacts", {"per_page": 100}, max_pages=1, key="artifacts")
+        # Coverage history competes with every other CI artifact in this list. Keep
+        # enough metadata pages for daily baselines to remain discoverable during
+        # busy PR periods; payloads are still downloaded only on demand below.
+        arts_raw = gh.paginate(f"/repos/{repo}/actions/artifacts", {"per_page": 100}, max_pages=5, key="artifacts")
     except GitHubError as err:
         arts_raw = []
         note(notes, "artifacts", err, "Actions 产物列表")
