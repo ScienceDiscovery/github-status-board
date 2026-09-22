@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Generate a static site and optionally publish its files atomically to gh-pages."""
+"""Generate a static site and commit site/ for the repository's Pages workflow."""
 from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import shutil
 
@@ -34,33 +35,28 @@ def export_site(output, snapshot):
     (output / ".nojekyll").write_text("")
 
 
-def publish(gh, site, repository, branch="gh-pages"):
+def publish(gh, site, repository, branch="main", *, source_token=None):
     if not REPO_RE.fullmatch(repository) or not REPO_RE.fullmatch("owner/" + branch):
         raise ValueError("invalid publishing target")
     prefix = f"/repos/{repository}"
     if gh.get(prefix).get("private"):
         raise ValueError("publishing target must be a public Pages repository")
-    try:
-        old = gh.get(prefix + "/git/ref/heads/" + branch)["object"]["sha"]
-    except GitHubError as err:
-        if err.status != 404:
-            raise
-        old = None
+    # The destination must already contain its deployment workflow. Retain all
+    # source files and workflows; the bot's Contents token changes only site/.
+    old = gh.get(prefix + "/git/ref/heads/" + branch)["object"]["sha"]
+    base_tree = gh.get(prefix + "/git/commits/" + old)["tree"]["sha"]
     files = ["index.html", "app.js", "style.css", "report.js", "board.js", "board-local.js", "data/snapshot.json", ".nojekyll"]
-    tree = [{"path": p, "mode": "100644", "type": "blob", "content": (Path(site) / p).read_text(encoding="utf-8")} for p in files]
+    tree = [{"path": "site/" + p, "mode": "100644", "type": "blob", "content": (Path(site) / p).read_text(encoding="utf-8")} for p in files]
     for entry in tree:
-        if gh.token and gh.token in entry["content"]:
+        if any(token and token in entry["content"] for token in (gh.token, source_token)):
             raise ValueError("credential detected in site")
 
     def write(method, path, body):
         return gh._request(method, gh._url(prefix + path, None), body=body)[0]
 
-    new_tree = write("POST", "/git/trees", {"tree": tree})
-    commit = write("POST", "/git/commits", {"message": "更新项目看板快照", "tree": new_tree["sha"], "parents": [old] if old else []})
-    if old:
-        write("PATCH", "/git/refs/heads/" + branch, {"sha": commit["sha"], "force": False})
-    else:
-        write("POST", "/git/refs", {"ref": "refs/heads/" + branch, "sha": commit["sha"]})
+    new_tree = write("POST", "/git/trees", {"base_tree": base_tree, "tree": tree})
+    commit = write("POST", "/git/commits", {"message": "更新项目看板快照", "tree": new_tree["sha"], "parents": [old]})
+    write("PATCH", "/git/refs/heads/" + branch, {"sha": commit["sha"], "force": False})
     return commit["sha"]
 
 
@@ -70,9 +66,10 @@ def main():
     parser.add_argument("--output", default=str(ROOT / "dist"))
     parser.add_argument("--settings", default=str(ROOT / "board-config.json"))
     parser.add_argument("--publish-repo")
-    parser.add_argument("--branch", default="gh-pages")
+    parser.add_argument("--branch", default="main")
     args = parser.parse_args()
     token, _ = discover_token()
+    publish_token = os.environ.get("GSB_PUBLISH_TOKEN", "").strip() or token
     gh = GitHub(token, timeout=30)
     try:
         settings = json.loads(Path(args.settings).read_text())
@@ -83,9 +80,10 @@ def main():
         export_site(args.output, snapshot)
         result = {"ok": True, "repo": args.repo, "generated_at": snapshot["generated_at"]}
         if args.publish_repo:
-            if not token:
+            if not publish_token:
                 raise ValueError("publishing requires a token")
-            result["commit"] = publish(gh, args.output, args.publish_repo, args.branch)
+            publisher = GitHub(publish_token, timeout=30)
+            result["commit"] = publish(publisher, args.output, args.publish_repo, args.branch, source_token=token)
         print(json.dumps(result))
     except (GitHubError, OSError, ValueError) as err:
         # API errors can include request context; expose only a stable category.
