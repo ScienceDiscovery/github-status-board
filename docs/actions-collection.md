@@ -34,6 +34,6 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 
 测试覆盖正式／测试映射、拒绝跨站和恶意 inputs、读写凭据隔离、公开内容边界、非强制提交和测试报告统计。Bot 仓 `npm run test:worker-adapter` 覆盖 Worker 到模拟 Actions API 的签名凭据与触发链路。两者不代表真实 GitHub runner 或 Pages 已执行，上线前仍需验证。
 
-将此功能同步到测试仓时只同步源码、工作流、测试与文档，保留目标仓自己的 `.sync/` 和 `site/`，不要整条分支覆盖。切换前停止同站点的本机自动采集，避免两种调度同时写入。
+将此功能同步到测试仓前，先比较目标 main 与共同源码基线；目标已有的独立功能须三方合并并在该目标源码上验证。只同步本次明确的源码、工作流、测试与文档，保留目标仓自己的 `.sync/` 和 `site/`，不要整条分支覆盖。切换前停止同站点的本机自动采集，避免两种调度同时写入。
 
 参考：[GitHub App token Action](https://github.com/actions/create-github-app-token/tree/v2)、[工作流触发 API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)。

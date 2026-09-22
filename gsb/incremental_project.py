@@ -96,7 +96,7 @@ def build_snapshot(sync):
             "totals": t.get("counts"), "duration_ms": None, "detail": {"files": [], "failures": [], "projects": [], "stats": {}}}
             for r, t in latest_reports.values()]
     for row in history.select("runs", lambda r: bool(r.get("channel")), limit=100):
-        if row.get("coverage") and tests.get("data"):
+        if row.get("coverage") and tests.get("data") and not tests["data"].get("coverage", {}).get("languages"):
             tests["data"]["coverage"].update(source=f"Actions run {row['id']} / attempt {row['attempt']}", value=row["coverage"][0])
             break
     releases = history.select("releases", limit=30)
