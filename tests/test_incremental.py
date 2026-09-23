@@ -142,6 +142,23 @@ class SyncTests(unittest.TestCase):
         with patch('gsb.incremental_project.public_ops',side_effect=AssertionError('must use cache')):
             self.assertEqual(build_snapshot(sync),doc)
 
+    def test_same_day_new_run_refreshes_tests_but_not_daily_ops(self):
+        sync=Sync(Source(runs=1),self.root,REPO,now=NOW).collect()
+        with patch('gsb.incremental_project.public_ops',return_value={'marker':'old-ops'}), \
+             patch('gsb.incremental_project.public_tests',return_value={'marker':'old-tests'}):
+            doc=build_snapshot(sync)
+        self.persist(sync)
+        path=self.root/'site/data/snapshot.json';path.parent.mkdir(parents=True,exist_ok=True);path.write_text(encode(doc))
+
+        sync=Sync(Source(runs=2),self.root,REPO,now=NOW+timedelta(minutes=10)).collect()
+        with patch('gsb.incremental_project.public_ops',side_effect=AssertionError('daily ops must stay cached')), \
+             patch('gsb.incremental_project.public_tests',return_value={'marker':'new-tests'}) as refreshed:
+            updated=build_snapshot(sync)
+
+        refreshed.assert_called_once()
+        self.assertEqual(updated['sections']['ops']['data']['marker'],'old-ops')
+        self.assertEqual(updated['sections']['tests']['data']['marker'],'new-tests')
+
 
 class MetricTests(unittest.TestCase):
     def test_parsed_artifact_not_downloaded_again_and_expiration_preserves_counts(self):

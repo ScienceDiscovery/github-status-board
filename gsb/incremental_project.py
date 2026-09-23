@@ -1,6 +1,7 @@
 """Lightweight current views backed by the complete public history."""
 from copy import deepcopy
 from datetime import timedelta
+import hashlib
 
 from .board import BoardStore
 from .collectors import Context, collect_ci, summarize_issues, summarize_prs, days_between
@@ -9,15 +10,27 @@ from .public_sections import public_ops, public_tests, envelope
 from .sync import stamp, date
 
 
+SUPPLEMENT_TESTS_VERSION = 2
+
+
+def _tests_revision(runs):
+    identity = [[row["id"], row["attempt"], row.get("status"), row.get("conclusion"), row.get("updated_at")]
+                for row in runs]
+    return hashlib.sha256(encode(identity).encode()).hexdigest()[:16]
+
+
 def build_snapshot(sync):
     history, state, meta = sync.history, sync.state, sync.meta
     old = read_json(history.root / "site/data/snapshot.json", {})
+    supplements = read_json(history.root / ".sync/supplements.json", {})
     midnight = sync.now.replace(hour=0, minute=0, second=0)
     cutoff = stamp(midnight - timedelta(days=30))
     progress = sync.progress()
     # A successful poll with no changed records does not manufacture a Pages
     # deployment. Daily aging and health metadata still get a regular refresh.
-    if not history.changed and old.get("sync") == progress and old.get("generated_at", "")[:10] == stamp(midnight)[:10]:
+    cache_upgrade = supplements.get("tests_version") != SUPPLEMENT_TESTS_VERSION
+    if (not history.changed and not cache_upgrade and old.get("sync") == progress
+            and old.get("generated_at", "")[:10] == stamp(midnight)[:10]):
         return old
     cfg = sync.cfg
     cfg.stale_days = int(sync.settings.get("stale_days", 30))
@@ -74,13 +87,23 @@ def build_snapshot(sync):
     ctx = Context(StoredCI(), cfg, midnight, meta)
     ci = collect_ci(ctx)
     wrap = lambda data: {"status": "ok", "data": data, "notes": [], "error": None}
-    supplements = read_json(history.root / ".sync/supplements.json", {})
-    if supplements.get("day") != stamp(midnight)[:10]:
-        # Supplemental public repository information changes less frequently
-        # than webhook metadata. It has its own cache and does not parse reports.
+    day = stamp(midnight)[:10]
+    day_changed = supplements.get("day") != day
+    tests_revision = _tests_revision(runs)
+    tests_changed = (day_changed or cache_upgrade or supplements.get("tests_revision") != tests_revision
+                     or "tests" not in supplements)
+    if day_changed or "ops" not in supplements or tests_changed:
         public_ctx = Context(sync.gh.gh, cfg, midnight, meta)
-        supplements = {"day": stamp(midnight)[:10], "ops": envelope(lambda: public_ops(public_ctx)),
-                       "tests": envelope(lambda: public_tests(public_ctx, runs))}
+        if day_changed or "ops" not in supplements:
+            # Repository operations are intentionally a daily snapshot.
+            supplements["ops"] = envelope(lambda: public_ops(public_ctx))
+        if tests_changed:
+            # Actions artifacts are live evidence: refresh when the source run set
+            # changes, while retaining the daily fallback for repository-tree data.
+            supplements["tests"] = envelope(lambda: public_tests(public_ctx, runs))
+            supplements["tests_revision"] = tests_revision
+            supplements["tests_version"] = SUPPLEMENT_TESTS_VERSION
+        supplements["day"] = day
         state["supplements_changed"] = True
         history.changed[".sync/supplements.json"] = encode(supplements)
     tests = deepcopy(supplements.get("tests", wrap({})))
