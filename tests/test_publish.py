@@ -48,8 +48,8 @@ class PublishingTests(unittest.TestCase):
         export_site(self.site,{'schema_version':1,'generated_at':'2026-01-01'})
     def test_frontend_assets_share_one_cache_version(self):
         html=(self.site/'index.html').read_text(encoding='utf-8')
-        versions=re.findall(r'(?:style\.css|(?:history|report|board-local|app|board)\.js)\?v=([^"\']+)',html)
-        self.assertEqual(len(versions),6)
+        versions=re.findall(r'(?:style\.css|(?:board-local|app|board)\.js)\?v=([^"\']+)',html)
+        self.assertEqual(len(versions),4)
         self.assertEqual(len(set(versions)),1)
     def test_only_public_files_are_committed_atomically(self):
         calls=[]
@@ -65,7 +65,7 @@ class PublishingTests(unittest.TestCase):
         (self.site/'.env').write_text('private local file')
         self.assertEqual(publish(GH(),self.site,'example/board'),'new-commit')
         files=calls[0][2]['tree']
-        self.assertEqual({f['path'] for f in files},{'site/'+p for p in ('index.html','app.js','style.css','report.js','board.js','board-local.js','history.js','data/snapshot.json','.nojekyll')})
+        self.assertEqual({f['path'] for f in files},{'site/'+p for p in ('index.html','app.js','style.css','board.js','board-local.js','data/snapshot.json','.nojekyll')})
         self.assertEqual(calls[0][2]['base_tree'],'existing-source-tree')
         self.assertTrue(calls[2][1].endswith('/git/refs/heads/main'))
         self.assertEqual(calls[1][2]['parents'],['old'])

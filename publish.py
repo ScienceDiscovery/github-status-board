@@ -13,7 +13,7 @@ from gsb.github import GitHub, GitHubError, discover_token
 from gsb.project import REPO_RE, build_project
 
 ROOT = Path(__file__).resolve().parent
-STATIC_FILES = ("index.html", "app.js", "style.css", "report.js", "board.js", "board-local.js", "history.js")
+STATIC_FILES = ("index.html", "app.js", "style.css", "board.js", "board-local.js")
 
 
 def deployment_for(repo, settings, target=None):

@@ -192,6 +192,29 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(sync.history.get('runs','2-1')['coverage_summaries'][0]['artifact'],entries[1]['artifact'])
 
 
+    def test_run_first_seen_running_is_read_again_when_it_completes(self):
+        class Attempts(Source):
+            def get(self, path, params=None):
+                if '/attempts/' in path:
+                    return deepcopy(next(r for r in self.runs if f"/runs/{r['id']}/" in path))
+                return super().get(path, params)
+        gh = Attempts(runs=1)
+        gh.runs[0].update(status='in_progress', conclusion=None)
+        report = lambda _gh, _cfg, row, **_kw: row.update(reports_status='available', tests=[]) or row  # noqa: E731
+        with patch('gsb.sync.run_details', side_effect=report):
+            sync = Sync(gh, self.root, REPO, now=NOW).collect()
+        job = sync.state['pending']['run:1-1']
+        # One layer's report does not make a running workflow complete.
+        self.assertEqual(job['due'], stamp(NOW + timedelta(seconds=120)))
+        self.persist(sync)
+        gh.runs[0].update(status='completed', conclusion='success')
+        sync = Sync(gh, self.root, REPO, now=NOW + timedelta(seconds=30))
+        sync.meta = gh.get('/repos/' + REPO)
+        sync.state['pending']['run:1-1']['due'] = stamp(NOW + timedelta(days=1))
+        sync.save_run(deepcopy(gh.runs[0]))
+        self.assertEqual(sync.state['pending']['run:1-1']['due'], stamp(NOW + timedelta(seconds=30)))
+
+
 class MetricTests(unittest.TestCase):
     def test_parsed_artifact_not_downloaded_again_and_expiration_preserves_counts(self):
         artifact=dict(id=9,name='e2e-results',created_at='2026-09-22T12:00:00Z',expired=False,digest='sha256:abc')

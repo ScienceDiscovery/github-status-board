@@ -656,6 +656,17 @@ def _coverage_is_full(entry: dict, default_branch: str) -> bool:
     return legacy_full or gate_push
 
 
+def _coverage_sources(manifest: dict) -> dict:
+    """Per-file totals by path; summaries published before files were listed have none."""
+    return {source["path"]: {"path": source["path"], "totals": source.get("totals") or {}}
+            for source in manifest.get("sources") or []
+            if isinstance(source, dict) and isinstance(source.get("path"), str)}
+
+
+def _in_group(path: str, group: str) -> bool:
+    return path == group or path.startswith(group.rstrip("/") + "/")
+
+
 def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, language: str) -> dict | None:
     prefix = f"{language}-coverage-summary-"
     candidates = sorted(
@@ -690,6 +701,8 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
             }
             for group in baseline.get("groups", []) if group.get("name")
         }
+        # Files follow their group: an increment replaces the files of each group it measured.
+        files = _coverage_sources(baseline)
         increments = [
             entry for entry in reversed(default_entries)
             if (entry["artifact"].get("created_at") or "") > (baseline_artifact.get("created_at") or "")
@@ -711,6 +724,8 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
                     "update_kind": "main increment",
                 }
                 changed.append(group["name"])
+                files = {path: value for path, value in files.items() if not _in_group(path, group["name"])}
+                files.update({path: value for path, value in _coverage_sources(manifest).items() if _in_group(path, group["name"])})
             if changed:
                 applied.append({"artifact": artifact["name"], "created_at": artifact.get("created_at"),
                                 "sha": _coverage_source_sha(entry), "groups": changed})
@@ -729,6 +744,7 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
             "totals": current_totals,
             "groups": current_groups,
             "increments": applied,
+            "sources": sorted(files.values(), key=lambda source: source["path"]),
         }
     else:
         latest = default_entries[0] if default_entries else entries[0]
@@ -745,6 +761,7 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
             "totals": manifest.get("totals") or _coverage_totals(current_groups),
             "groups": current_groups,
             "increments": [],
+            "sources": sorted(_coverage_sources(manifest).values(), key=lambda source: source["path"]),
         }
 
     history = [{

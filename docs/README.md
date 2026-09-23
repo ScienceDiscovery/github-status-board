@@ -2,6 +2,7 @@
 
 | 特性 | 说明 |
 | --- | --- |
+| [页面与交互](dashboard-pages.md) | 总览的问题优先布局、Issue / PR 表格与看板切换、测试与 Coverage 目录树、版本验证 |
 | [Actions 采集](actions-collection.md) | 双站点映射、App 权限与 Secrets、工作流触发及 Pages 发布 |
 | [增量同步与历史](incremental-history.md) | 仓内进度、分片、预算、回填与重试、完整历史查询 |
 | [测试报告契约](test-reports.md) | 用例指标、UT / ST / E2E、覆盖率、run / attempt 关联及公开边界 |

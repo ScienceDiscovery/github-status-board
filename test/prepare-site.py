@@ -44,9 +44,12 @@ with patch('gsb.public_sections._tree_paths',return_value=(['services/core/src/i
     tests=public_tests(ctx,runs)
 node_totals=dict(lines=dict(covered=48878,total=58864,percentage=83.04),branches=dict(covered=13987,total=17548,percentage=79.71),functions=dict(covered=3928,total=4701,percentage=83.56))
 python_totals=dict(lines=dict(covered=5845,total=8932,percentage=65.44),branches=dict(covered=1507,total=3086,percentage=48.83))
+# Per-file totals in nested directories exercise the coverage tree.
+FILES={'node':[('src/index.ts',40,50),('src/util/strings.ts',9,10),('src/util/numbers.ts',2,10),('src/api/client.ts',30,60)],
+       'python':[('src/sciencediscovery_evolve/auth.py',18,20),('src/sciencediscovery_evolve/candidates.py',10,40)]}
 def coverage_language(name,totals,group):
     baseline=dict(artifact=f'{name}-coverage-summary-main-incremental-mainsha',created_at=time,kind='main full',sha='a'*40,totals=totals,groups=[dict(name=group,files=4,totals=totals)])
-    current=dict(kind='authoritative',totals=totals,groups=[dict(name=group,files=4,totals=totals,source_sha='a'*40,updated_at=time,update_kind='full baseline')],increments=[])
+    current=dict(kind='authoritative',totals=totals,groups=[dict(name=group,files=4,totals=totals,source_sha='a'*40,updated_at=time,update_kind='full baseline')],increments=[],sources=[dict(path=f'{group}/{path}',totals={k:dict(covered=c,total=t,percentage=round(c*100/t,2)) for k,(c,t) in zip(totals,[(covered,total)]*len(totals))}) for path,covered,total in FILES[name]])
     percentages=[totals['lines']['percentage']-2.8,totals['lines']['percentage']-2.4,totals['lines']['percentage']-2.0,totals['lines']['percentage']-1.8,totals['lines']['percentage']-1.2,totals['lines']['percentage']-0.4,totals['lines']['percentage']]
     history=[]
     for day,percentage in zip((11,12,17,18,19,20,21),percentages):
@@ -106,24 +109,3 @@ empty=json.loads(json.dumps(doc));empty['quality']['runs']=[];empty['releases']=
 empty['sections']={k:dict(status='error',data=None,notes=[],error=dict(kind='error',message='结果未知')) for k in empty['sections']}
 empty['board']['items']=[];empty['details']={}
 export_site(root/'.e2e/site/empty',empty)
-
-# Complete-history fixture exceeds both the old Issue cap and one browser page.
-from gsb.history import History, encode
-history_root=root/'.e2e/history-fixture'
-history=History(history_root)
-for number in range(1, 626):
-    row={**item,'number':number,'title':f'历史 Issue {number}','url':base+f'/issues/{number}', 'body':'历史正文 <script>unsafe()</script>'}
-    history.put('issues',row)
-for r in runs:
-    r=json.loads(json.dumps(r))
-    for t in r['tests']:t.pop('cases',None)
-    history.put('runs',r)
-history.files()
-path=root/'.e2e/site/github-status-board/data/snapshot.json'
-full=json.loads(path.read_text());full['history']={'manifest':'./data/history/manifest.json'}
-full['sync']={'complete':False,'totals':history.manifest['totals'],'pending':3,'failed':1}
-path.write_text(encode(full))
-for name,content in history.files().items():
-    if not name.startswith('site/'):continue
-    target=root/'.e2e/site/github-status-board'/name.removeprefix('site/')
-    target.parent.mkdir(parents=True,exist_ok=True);target.write_text(content)

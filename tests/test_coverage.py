@@ -155,6 +155,34 @@ class CoverageParserTests(unittest.TestCase):
         self.assertEqual(node["pull_requests"][0]["number"], 17)
         self.assertEqual(node["pull_requests"][0]["groups"][0]["name"], "packages/b")
 
+    def test_file_totals_follow_their_group_from_baseline_and_increments(self):
+        artifacts = [
+            {"id": 3, "name": "node-coverage-summary-pr-17-prsha", "branch": "feature/x", "created_at": "2026-09-22T12:00:00Z"},
+            {"id": 2, "name": "node-coverage-summary-main-incremental-mainsha", "branch": "main", "created_at": "2026-09-22T11:00:00Z"},
+            {"id": 1, "name": "node-coverage-summary-nightly-base", "branch": "main", "created_at": "2026-09-22T03:30:00Z"},
+        ]
+        lines = lambda covered, total: {"lines": {"covered": covered, "total": total}}  # noqa: E731 - compact fixture
+        source = lambda path, covered: {"path": path, "totals": lines(covered, 10)}  # noqa: E731
+        manifests = {
+            1: {"schema_version": 1, "groups": [{"name": "packages/a", "totals": lines(5, 20)}, {"name": "packages/b", "totals": lines(8, 10)}],
+                "sources": [source("packages/a/one.ts", 2), source("packages/a/gone.ts", 3), source("packages/b/two.ts", 8)]},
+            2: {"schema_version": 1, "groups": [{"name": "packages/a", "totals": lines(9, 10)}], "sources": [source("packages/a/one.ts", 9)]},
+            3: {"schema_version": 1, "groups": [{"name": "packages/b", "totals": lines(10, 10)}], "sources": [source("packages/b/two.ts", 10)]},
+        }
+        ctx = Context(gh=object(), cfg=Config(), now=datetime(2026, 9, 22), repo_meta={"default_branch": "main"})
+        with patch("gsb.collectors._load_artifact",
+                   side_effect=lambda _ctx, artifact, _notes: {"coverage_manifest": manifests[artifact["id"]]}):
+            node = _coverage_probe(ctx, artifacts, [], {}, [])["languages"]["node"]
+        # packages/a comes from the main increment (a removed file disappears); packages/b stays at
+        # the baseline because the PR artifact never updates the default branch.
+        self.assertEqual([(s["path"], s["totals"]["lines"]["covered"]) for s in node["current"]["sources"]],
+                         [("packages/a/one.ts", 9), ("packages/b/two.ts", 8)])
+        for manifest in manifests.values():
+            manifest.pop("sources")
+        with patch("gsb.collectors._load_artifact",
+                   side_effect=lambda _ctx, artifact, _notes: {"coverage_manifest": manifests[artifact["id"]]}):
+            self.assertEqual(_coverage_probe(ctx, artifacts, [], {}, [])["languages"]["node"]["current"]["sources"], [])
+
     def test_full_main_artifacts_are_authoritative_for_node_and_python(self):
         artifacts = [
             {"id": 2, "name": "python-coverage-summary-main-incremental-mainsha", "branch": "main",
