@@ -259,7 +259,12 @@ class AtomicTests(unittest.TestCase):
             def _url(self,path,_):return path
             def _request(self,method,path,body):
                 writes.append((method,path,body));return ({'sha':'new'},None,200)
-        publish_batch(GH(),'example/board','main','a'*40,{'.sync/state.json':'{}','site/data/snapshot.json':'{}'})
+        large='x'*(300*1024)
+        publish_batch(GH(),'example/board','main','a'*40,{'.sync/state.json':'{}','site/data/snapshot.json':'{}','site/data/history/manifest.json':large})
         tree=next(b for _,p,b in writes if p.endswith('/trees'))
-        self.assertEqual({r['path'] for r in tree['tree']},{'.sync/state.json','site/data/snapshot.json'})
+        self.assertEqual({r['path'] for r in tree['tree']},{'.sync/state.json','site/data/snapshot.json','site/data/history/manifest.json'})
+        # Small files ride in the tree request; only the large one costs a blob request.
+        self.assertEqual([p for _,p,_ in writes if p.endswith('/blobs')],['/repos/example/board/git/blobs'])
+        self.assertEqual({r['path']:r.get('content') for r in tree['tree'] if 'content' in r},{'.sync/state.json':'{}','site/data/snapshot.json':'{}'})
+        self.assertEqual(len(writes),4)
         self.assertEqual(writes[-1][2],{'sha':'new','force':False})

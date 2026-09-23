@@ -63,6 +63,9 @@ def publish(gh, site, repository, branch="main", *, source_token=None):
     return commit["sha"]
 
 
+INLINE_FILE, INLINE_TOTAL = 256 * 1024, 2 * 1024 * 1024
+
+
 def publish_batch(gh, repository, branch, base, files, *, source_token=None):
     """Commit checkpoints and public data on the exact checkout we collected."""
     import re
@@ -81,9 +84,16 @@ def publish_batch(gh, repository, branch, base, files, *, source_token=None):
         return None
     def write(method, path, body):
         return gh._request(method, gh._url(prefix + path, None), body=body)[0]
-    entries = []
+    # GitHub limits content-creating requests per hour, so small files travel
+    # inside the one tree request; only large ones get a blob request each,
+    # which keeps big issue bodies out of a single giant tree body.
+    entries, inline = [], 0
     for path, content in sorted(files.items()):
-        # Blob requests keep large issue bodies out of a single giant tree body.
+        size = len(content.encode("utf-8"))
+        if size <= INLINE_FILE and inline + size <= INLINE_TOTAL:
+            inline += size
+            entries.append({"path": path, "mode": "100644", "type": "blob", "content": content})
+            continue
         blob = write("POST", "/git/blobs", {"content": content, "encoding": "utf-8"})
         entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob["sha"]})
     tree = write("POST", "/git/trees", {"base_tree": gh.get(prefix + "/git/commits/" + base)["tree"]["sha"], "tree": entries})
