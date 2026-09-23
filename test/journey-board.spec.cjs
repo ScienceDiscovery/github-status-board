@@ -183,6 +183,11 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await expect(page.locator('#tab-coverage')).not.toContainText('口径');
   await expect(page.locator('#tab-coverage')).toContainText('不会更新 main 当前覆盖率');
   await expect(page.locator('#tab-coverage')).toContainText('门禁实测行覆盖率');
+  const nodePrCoverage = page.locator('th[data-table="cov-prs-node"]').locator('xpath=ancestor::table');
+  await expect(nodePrCoverage).toContainText('来源分支');
+  await expect(nodePrCoverage).toContainText('目标分支');
+  await expect(nodePrCoverage.getByRole('row').filter({ hasText: '#3' })).toContainText('fix-timeout');
+  await expect(nodePrCoverage.getByRole('row').filter({ hasText: '#3' })).toContainText('feat/jiuwenswarm');
   await expect(page.locator('#tab-coverage .coverage-trend')).toHaveCount(2);
   await expect(page.locator('#tab-coverage .coverage-trend').first().locator('.coverage-dot')).toHaveCount(5);
   await expect(page.locator('#tab-coverage .coverage-trend').first().locator('.coverage-x-label')).toHaveCount(7);

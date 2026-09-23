@@ -701,6 +701,12 @@
         + `<div class="banner warn"><span class="icon">▲</span><div><div class="title">等待 ScienceDiscovery 覆盖率工作流首次发布摘要</div><div>每日完整基线成功后，这里会显示整仓趋势和路径明细；PR 与 main 增量随后自动叠加。</div></div></div><div class="card" style="margin-top:12px">${steps}</div>`;
     }
     const languages = cov.languages || {};
+    const prs = STATE.snap.sections?.prs?.data || {};
+    const prTargetByNumber = new Map(
+      ['items', 'recent_merged', 'recent_closed_unmerged']
+        .flatMap((key) => prs[key] || [])
+        .map((row) => [Number(row.number), row.base]),
+    );
     if (!Object.keys(languages).length) {
       const labels = { lines_pct: '行覆盖率', branches_pct: '分支覆盖率', functions_pct: '函数覆盖率', statements_pct: '语句覆盖率' };
       const rows = Object.entries(cov.value || {}).filter(([key, value]) => key !== 'format' && value != null)
@@ -773,13 +779,15 @@
       body += `<div class="card"><label class="filter"><span>过滤路径</span><input type="search" data-filter="coverageQ" value="${esc(STATE.filters.coverageQ || '')}" placeholder="packages/schema 或 services/evolve"></label>${table(`cov-groups-${key}`, columns, groupRows, { defaultSort: { key: 'lines_pct', dir: 'asc' }, emptyText: '没有匹配的覆盖率路径' })}</div>`;
       const prs = (dataset.pull_requests || []).map((row) => ({
         ...row,
+        base_branch: row.base_branch || prTargetByNumber.get(Number(row.number)),
         lines_pct: row.totals?.lines?.percentage,
         group_names: (row.groups || []).map((group) => group.name).join(', '),
       }));
       body += sectionHead(`${label} 最近 PR 覆盖率`, '该 PR 的 UT/ST 门禁实测范围；不会更新 main 当前覆盖率');
       body += `<div class="card">${table(`cov-prs-${key}`, [
         { key: 'number', label: 'PR', render: (row) => link(`${STATE.snap.repo_url}/pull/${row.number}`, `#${row.number}`) },
-        { key: 'branch', label: '分支', render: (row) => `<code>${esc(row.branch || '—')}</code>` },
+        { key: 'branch', label: '来源分支', render: (row) => `<code>${esc(row.branch || '—')}</code>` },
+        { key: 'base_branch', label: '目标分支', render: (row) => `<code>${esc(row.base_branch || '—')}</code>` },
         { key: 'lines_pct', label: '门禁实测行覆盖率', num: true, render: (row) => pct(row.lines_pct) },
         { key: 'group_names', label: '覆盖路径', render: (row) => `<span class="mono">${esc(row.group_names)}</span>` },
         { key: 'created_at', label: '时间', render: (row) => ago(row.created_at) },
