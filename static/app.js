@@ -142,7 +142,65 @@
     }).join('');
     return `<svg class="coverage-trend" viewBox="0 0 ${w} ${h}" role="img" aria-label="完整行覆盖率历史趋势">${yAxis}<line class="coverage-axis" x1="${left}" y1="${top}" x2="${left}" y2="${baseY}"></line><line class="coverage-axis" x1="${left}" y1="${baseY}" x2="${w - right}" y2="${baseY}"></line><path class="coverage-area" d="${area}"></path><path class="coverage-line" d="${path}"></path>${dots}${xAxis}</svg>`;
   };
-  const strip = (runs) => `<div class="strip">${runs.slice().reverse().map((r) => `<a class="${esc(r.conclusion || r.status)}" href="${esc(r.url)}" target="_blank" rel="noopener"${tip(`${r.title || r.name}\n${CONCLUSION_NAME[r.conclusion] || r.status} · ${r.branch} · ${r.event}\n${date(r.created_at)} · ${dur(r.duration_s)}`)}></a>`).join('')}</div>`;
+  // CI history lanes: one row per trigger lane, one column per day on a shared axis.
+  // The collector buckets days and orders runs, so a column simply stacks them top-down.
+  const LANE_SOURCE = { pr: 'CI · pull_request', main: 'CI · 默认分支 push / 手动', daily: 'Nightly · 定时 / 手动', release: 'Release · 版本 tag' };
+  const LANE_OUTCOMES = [['success', '成功'], ['failure', '失败/超时'], ['cancelled', '取消'], ['running', '运行中'], ['other', '其他（待批准等）']];
+  const LANE_EVENT = { schedule: 'schedule · 定时', workflow_dispatch: 'workflow_dispatch · 手动' };
+  const LANE_STACK = 10; // runs visible per day before that column scrolls
+  const laneDay = (iso) => { const [, m, d] = iso.split('-').map(Number); return `${m}/${d}`; };
+  const laneRun = (lane, day, r, zone) => {
+    const pr = r.pr ? ` · PR #${r.pr}${r.pr_linked ? '' : '（按分支推断）'}` : '';
+    const text = [
+      `${r.workflow} · ${LANE_EVENT[r.event] || r.event || '未知事件'}${pr}`,
+      `${CONCLUSION_NAME[r.conclusion] || CONCLUSION_NAME[r.status] || r.conclusion || r.status || '未知'}${r.attempt > 1 ? ` · 第 ${r.attempt} 次尝试` : ''}`,
+      `${laneDay(day)} ${r.time}（${zone}）`,
+      `${lane === 'release' ? '标签' : '分支'} ${r.branch || '—'}${r.sha ? ` · ${r.sha}` : ''}`,
+      r.title,
+    ].filter(Boolean).join('\n');
+    const href = /^https:\/\//.test(r.url || '') ? r.url : '#';
+    return `<a class="ci-run ${esc(r.outcome)}" href="${esc(href)}" target="_blank" rel="noopener" aria-label="${esc(text)}"${tip(text)}></a>`;
+  };
+  const ciLanes = (L) => {
+    if (!L) return empty('分层历史会在下一次采集后出现');
+    const zone = L.zone || 'UTC+8';
+    const uncollected = (day) => L.collected_since && day < L.collected_since;
+    const outcomes = (runs) => LANE_OUTCOMES.map(([key, name]) => [name, runs.filter((r) => r.outcome === key).length]).filter(([, count]) => count).map(([name, count]) => `${name} ${count}`).join(' · ');
+    const rows = L.lanes.map((lane) => {
+      const s = lane.summary;
+      const counts = [['成功', s.success], ['失败', s.failure], ['取消', s.cancelled], ['运行中', s.running], ...(s.other ? [['其他', s.other]] : [])];
+      const head = `<div class="ci-lane-head" role="rowheader"><b>${esc(lane.label)}</b><span class="ci-lane-src">${esc(LANE_SOURCE[lane.key] || '')}</span>`
+        + `<span class="ci-lane-rate">成功率 ${pct(s.success_rate)}</span>`
+        + `<span class="ci-lane-sum">${s.total ? counts.map(([name, count]) => `<span>${name} ${count}</span>`).join(' · ') : '窗口内没有 run'}</span></div>`;
+      const days = lane.days.map((runs, i) => {
+        const day = L.days[i];
+        if (uncollected(day)) return `<div class="ci-lane-day uncollected" role="cell"${tip(`${laneDay(day)} 未采集`)}></div>`;
+        const more = runs.length > LANE_STACK ? `<span class="ci-day-more">${runs.length}</span>` : '';
+        const note = runs.length ? tip(`${laneDay(day)} · ${lane.label} ${runs.length} 次\n${outcomes(runs)}`) : '';
+        return `<div class="ci-lane-day${more ? ' dense' : ''}" role="cell"${note}><div class="ci-day-stack">${runs.map((r) => laneRun(lane.key, day, r, zone)).join('')}</div>${more}</div>`;
+      }).join('');
+      return `<div class="ci-lane-row" role="row" data-lane="${esc(lane.key)}">${head}${days}</div>`;
+    }).join('');
+    const axis = L.days.map((day, i) => `<div class="ci-axis-day" role="columnheader">${i === 0 || day.endsWith('-01') ? laneDay(day) : Number(day.slice(8))}</div>`).join('');
+    const ex = L.excluded || {};
+    const notes = [
+      '成功率 = 成功 ÷（成功 + 失败/超时），取消、运行中与其他不计入；重跑按最后一次尝试着色，仍放在 run 创建的那天。',
+      'Nightly / Release 通过 workflow_call 调用的 CI 不单独成点，只计入调用方所在的 Daily / 版本层。',
+      ex.other ? `另有 ${ex.other} 次 run 不属于这四层（其他工作流或非默认分支 push），未画入。` : '',
+      ex.called ? `${ex.called} 次由其他工作流调用的 CI 子 run 已并入调用方。` : '',
+      ex.unknown ? `${ex.unknown} 次 run 缺少触发事件，无法分层。` : '',
+      L.collected_since ? `${laneDay(L.collected_since)} 之前的日期尚未采集（斜纹），不代表没有运行。` : '',
+    ].filter(Boolean);
+    const legendItems = LANE_OUTCOMES.map(([key, name]) => `<span><i class="ci-run ${key}"></i>${esc(name)}</span>`).join('') + (L.collected_since ? '<span><i class="ci-lane-day uncollected"></i>未采集</span>' : '');
+    return `<div class="ci-lanes-scroll"><div class="ci-lanes" role="table" aria-label="CI 分层历史" style="--days:${L.days.length}">${rows}<div class="ci-lane-row ci-axis" role="row"><div class="ci-lane-head" role="rowheader"></div>${axis}</div></div></div>`
+      + `<div class="legend ci-legend">${legendItems}</div><ul class="notes ci-lane-notes">${notes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
+  };
+  // Narrow screens scroll the day axis. Stay on the newest day unless the reader scrolled away.
+  const pinLanes = (keep) => {
+    const el = $('#tab-ci .ci-lanes-scroll');
+    if (!el || !el.clientWidth) return;
+    if (keep != null) { el.scrollLeft = keep; el.dataset.away = '1'; } else if (!el.dataset.away) el.scrollLeft = el.scrollWidth;
+  };
   const labelChips = (labels) => labels.map((l) => `<span class="label-chip"><span class="sw" style="background:#${esc(l.color || '999')}"></span>${esc(l.name)}</span>`).join('');
 
   /** Sortable table. cols: [{key,label,num,render,sort}] ; rows: objects. Sorting is client-side by id. */
@@ -356,8 +414,12 @@
       { label: '主干中位耗时', value: dur(d.main.median_duration_s) },
       { label: '采样 run', value: n(d.runs_sampled), sub: `job 明细取最近 ${d.job_history_runs} 次主干 run` },
     ]);
+    const L = d.lanes;
+    const range = L ? `近 ${L.window_days} 天（${laneDay(L.days[0])}–${laneDay(L.days[L.days.length - 1])}，${esc(L.zone)}）` : '';
+    html += `<div class="grid one" style="margin-top:12px">
+      ${card('CI 分层历史', ciLanes(L), { sub: `${range} · 各层共用日期轴，每格一次 run，同一天自上而下按时间排列（上早下晚）· 点击打开 run` })}
+    </div>`;
     html += `<div class="grid wide" style="margin-top:12px">
-      ${card(`主干时间线`, strip(d.main_timeline) + legend([{ name: '成功', color: 'var(--good)' }, { name: '失败/超时', color: 'var(--critical)' }, { name: '取消', color: 'var(--axis)' }, { name: '运行中', color: 'var(--warning)' }]), { sub: `最近 ${d.main_timeline.length} 次，右侧最新，点击打开 run` })}
       ${card('最近一次主干 run', d.latest_main ? `${kv([
         ['Run', `${link(d.latest_main.run.url, esc(d.latest_main.run.title))} ${conclusionBadge(d.latest_main.run.conclusion)}`],
         ['时间', `${date(d.latest_main.run.created_at)} · ${dur(d.latest_main.run.duration_s)} · ${esc(d.latest_main.run.actor)}`],
@@ -676,7 +738,10 @@
     safe('overview', () => renderOverview(snap));
     safe('issues', () => renderIssues(snap.sections.issues));
     safe('prs', () => renderPRs(snap.sections.prs));
+    const lanes = $('#tab-ci .ci-lanes-scroll');
+    const lanesKeep = lanes?.dataset.away ? lanes.scrollLeft : null;
     safe('ci', () => renderCI(snap.sections.ci));
+    pinLanes(lanesKeep);
     safe('tests', () => renderTests(snap.sections.tests));
     safe('coverage', () => renderCoverage(snap.sections.tests));
     safe('ops', () => renderOps(snap.sections.ops));
@@ -770,7 +835,7 @@
   $('#refresh-btn').addEventListener('click', refresh);
   // Browsers throttle timers in background tabs; re-sync as soon as the tab is visible again.
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { clearTimeout(STATE.pollTimer); load(); } });
-  window.addEventListener('hashchange', () => { STATE.tab = location.hash.slice(1) || 'overview'; renderShell(); window.GSBHistory?.render(); document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${STATE.tab}`)); });
+  window.addEventListener('hashchange', () => { STATE.tab = location.hash.slice(1) || 'overview'; renderShell(); window.GSBHistory?.render(); document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${STATE.tab}`)); pinLanes(); });
   // Tooltip layer: any element with data-tip.
   const tipEl = $('#tooltip');
   document.addEventListener('mousemove', (ev) => {
@@ -782,6 +847,22 @@
     const y = Math.min(ev.clientY + 14, window.innerHeight - tipEl.offsetHeight - 8);
     tipEl.style.left = `${x}px`; tipEl.style.top = `${y}px`;
   });
+  // Keyboard focus shows the same details beside the focused mark.
+  document.addEventListener('focusin', (ev) => {
+    const el = ev.target.closest?.('[data-tip]');
+    if (!el) return;
+    tipEl.textContent = el.dataset.tip;
+    tipEl.classList.remove('hidden');
+    const box = el.getBoundingClientRect();
+    tipEl.style.left = `${Math.max(8, Math.min(box.right + 8, window.innerWidth - tipEl.offsetWidth - 8))}px`;
+    tipEl.style.top = `${Math.max(8, Math.min(box.bottom + 6, window.innerHeight - tipEl.offsetHeight - 8))}px`;
+  });
+  document.addEventListener('focusout', () => tipEl.classList.add('hidden'));
+  document.addEventListener('scroll', (ev) => {
+    const el = ev.target;
+    if (el.classList?.contains('ci-lanes-scroll')) el.dataset.away = el.scrollLeft + el.clientWidth < el.scrollWidth - 2 ? '1' : '';
+  }, true);
+  window.addEventListener('resize', () => pinLanes());
 
   // Shared helpers for the board module (static/board.js).
   window.GSB = { esc, ago, days, date, n, badge, labelChips, link, codeify, conclusionBadge, tip, empty, kv, CONCLUSION_NAME, refresh, snapshot:()=>STATE.snap };

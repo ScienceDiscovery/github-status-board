@@ -4,6 +4,7 @@ from datetime import timedelta
 import hashlib
 
 from .board import BoardStore
+from .ci_lanes import build_lanes, window_start
 from .collectors import Context, collect_ci, summarize_issues, summarize_prs, days_between
 from .history import read_json, encode
 from .public_sections import public_ops, public_tests, envelope
@@ -29,6 +30,9 @@ def build_snapshot(sync):
     # A successful poll with no changed records does not manufacture a Pages
     # deployment. Daily aging and health metadata still get a regular refresh.
     cache_upgrade = supplements.get("tests_version") != SUPPLEMENT_TESTS_VERSION
+    # Snapshots published before the CI lanes existed are rebuilt once.
+    old_ci = ((old.get("sections") or {}).get("ci") or {}).get("data") or {}
+    cache_upgrade = cache_upgrade or "lanes" not in old_ci
     if (not history.changed and not cache_upgrade and old.get("sync") == progress
             and old.get("generated_at", "")[:10] == stamp(midnight)[:10]):
         return old
@@ -71,6 +75,11 @@ def build_snapshot(sync):
         previous = index.get(row["id"])
         if not previous or row["attempt"] > previous["attempt"]:
             index[row["id"]] = row
+    # Index shards written before "event" joined the index lack the trigger;
+    # read it from the record without rewriting those shards.
+    for ident, row in list(index.items()):
+        if "event" not in row:
+            index[ident] = {**row, "event": (history.get("runs", history_key(row)) or {}).get("event")}
     runs = [r for r in runs if r["attempt"] == index[r["id"]]["attempt"]]
     class StoredCI:
         def get(self, path, params=None):
@@ -86,6 +95,16 @@ def build_snapshot(sync):
                     for r in sorted(index.values(), key=lambda r: (r["created_at"], r["id"]), reverse=True)]
     ctx = Context(StoredCI(), cfg, midnight, meta)
     ci = collect_ci(ctx)
+    # Lanes read complete records (event, linked PRs, head repository) for the
+    # displayed window only, plus the PRs that were open during it.
+    start = stamp(window_start(sync.now))
+    lane_runs = [history.get("runs", history_key(row)) or row for row in index.values() if (row.get("created_at") or "") >= start]
+    lane_prs = [history.get("prs", key) for key, row in history.rows("prs")
+                if not row.get("closed_at") or row["closed_at"] >= start]
+    ci["lanes"] = build_lanes(lane_runs, default_branch=meta["default_branch"], now=sync.now,
+                              rules=sync.settings.get("workflows"), prs=[pr for pr in lane_prs if pr],
+                              collected_since=None if progress["backfill"].get("runs", {}).get("complete")
+                              else min((row["created_at"] for row in index.values()), default=None))
     wrap = lambda data: {"status": "ok", "data": data, "notes": [], "error": None}
     day = stamp(midnight)[:10]
     day_changed = supplements.get("day") != day

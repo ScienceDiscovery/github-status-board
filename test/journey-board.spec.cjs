@@ -126,6 +126,43 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await expect(page.locator('#tab-ci')).toContainText('Workflow 健康');
   await expect(page.locator('#tab-ci')).toContainText('Run browser journeys');
   await expect(page.locator('#tab-ci')).toContainText('Coverage');
+  const lanes = page.locator('#tab-ci .ci-lanes');
+  const lane = (key) => lanes.locator(`.ci-lane-row[data-lane="${key}"]`);
+  await expect(lanes.locator('.ci-lane-row:not(.ci-axis)')).toHaveCount(4);
+  for (const key of ['pr','main','daily','release']) await expect(lane(key).locator('.ci-lane-day')).toHaveCount(30);
+  // One shared day axis: the newest column starts at the same x in every lane.
+  const newestX = await Promise.all(['pr','main','daily','release'].map(async (key) => Math.round((await lane(key).locator('.ci-lane-day').last().boundingBox()).x)));
+  expect(new Set(newestX).size).toBe(1);
+  const today = lane('pr').locator('.ci-lane-day').last().locator('.ci-run');
+  await expect(today).toHaveCount(13);
+  expect((await today.nth(1).boundingBox()).y).toBeGreaterThan((await today.nth(0).boundingBox()).y);
+  await expect(today.first()).toHaveAttribute('aria-label', /00:10（UTC\+8）/);
+  await expect(today.first()).toHaveAttribute('href', /\/actions\/runs\/500$/);
+  await expect(today.nth(1)).toHaveClass(/failure/);
+  await expect(lane('pr').locator('.ci-day-more')).toHaveText('13');
+  await today.nth(1).hover();
+  await expect(page.locator('#tooltip')).toContainText('CI · pull_request · PR #3');
+  await expect(page.locator('#tooltip')).toContainText('分支 fix-timeout');
+  await expect(lane('main').locator('.ci-run').last()).toHaveAttribute('aria-label', /workflow_dispatch · 手动/);
+  await expect(lane('daily').locator('.ci-run')).toHaveCount(8);
+  await expect(lane('release').locator('.ci-run')).toHaveCount(0);
+  await expect(lane('release')).toContainText('窗口内没有 run');
+  await expect(lane('release')).not.toContainText('失败 1');
+  await expect(page.locator('#tab-ci .ci-lane-notes')).toContainText('1 次由其他工作流调用的 CI 子 run 已并入调用方');
+  await page.mouse.move(0, 0);
+  await page.locator('#tab-ci .card:has(.ci-lanes)').screenshot({path:shot('ci-lanes-desktop')});
+  await page.setViewportSize({width:390,height:844});
+  const scroller = page.locator('#tab-ci .ci-lanes-scroll');
+  // The day axis scrolls inside the card and opens on the newest day.
+  await expect.poll(() => scroller.evaluate((el) => el.scrollWidth > el.clientWidth && el.scrollLeft + el.clientWidth >= el.scrollWidth - 2)).toBeTruthy();
+  const heads = await Promise.all(['pr','main','daily','release'].map(async (key) => (await lane(key).locator('.ci-lane-head').boundingBox())));
+  for (const [i, box] of heads.entries()) {
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    if (i) expect(box.y).toBeGreaterThan(heads[i - 1].y + 20);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  await page.locator('#tab-ci .card:has(.ci-lanes)').screenshot({path:shot('ci-lanes-narrow')});
+  await page.setViewportSize({width:1440,height:1000});
   await page.locator('[data-tab="tests"]').click();
   await expect(page.locator('#tab-tests')).toContainText('按包 / 目录分布');
   await expect(page.locator('#tab-tests')).toContainText('services/core');
