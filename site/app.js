@@ -515,6 +515,82 @@
     return html;
   }
 
+  // Source-tagged tests: the collector evaluates every CI profile on the latest
+  // default-branch catalog; this only lays the answer out.
+  const PROFILE_NAME = { pr: 'PR', daily: 'Daily', release: 'Release' };
+  const SLICE_NAME = { ut: 'UT', st: 'ST', e2e: 'E2E' };
+  const TAKE = { yes: ['✓', '选取'], any: ['不限', '不限制该维度'], no: ['✗', '不选'] };
+  const tagChip = (tag, muted) => `<span class="tag-chip${muted ? ' muted' : ''}">${esc(tag)}</span>`;
+  function taggedSection(t) {
+    let html = sectionHead('标签化测试', t ? `默认分支最新 CI 冻结的用例目录 · ${n(t.cases)} 个用例 · ${t.dimensions.length} 个标签维度 · ${n(t.signatures)} 种标签组合` : '');
+    if (!t) return html + `<div class="banner warn"><span class="icon">▲</span><div><div class="title">尚未读取到标签化测试目录</div><div>需要源仓 CI 在 ut / st / e2e-results 产物中上传各层的 <code>tagged/catalog.json</code> 与 <code>plan.json</code>；读取到默认分支的一次运行后，这里显示各维度标签、PR / Daily / Release 的组合与覆盖情况。</div></div></div>`;
+    const share = (x) => (t.cases ? `${((x / t.cases) * 100).toFixed(1)}%` : '—');
+    const runText = (p) => {
+      if (!p.run) return '暂无该组合的运行';
+      const parts = Object.entries(p.results || {}).filter(([, r]) => r).map(([s, r]) => `${SLICE_NAME[s] || s} ${n(r.passed)}/${n(r.planned)}`);
+      return `最近运行 ${shortDate(p.run.created_at)}${parts.length ? ` · 通过 ${parts.join(' · ')}` : ''}`;
+    };
+    const catalogRun = t.catalog.run;
+    const notes = [];
+    if (t.catalog.missing.length) notes.push(`目录缺少 ${t.catalog.missing.map((s) => SLICE_NAME[s] || s).join('、')} 层（该层产物未读取到），这些用例不在统计内。`);
+    if (!t.schema.known) notes.push('未读取到标签词表：未声明的维度没有补默认值，词表外的标签值也无法列出。');
+    const drift = t.checks.filter((c) => c.computed !== c.planned);
+    if (drift.length) notes.push(`看板按规则计算的选中数与 CI 冻结计划不一致（${drift.map((c) => `${SLICE_NAME[c.slice] || c.slice}：计划 ${n(c.planned)}，计算 ${c.computed == null ? '无法解析' : n(c.computed)}`).join('；')}），覆盖数字仅供参考。`);
+    t.profiles.filter((p) => p.run && p.revisions?.length && t.catalog.revision.length && p.revisions.join() !== t.catalog.revision.join()).forEach((p) => notes.push(`${PROFILE_NAME[p.name]} 的规则取自修订 ${p.revisions.map((r) => r.slice(0, 7)).join('/')}，目录为 ${t.catalog.revision.map((r) => r.slice(0, 7)).join('/')}；覆盖按同一目录计算。`));
+    html += `<div class="muted" style="margin:-4px 0 8px">目录来自 ${link(catalogRun.url, `run ${esc(catalogRun.id)}`)}（${esc(catalogRun.branch)} · ${esc(catalogRun.event)} · ${ago(catalogRun.created_at)} · 修订 <code>${esc(t.catalog.revision.map((r) => r.slice(0, 7)).join('/'))}</code>）；各组合的规则取自其最近一次默认分支 / 版本运行的冻结计划。</div>`;
+    html += tiles([
+      { label: '目录用例', value: n(t.cases), sub: `${t.catalog.slices.map((s) => SLICE_NAME[s] || s).join(' + ')} 三层合并去重` },
+      ...t.profiles.map((p) => ({ label: `${PROFILE_NAME[p.name]} 选中`, value: p.covered == null ? '—' : n(p.covered), sub: p.covered == null ? (p.error ? '规则无法解析' : '暂无运行，无法读取组合') : `${share(p.covered)} · ${esc(runText(p))}` })),
+      { label: '任一组合覆盖', value: share(t.covered), sub: `${n(t.covered)} / ${n(t.cases)} 个用例`, tone: 'good' },
+      { label: '从未覆盖', value: n(t.uncovered.cases), sub: '当前任何组合都不会选中', tone: t.uncovered.cases ? 'warn' : 'good' },
+    ]);
+    if (notes.length) html += `<ul class="notes">${notes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
+
+    // Dimension × profile matrix: reading down a profile column gives its combination.
+    const profiles = t.profiles;
+    const head = profiles.map((p) => `<th class="take-col"><div>${esc(PROFILE_NAME[p.name])}</div><div class="sub">${p.same_as ? `与 ${esc(PROFILE_NAME[p.same_as])} 相同` : p.run ? (p.rules ? `${p.rules.length} 条规则` : '含 not，见选择器') : '暂无运行'}</div></th>`).join('');
+    const body = t.dimensions.map((dim) => {
+      const meta = [dim.multiple ? '可多选' : '单选', dim.vocabulary != null ? `词表 ${dim.vocabulary} 个` : '', `使用 ${dim.used} 个`, dim.default ? `默认 ${dim.default}` : ''].filter(Boolean).join(' · ');
+      const group = `<tr class="dim-row"><th colspan="${2 + profiles.length}"><b>${esc(dim.group)}</b> <span class="sub">${esc(meta)}</span></th></tr>`;
+      return group + dim.values.map((v) => {
+        const miss = v.cases - v.covered;
+        const bar = `<span class="tag-bar"${tip(`${dim.group}:${v.value}\n${n(v.cases)} 个用例 · 被任一组合选中 ${n(v.covered)} · 从未覆盖 ${n(miss)}`)}>${v.covered ? `<span class="hit" style="width:${(v.covered / t.cases) * 100}%"></span>` : ''}${miss ? `<span class="miss" style="width:${(miss / t.cases) * 100}%"></span>` : ''}</span>`;
+        const takes = profiles.map((p) => {
+          const state = v.profiles[p.name];
+          if (!p.run) return '<td class="take-col"></td>';
+          const [mark, text] = TAKE[state] || ['?', '规则无法展开'];
+          return `<td class="take-col"><span class="take ${esc(state || 'unknown')}"${tip(`${PROFILE_NAME[p.name]} ${text} ${dim.group}:${v.value}`)} aria-label="${esc(`${PROFILE_NAME[p.name]} ${text} ${dim.group}:${v.value}`)}">${mark}</span></td>`;
+        }).join('');
+        return `<tr class="${v.cases ? '' : 'unused'}" data-tag="${esc(`${dim.group}:${v.value}`)}"><td>${tagChip(v.value, !v.cases)}</td><td class="tag-count">${bar}<span class="num">${n(v.cases)}</span>${miss ? ` <span class="miss-text">未覆盖 ${n(miss)}</span>` : ''}</td>${takes}</tr>`;
+      }).join('');
+    }).join('');
+    const ruleText = (p) => {
+      if (!p.run) return `${PROFILE_NAME[p.name]}：暂无运行，无法读取组合`;
+      if (p.same_as) return `${PROFILE_NAME[p.name]}：与 ${PROFILE_NAME[p.same_as]} 规则相同`;
+      if (!p.rules) return `${PROFILE_NAME[p.name]}：${Object.values(p.selectors).join(' ｜ ')}`;
+      return `${PROFILE_NAME[p.name]}：${p.rules.map((row) => row.map(([g, vs]) => vs.length > 1 ? `${g} ∈ {${vs.join(', ')}}` : `${g} = ${vs[0]}`).join(' 且 ')).join('；或 ')}（目标 ${p.targets.join('、')}）`;
+    };
+    html += `<div class="grid one" style="margin-top:12px">${card('每个维度的标签与组合', `<ul class="rule-list">${profiles.map((p) => `<li>${esc(ruleText(p))}</li>`).join('')}</ul>
+      <div class="table-wrap"><table class="tag-matrix"><thead><tr><th>标签</th><th>用例数</th>${head}</tr></thead><tbody>${body}</tbody></table></div>
+      <div class="legend"><span><i style="background:var(--s1)"></i>被任一组合选中</span><span><i style="background:var(--warning)"></i>从未覆盖</span><span>✓ 组合选取该标签 · 不限 = 组合不约束该维度 · ✗ 不选</span></div>
+      <div class="muted" style="margin-top:6px">读法：同一维度内多个 ✓ 是“或”，不同维度之间是“且”。可多选维度（os、arch）上一个用例可带多个值，各值计数之和会大于用例总数；多平台用例只要有一个平台实例被选中即算覆盖。</div>`, { sub: '标签值计数按默认分支目录；组合列来自冻结计划' })}</div>`;
+
+    // Never covered: why, then which cases.
+    const reasons = t.uncovered.reasons;
+    const items = t.uncovered.items;
+    html += `<div class="grid wide" style="margin-top:12px">${card('从未覆盖的用例', reasons.length ? `${bars(reasons.map((r) => ({ label: r.reason, value: r.cases, color: 'var(--warning)' })))}
+      <details style="margin-top:8px"><summary>查看用例（${n(t.uncovered.cases)}${items.length < t.uncovered.cases ? `，列出前 ${items.length} 个` : ''}）</summary>${table('tag-uncovered', [
+        { key: 'reason', label: '被排除的标签', render: (r) => `<span class="nowrap">${esc(r.reason)}</span>` },
+        { key: 'id', label: '用例', render: (r) => `<span class="mono case-id" title="${esc(r.id)}">${esc(r.id)}</span>` },
+      ], items)}</details>` : empty('所有用例都至少被一个组合选中'), { sub: '按挡住它的标签归类：该标签值不在任何组合里' })}
+      ${card('标签组合', table('tag-combos', [
+        { key: 'cases', label: '用例', num: true },
+        { key: 'tags', label: '标签（灰色为默认值）', sortable: false, render: (c) => c.tags.map((tag) => { const [g, v] = tag.split(':'); const dim = t.dimensions.find((x) => x.group === g); return tagChip(tag, dim?.default === v); }).join(' ') },
+        ...profiles.map((p) => ({ key: p.name, label: PROFILE_NAME[p.name], sortable: false, render: (c) => c.profiles[p.name] == null ? '<span class="muted">—</span>' : c.profiles[p.name] ? '<span class="take yes">✓</span>' : '<span class="take no">✗</span>' })),
+      ], t.combinations, { limit: 40 }), { sub: '标签完全相同的用例被组合选中的方式也相同' })}</div>`;
+    return html;
+  }
+
   function renderTests(sec) {
     const d = sec?.data;
     let html = sectionState(sec, '测试');
@@ -530,6 +606,7 @@
       { label: 'CI 最近 E2E 用例', value: n(e2e?.totals?.tests), sub: e2e?.totals ? `${e2e.totals.passed} 通过 · ${e2e.totals.failed} 失败/超时 · ${e2e.totals.skipped} 跳过 · ${e2e.totals.flaky} 重试通过` : e2e ? '产物存在但没有解析出用例数' : '无产物', tone: e2e?.totals?.failed ? 'bad' : e2e?.totals ? 'good' : '' },
       { label: '行覆盖率', value: cov?.value?.lines_pct != null ? pct(cov.value.lines_pct) : '无数据源', tone: cov?.source ? 'good' : 'warn', sub: cov?.source ? esc(cov.source) : '见下方数据源探测与降级视图' },
     ]);
+    html += taggedSection(d.tagged);
 
     // Distribution ----------------------------------------------------------
     if (tree) {
@@ -624,6 +701,12 @@
         + `<div class="banner warn"><span class="icon">▲</span><div><div class="title">等待 ScienceDiscovery 覆盖率工作流首次发布摘要</div><div>每日完整基线成功后，这里会显示整仓趋势和路径明细；PR 与 main 增量随后自动叠加。</div></div></div><div class="card" style="margin-top:12px">${steps}</div>`;
     }
     const languages = cov.languages || {};
+    const prs = STATE.snap.sections?.prs?.data || {};
+    const prTargetByNumber = new Map(
+      ['items', 'recent_merged', 'recent_closed_unmerged']
+        .flatMap((key) => prs[key] || [])
+        .map((row) => [Number(row.number), row.base]),
+    );
     if (!Object.keys(languages).length) {
       const labels = { lines_pct: '行覆盖率', branches_pct: '分支覆盖率', functions_pct: '函数覆盖率', statements_pct: '语句覆盖率' };
       const rows = Object.entries(cov.value || {}).filter(([key, value]) => key !== 'format' && value != null)
@@ -696,13 +779,15 @@
       body += `<div class="card"><label class="filter"><span>过滤路径</span><input type="search" data-filter="coverageQ" value="${esc(STATE.filters.coverageQ || '')}" placeholder="packages/schema 或 services/evolve"></label>${table(`cov-groups-${key}`, columns, groupRows, { defaultSort: { key: 'lines_pct', dir: 'asc' }, emptyText: '没有匹配的覆盖率路径' })}</div>`;
       const prs = (dataset.pull_requests || []).map((row) => ({
         ...row,
+        base_branch: row.base_branch || prTargetByNumber.get(Number(row.number)),
         lines_pct: row.totals?.lines?.percentage,
         group_names: (row.groups || []).map((group) => group.name).join(', '),
       }));
       body += sectionHead(`${label} 最近 PR 覆盖率`, '该 PR 的 UT/ST 门禁实测范围；不会更新 main 当前覆盖率');
       body += `<div class="card">${table(`cov-prs-${key}`, [
         { key: 'number', label: 'PR', render: (row) => link(`${STATE.snap.repo_url}/pull/${row.number}`, `#${row.number}`) },
-        { key: 'branch', label: '分支', render: (row) => `<code>${esc(row.branch || '—')}</code>` },
+        { key: 'branch', label: '来源分支', render: (row) => `<code>${esc(row.branch || '—')}</code>` },
+        { key: 'base_branch', label: '目标分支', render: (row) => `<code>${esc(row.base_branch || '—')}</code>` },
         { key: 'lines_pct', label: '门禁实测行覆盖率', num: true, render: (row) => pct(row.lines_pct) },
         { key: 'group_names', label: '覆盖路径', render: (row) => `<span class="mono">${esc(row.group_names)}</span>` },
         { key: 'created_at', label: '时间', render: (row) => ago(row.created_at) },
