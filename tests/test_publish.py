@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -42,6 +43,11 @@ class PublishingTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.site=Path(self.temp.name)
         export_site(self.site,{'schema_version':1,'generated_at':'2026-01-01'})
+    def test_frontend_assets_share_one_cache_version(self):
+        html=(self.site/'index.html').read_text(encoding='utf-8')
+        versions=re.findall(r'(?:style\.css|(?:history|report|board-local|app|board)\.js)\?v=([^"\']+)',html)
+        self.assertEqual(len(versions),6)
+        self.assertEqual(len(set(versions)),1)
     def test_only_public_files_are_committed_atomically(self):
         calls=[]
         class GH:
