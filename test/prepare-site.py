@@ -57,6 +57,29 @@ def coverage_language(name,totals,group):
     return dict(language=name,source='artifact:'+baseline['artifact'],scope='fixture coverage scope',baseline=baseline,current=current,history=history,pull_requests=[dict(number=3,branch='fix-timeout',created_at=time,sha='a'*40,groups=current['groups'],totals=totals)])
 combined=dict(lines=dict(covered=54723,total=67796,percentage=80.72),branches=dict(covered=15494,total=20634,percentage=75.09),functions=node_totals['functions'])
 tests['coverage']=dict(source='Actions coverage summaries',value=dict(format='sciencediscovery-summary',lines_pct=80.72,branches_pct=75.09,functions_pct=83.56),current=dict(kind='authoritative',totals=combined),languages=dict(node=coverage_language('node',node_totals,'packages/core'),python=coverage_language('python',python_totals,'services/evolve')),attempts=[dict(step='Actions 覆盖率摘要',ok=True,detail='Node.js + Python')])
+# Tagged catalog: default-branch PR and Daily plans share one rule, Release has not run.
+import io, zipfile
+from gsb.tagged import TaggedStore, extract
+tag_schema={'groups':{'category':{'multiple':False,'values':['ut','st','e2e']},'os':{'multiple':True,'values':['linux','macos','windows']},'arch':{'multiple':True,'values':['amd64','arm64']},'npu':{'multiple':False,'values':['none','required'],'default':'none'},'model':{'multiple':False,'values':['none','mock','real'],'default':'none'},'judge':{'multiple':False,'values':['none','llm'],'default':'none'},'status':{'multiple':False,'values':['reviewed','external','legacy','unreviewed'],'default':'reviewed'},'sandbox':{'multiple':False,'values':['none','bubblewrap','seatbelt'],'default':'none'}}}
+policy='(category:ut or category:st or category:e2e) and os:linux and arch:amd64 and npu:none and (model:none or model:mock) and judge:none and status:reviewed'
+groups_of={'ut':[(280,'packages/core/src/unit.test.ts',['os:linux','os:macos','arch:amd64','arch:arm64']),(24,'services/runner/src/sandbox.test.ts',['os:linux','arch:amd64','arch:arm64','sandbox:bubblewrap']),(12,'services/paper/tests/test_external.py',['os:linux','arch:amd64','status:external']),(3,'services/runner/src/seatbelt.test.ts',['os:macos','arch:arm64','sandbox:seatbelt'])],
+  'st':[(2,'test/api/agent_loop_smoke.ts',['os:linux','arch:amd64','model:mock']),(1,'test/api/agent_loop_real_smoke.ts',['os:linux','arch:amd64','model:real']),(1,'services/runner/workloads/npu-smoke-test.py',['os:linux','arch:amd64','npu:required'])],
+  'e2e':[(18,'test/journey-first-run.spec.ts',['os:linux','arch:amd64','model:mock','sandbox:bubblewrap']),(6,'test/legacy-console.spec.ts',['os:linux','arch:amd64','sandbox:bubblewrap','status:legacy']),(2,'test/journey-real-model.spec.ts',['os:linux','arch:amd64','model:real','sandbox:bubblewrap'])]}
+tag_store=TaggedStore()
+for label_prefix,created,event in (('','2026-09-20T10:00:00Z','push'),('daily-','2026-09-19T18:00:00Z','schedule')):
+    found=[]
+    for part,groups in groups_of.items():
+        catalog=[{'id':f'{source}::case {i+1}','source':source,'sourceHash':'0'*64,'runner':'node','tags':[f'category:{part}',*tags]} for count,source,tags in groups for i in range(count)]
+        planned=sum(count for count,_,tags in groups if not any(t in tags for t in ('status:external','status:legacy','model:real','npu:required')) and 'os:linux' in tags)
+        blob=io.BytesIO()
+        with zipfile.ZipFile(blob,'w') as archive:
+            archive.writestr(f'{label_prefix}{part}/tagged/catalog.json',json.dumps(catalog))
+            archive.writestr(f'{label_prefix}{part}/tagged/plan.json',json.dumps({'revision':'a'*40,'selector':f'{policy} and (category:{part})','targets':[{'os':'linux','arch':'amd64'}],'entries':[{}]*planned}))
+            archive.writestr(f'{label_prefix}{part}/tagged/summary.json',json.dumps({'status':'PASS','planned':planned,'executed':planned,'passed':planned,'failed':0,'skipped':0}))
+        with zipfile.ZipFile(blob) as archive: found+=extract(archive)
+    tag_store.observe(dict(id=900+len(label_prefix),attempt=1,url=base+'/actions/runs/900',created_at=created,branch='main',event=event),found,'main')
+tag_store.refresh_schema(lambda *args: json.dumps(tag_schema),repo)
+tests['tagged']=tag_store.view()
 runs[0]['jobs'].append(dict(name='Coverage',status='completed',conclusion='success',url=runs[0]['url']+'/job/coverage',failed_steps=[],duration_s=385))
 rate=dict(success_rate=50,total=2,success=1,failure=1,cancelled=0,median_duration_s=120)
 ci=dict(default_branch='main',main=rate,pull_request=rate,red_streak_main=1,failures_7d=2,runs_sampled=3,job_history_runs=2,main_timeline=runs,latest_main=dict(run=runs[0],jobs=runs[0]['jobs']),workflows=[dict(name='CI',url=runs[0]['url'],path='.github/workflows/ci.yml',state='active',all=rate,main=rate,pull_request=rate,failures_7d=2,last_run=runs[0])],job_health=[dict(name='E2E',success_rate=50,runs=2,success=1,failure=1,cancelled=0,median_duration_s=120,last=runs[0],top_failed_steps=[dict(step='Run browser journeys',count=1)]),dict(name='Coverage',success_rate=100,runs=1,success=1,failure=0,cancelled=0,median_duration_s=385,last=runs[0],top_failed_steps=[])],recent_runs=runs)

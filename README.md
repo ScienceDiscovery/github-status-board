@@ -24,7 +24,7 @@ Coverage 页从源仓 GitHub Actions 产物中读取 `node-coverage-summary-*` �
 
 ## 文档
 
-[文档目录](docs/README.md) · [增量同步与历史](docs/incremental-history.md) · [Actions 配置](docs/actions-collection.md) · [测试报告契约](docs/test-reports.md) · [CI 分层历史](docs/ci-history-lanes.md)
+[文档目录](docs/README.md) · [增量同步与历史](docs/incremental-history.md) · [Actions 配置](docs/actions-collection.md) · [测试报告契约](docs/test-reports.md) · [CI 分层历史](docs/ci-history-lanes.md) · [标签化测试](docs/tagged-tests.md)
 
 看板的状态、优先级、迭代、备注与列设置保存在本浏览器，按源仓隔离；可导入／导出字段。浏览器不持有 GitHub 凭据，不连接 Bot，也不写回 GitHub。
 

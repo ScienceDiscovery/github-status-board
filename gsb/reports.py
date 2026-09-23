@@ -7,6 +7,7 @@ import re
 import zipfile
 from xml.etree import ElementTree as ET
 
+from .tagged import extract as extract_tagged
 from .testparse import parse_run_log, COVERAGE_FILE_RE, parse_coverage_file
 
 FIELDS = ("passed", "failed", "skipped", "flaky")
@@ -93,7 +94,7 @@ def parse_report_zip(blob):
         entries = archive.infolist()
         if len(entries) > 3000 or sum(e.file_size for e in entries) > 160 * 1024 * 1024:
             raise ValueError("report archive exceeds extraction budget")
-        reports = {"playwright": [], "junit": [], "summary": [], "log": []}
+        reports = {"playwright": [], "tagged": [], "junit": [], "summary": [], "log": []}
         coverage = []
         for item in entries:
             name = item.filename.lower()
@@ -135,10 +136,19 @@ def parse_report_zip(blob):
                     reports[family].append(result)
             except (ValueError, TypeError, AttributeError, ET.ParseError):
                 continue
-        for family in ("summary", "playwright", "junit", "log"):
+        # The tagged harness reconciles every planned case, so its summary is a
+        # count source; a planned case without a pass or skip counts as failed.
+        tagged = extract_tagged(archive)
+        for part in tagged:
+            result = part["result"] or {}
+            planned, passed, skipped = result.get("planned"), result.get("passed"), result.get("skipped") or 0
+            if planned is not None and passed is not None and passed + skipped <= planned:
+                reports["tagged"].append({"tests": planned, "passed": passed, "failed": planned - passed - skipped,
+                                          "skipped": skipped, "flaky": 0, "cases": []})
+        for family in ("summary", "playwright", "tagged", "junit", "log"):
             if reports[family]:
                 counts = {k: sum(r.get(k, 0) for r in reports[family]) for k in ("tests", *FIELDS)}
-                return {**counts, "format": family, "cases": [c for r in reports[family] for c in r["cases"]][:500], "coverage": coverage, **({k: [v for r in reports[family] for v in r[k]] for k in ("commands", "packages")} if family == "log" else {})}
-        if coverage:
-            return {"tests": None, "coverage": coverage}
+                return {**counts, "format": family, "cases": [c for r in reports[family] for c in r["cases"]][:500], "coverage": coverage, "tagged": tagged, **({k: [v for r in reports[family] for v in r[k]] for k in ("commands", "packages")} if family == "log" else {})}
+        if coverage or tagged:
+            return {"tests": None, "coverage": coverage, "tagged": tagged}
     return None

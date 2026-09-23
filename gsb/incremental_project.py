@@ -97,8 +97,9 @@ def build_snapshot(sync):
     cache_upgrade = supplements.get("tests_version") != SUPPLEMENT_TESTS_VERSION
     # Snapshots published before the CI lanes existed are rebuilt once.
     old_ci = ((old.get("sections") or {}).get("ci") or {}).get("data") or {}
-    cache_upgrade = cache_upgrade or "lanes" not in old_ci
-    if (not history.changed and not cache_upgrade and old.get("sync") == progress
+    old_tests = ((old.get("sections") or {}).get("tests") or {}).get("data")
+    cache_upgrade = cache_upgrade or "lanes" not in old_ci or (isinstance(old_tests, dict) and "tagged" not in old_tests)
+    if (not history.changed and not sync.tagged.changed and not cache_upgrade and old.get("sync") == progress
             and old.get("generated_at", "")[:10] == stamp(midnight)[:10]):
         return old
     cfg = sync.cfg
@@ -191,6 +192,8 @@ def build_snapshot(sync):
         state["supplements_changed"] = True
         history.changed[".sync/supplements.json"] = encode(supplements)
     tests = deepcopy(supplements.get("tests", wrap({})))
+    if isinstance(tests.get("data"), dict):
+        tests["data"]["tagged"] = sync.tagged.view()
     coverage = (tests.get("data") or {}).get("coverage") or {}
     _persist_coverage_summaries(history, coverage, meta.get("default_branch"))
     daily_coverage = _daily_coverage_history(history, meta.get("default_branch"))
