@@ -82,7 +82,7 @@ class History:
         self.aggregate = {k: v for k, v in counts.items() if v}
         records[key] = deepcopy(row)
         self._index(bucket)[key] = {k: v for k, v in row.items() if k in (
-            "id", "number", "attempt", "tag", "name", "title", "state", "status", "conclusion", "channel", "workflow_id",
+            "id", "number", "attempt", "tag", "name", "title", "state", "status", "conclusion", "channel", "workflow_id", "event",
             "started_at", "author", "labels", "assignees", "created_at", "updated_at", "closed_at", "merged_at", "branch", "sha", "url")}
         self.changed[f"site/data/history/records/{bucket}.json"] = encode(records)
         self.changed[f"site/data/history/index/{bucket}.json"] = encode(self._index(bucket))

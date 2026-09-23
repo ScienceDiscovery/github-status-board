@@ -60,6 +60,19 @@ tests['coverage']=dict(source='Actions coverage summaries',value=dict(format='sc
 runs[0]['jobs'].append(dict(name='Coverage',status='completed',conclusion='success',url=runs[0]['url']+'/job/coverage',failed_steps=[],duration_s=385))
 rate=dict(success_rate=50,total=2,success=1,failure=1,cancelled=0,median_duration_s=120)
 ci=dict(default_branch='main',main=rate,pull_request=rate,red_streak_main=1,failures_7d=2,runs_sampled=3,job_history_runs=2,main_timeline=runs,latest_main=dict(run=runs[0],jobs=runs[0]['jobs']),workflows=[dict(name='CI',url=runs[0]['url'],path='.github/workflows/ci.yml',state='active',all=rate,main=rate,pull_request=rate,failures_7d=2,last_run=runs[0])],job_health=[dict(name='E2E',success_rate=50,runs=2,success=1,failure=1,cancelled=0,median_duration_s=120,last=runs[0],top_failed_steps=[dict(step='Run browser journeys',count=1)]),dict(name='Coverage',success_rate=100,runs=1,success=1,failure=0,cancelled=0,median_duration_s=385,last=runs[0],top_failed_steps=[])],recent_runs=runs)
+# CI lanes: 13 PR runs on the newest day (more than one column shows), manual and push
+# runs on main, one nightly per evening, a Nightly-called CI child and no release.
+from gsb.ci_lanes import build_lanes
+def lane_run(ident,name,event,created,branch,conclusion='success',pull_requests=()):
+    return dict(id=ident,attempt=1,name=name,workflow_id={'CI':1,'Nightly':2}[name],event=event,status='in_progress' if conclusion is None else 'completed',conclusion=conclusion,branch=branch,sha=f'{ident:040x}',created_at=created,url=f'{base}/actions/runs/{ident}',pull_requests=list(pull_requests),title=f'{name} run {ident}')
+outcomes=['success','failure','cancelled','timed_out',None,'success','failure','success','action_required','success','failure','success','success']
+lane_runs=[lane_run(500+i,'CI','pull_request',f'2026-09-19T{16+i//4:02d}:{(i%4)*15+10:02d}:00Z','fix-timeout',c,pull_requests=[3] if i%2 else []) for i,c in enumerate(outcomes)]
+lane_runs+=[lane_run(480,'CI','pull_request','2026-09-17T03:00:00Z','fix-timeout','failure'),lane_run(481,'CI','pull_request','2026-09-17T05:30:00Z','fix-timeout')]
+lane_runs+=[lane_run(470,'CI','push','2026-09-18T02:00:00Z','main'),lane_run(471,'CI','workflow_dispatch','2026-09-20T01:00:00Z','main','failure')]
+lane_runs+=[lane_run(400+d,'Nightly','schedule',f'2026-09-{d:02d}T18:00:00Z','main','failure' if d==16 else 'success') for d in range(12,20)]
+lane_runs.append(lane_run(399,'CI','workflow_call','2026-09-19T18:00:05Z','main'))
+lanes=build_lanes(lane_runs,default_branch='main',now=datetime(2026,9,20,12,tzinfo=timezone.utc),rules=json.loads((root/'board-config.json').read_text())['workflows'],prs=[pr])
+ci['lanes']=lanes
 ops=dict(releases=dict(latest=None,count=0,items=[],tags=[],total_downloads=0,cadence_days=None,unreleased=None),branches=dict(default='main',protection=dict(enabled=True,required_reviews=1,required_checks=['E2E']),rulesets=[],items=[],count=1,stale=[]),public_advisories=[],community=dict(health_percentage=75,missing=['contributing'],files=dict(readme=True,contributing=False)),contributors=dict(count=2,total_commits=10,bus_factor_50=1,top=[dict(login='maintainer',contributions=8,share=80)]),activity=dict(weeks=[dict(week=1789819200,total=10)],commits_4w=10,commits_52w=10),recent_commits=[],commits_7d=3,stale_automation=dict(workflow=None))
 wrap=lambda value:dict(status='ok',data=value,notes=[],error=None)
 doc.update(repo=repo,repo_url=base,config=dict(artifact_names=['ut-results','e2e-results'],pr_idle_days=14),sections={k:wrap(v) for k,v in dict(repo=dict(description='浏览器验收数据',stars=10,forks=2,language='Python',license='MIT',default_branch='main',pushed_at=time),issues=issues,prs=prs,ci=ci,tests=tests,ops=ops).items()})

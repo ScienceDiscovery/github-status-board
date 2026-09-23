@@ -274,6 +274,7 @@ def _slim_pr(item: dict, now: datetime) -> dict:
         "requested_reviewers": [_user(r) for r in item.get("requested_reviewers") or []],
         "base": (item.get("base") or {}).get("ref"),
         "head": (item.get("head") or {}).get("ref"),
+        "head_repo": ((item.get("head") or {}).get("repo") or {}).get("full_name"),
         "head_sha": (item.get("head") or {}).get("sha"),
         "created_at": item.get("created_at"),
         "updated_at": item.get("updated_at"),
