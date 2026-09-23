@@ -390,14 +390,14 @@ dialog.settings footer { display: flex; justify-content: flex-end; gap: 8px; mar
 .rules-grid select, .rules-grid input[type=number] { font: inherit; font-size: 13px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); }
 dialog.settings textarea { width: 100%; font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--ink); box-sizing: border-box; }
 
-/* Static report views reuse the dashboard palette. */
-.quality-lanes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px}
-.lane .numbers{display:flex;gap:28px;margin:18px 0}.numbers b{display:block;font-size:22px}.numbers span,.lane .sub{display:block;font-size:12px;color:var(--muted)}
-.kicker,.small-note,.run-meta{font-size:12px;color:var(--muted)}.lane h3{font-size:17px}.run-card{margin:14px 0}.run-head,.dialog-head{display:flex;align-items:center;justify-content:space-between;gap:16px}.job-list{display:flex;gap:20px;flex-wrap:wrap;margin:18px 0}.release-row{display:flex;justify-content:space-between;padding:18px;gap:20px;border-bottom:1px solid var(--grid)}
+/* Shared report pieces: release rows, pass/fail bars, filters. */
+.small-note{font-size:12px;color:var(--muted)}
+.release-row{display:flex;justify-content:space-between;padding:18px;gap:20px;border-bottom:1px solid var(--grid)}
+.release-row:last-child{border-bottom:0}.release-row h3{margin:0 0 6px;font-size:15px}.release-evidence{margin:4px 0}
 .bar{display:flex;height:6px;overflow:hidden;border-radius:5px;margin:12px 0}.bar .passed{background:var(--good)}.bar .failed{background:var(--critical)}.bar .skipped{background:var(--axis)}.bar .flaky{background:var(--warning)}
-.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px}.test-link{background:none;border:0;color:var(--link);cursor:pointer}.count-inline{font-size:12px;color:var(--muted)}.filters{display:flex;gap:15px;align-items:center;flex-wrap:wrap;margin:15px 0}
-#test-detail{width:min(1000px,94vw);max-height:86vh;overflow:auto;background:var(--surface);color:var(--ink);border:1px solid var(--grid);border-radius:12px;padding:24px}#test-detail::backdrop{background:#0007}.dialog-head{margin-bottom:18px}.board-local-note{margin:0 0 10px;color:var(--ink-2);font-size:12px}
-@media(max-width:700px){.quality-lanes{grid-template-columns:1fr}.topbar,.brand{min-width:0}.repo-link{overflow-wrap:anywhere}.release-row{flex-direction:column}.tabs{overflow-x:auto;flex-wrap:nowrap}#test-detail{padding:14px}}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px}.count-inline{font-size:12px;color:var(--muted)}.filters{display:flex;gap:15px;align-items:center;flex-wrap:wrap;margin:15px 0}
+.board-local-note{margin:0 0 10px;color:var(--ink-2);font-size:12px}
+@media(max-width:700px){.topbar,.brand{min-width:0}.repo-link{overflow-wrap:anywhere}.release-row{flex-direction:column}.tabs{overflow-x:auto;flex-wrap:nowrap}}
 
 @media(max-width:700px){
   .tabs a{flex:none;white-space:nowrap}.brand{flex-wrap:wrap}.brand-title{white-space:nowrap}
@@ -407,16 +407,6 @@ dialog.settings textarea { width: 100%; font: inherit; font-size: 13px; padding:
   .rules-grid{grid-template-columns:1fr}
 }
 
-/* The board owns the viewport; cards and tables scroll inside it. */
-body.board-page { height: 100vh; height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
-.board-page > .topbar, .board-page > .banner { flex: none; }
-.board-page main { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; padding-bottom: 12px; }
-#tab-board.active { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.board-controls { flex: 0 1 auto; min-height: 0; max-height: 45%; overflow: auto; }
-.board-page .board { flex: 1; min-height: 0; overflow-y: hidden; }
-.board-table-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.board-table-panel .board-table { flex: 1; min-height: 0; }
-.board-foot { flex: none; }
 @media(max-width:1000px){
   .topbar { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 8px 12px; }
   .topbar .tabs { grid-column: 1 / -1; grid-row: 2; }
@@ -427,13 +417,46 @@ body.board-page { height: 100vh; height: 100dvh; overflow: hidden; display: flex
   .brand-title { font-size: 13px; }
   .topbar-status .btn { font-size: 12px; padding: 4px 8px; }
   .meta { font-size: 10px; }
-  .board-page main { padding: 10px 12px; }
 }
 
-/* History keeps index loading independent of the operational dashboard. */
-.history-progress,.history-pager{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:16px 0}
-.history-filters{flex-wrap:wrap}.history-filters label{display:flex;align-items:center;gap:8px;white-space:nowrap}.history-filters input{min-width:220px;max-width:100%;padding:8px;border:1px solid var(--line);border-radius:6px}
-.history-record{margin-bottom:12px}.history-record h3{overflow-wrap:anywhere}.history-record code{overflow-wrap:anywhere}
-.history-body{white-space:pre-wrap;overflow-wrap:anywhere;max-height:480px;overflow:auto;font:inherit;background:var(--bg);padding:14px}
-.history-metric{display:flex;flex-direction:column;gap:5px;padding:10px 0}.history-record summary{cursor:pointer}
-@media(max-width:600px){.history-filters label{width:100%}.history-filters input{min-width:0;width:auto;flex:1}.history-record .run-head{align-items:flex-start}.history-progress{gap:8px}}
+/* Overview: problems first, then pipelines and delivery. */
+.section-head h2 { white-space: nowrap; }
+.card.health { border-left: 4px solid var(--good); margin-bottom: 4px; }
+.card.health.health-warn { border-left-color: var(--warning); }
+.card.health.health-bad { border-left-color: var(--critical); }
+.card.health h3 { font-size: 15px; }
+.health .hints { margin-top: 8px; font-size: 13px; }
+.health .hints summary { cursor: pointer; color: var(--ink-2); }
+.tile .foot br + * { display: block; }
+
+/* Issue / PR lists: statistics above, a table or the local board below. */
+.list-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.list-head .grow, .cov-tools .grow { flex: 1; }
+.view-switch button { font: inherit; font-size: 12.5px; padding: 4px 12px; border: 0; background: transparent; color: var(--ink-2); cursor: pointer; }
+.view-switch button.on { background: var(--surface-2); color: var(--ink); font-weight: 600; }
+.work-board .bcol { max-height: min(72vh, 760px); }
+.work-board .board-controls { margin-bottom: 8px; }
+
+/* Coverage directory tree: one grid per row so columns line up at every depth. */
+.cov-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.cov-tree { font-size: 13px; overflow-x: auto; }
+.cov-row { display: grid; grid-template-columns: minmax(220px, 1fr) repeat(var(--metrics), 96px) 150px; align-items: center; gap: 8px; padding: 4px 6px; border-bottom: 1px solid var(--grid); min-width: 640px; }
+.cov-head { color: var(--ink-2); font-size: 12px; font-weight: 600; }
+.cov-dir > summary { list-style: none; cursor: pointer; }
+.cov-dir > summary::-webkit-details-marker { display: none; }
+.cov-dir > summary:hover, .cov-file:hover { background: var(--surface-2); }
+.cov-name { padding-left: calc(var(--depth, 0) * 16px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.cov-dir > summary .cov-name { font-weight: 600; }
+.cov-file .cov-name { padding-left: calc(var(--depth, 0) * 16px + 16px); }
+.cov-toggle { display: inline-block; width: 16px; color: var(--muted); }
+.cov-toggle::before { content: "▸"; }
+.cov-dir[open] > summary .cov-toggle::before { content: "▾"; }
+.cov-cell { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cov-cell.main { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.cov-cell .ratio { width: 44px; }
+.cov-count { text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.good-text { color: var(--good-text); } .warn-text { color: var(--ink-2); } .bad-text { color: var(--critical); }
+@media (max-width: 700px) {
+  .cov-row { grid-template-columns: minmax(140px, 1fr) repeat(var(--metrics), 70px) 110px; min-width: 520px; }
+  .work-board .bcol { max-height: 70vh; }
+}

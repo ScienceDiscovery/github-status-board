@@ -1,5 +1,6 @@
-/* 看板标签页：GitHub Projects 风格的本地项目板。
+/* Issue / PR 页的看板视图：GitHub Projects 风格的本地项目板。
  * 数据 = 快照里的 Issue/PR + 本地字段（状态/优先级/迭代/备注），由静态快照和浏览器字段装配；
+ * 每个页面只显示自己的类型，筛选偏好按类型分别保存。
  * 拖拽、字段编辑、列设置都只写当前浏览器存储，不写回 GitHub。 */
 (() => {
   'use strict';
@@ -9,19 +10,25 @@
   const MARKER = 'github-status-board';
   const LS_KEY = 'gsb.board.prefs';
   const NONE = '__none__';
-  const GROUPS = { status: '状态', priority: '优先级', iteration: '迭代', assignee: '负责人', label: '标签', milestone: '里程碑', kind: '类型', author: '作者' };
+  const GROUPS = { status: '状态', priority: '优先级', iteration: '迭代', assignee: '负责人', label: '标签', milestone: '里程碑', author: '作者' };
+  const SCOPES = { issue: { tab: 'issues', name: 'Issue' }, pr: { tab: 'prs', name: 'PR' } };
   const DRAGGABLE = new Set(['status', 'priority', 'iteration']);
   const PRIORITY_TONE = { P0: 'bad', P1: 'serious', P2: 'warn', P3: '' };
   const REVIEW = { APPROVED: ['已批准', 'good'], CHANGES_REQUESTED: ['需修改', 'bad'], REVIEW_REQUIRED: ['待评审', 'warn'], NONE: ['无评审', ''] };
   const COLOR_VAR = (c) => (c && /^s[1-8]$/.test(c) ? `var(--${c})` : c === 'critical' ? 'var(--critical)' : c === 'serious' ? 'var(--serious)' : c === 'warning' ? 'var(--warning)' : 'var(--muted)');
 
-  const B = { data: null, error: null, loading: false, snapshotAt: null, prefs: loadPrefs(), drag: null, drawer: null, details: {}, sort: { key: 'updated_at', dir: 'desc' }, historyOpen: false };
+  const B = { data: null, error: null, loading: false, snapshotAt: null, scope: 'issue', prefsBy: { issue: loadPrefs('issue'), pr: loadPrefs('pr') }, drag: null, drawer: null, details: {}, historyOpen: false, scroll: new Map() };
+  // The page that mounted the board owns the filters and grouping in use.
+  Object.defineProperty(B, 'prefs', { get: () => B.prefsBy[B.scope] });
 
-  function loadPrefs() {
-    const base = { view: 'board', group: 'status', equal: true, filters: { q: '', kind: '', state: '', label: '', assignee: '', author: '', priority: '', iteration: '', milestone: '' } };
-    try { const saved = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); return { ...base, ...saved, filters: { ...base.filters, ...(saved.filters || {}) } }; } catch (e) { return base; }
+  function loadPrefs(scope) {
+    const base = { group: 'status', equal: true, filters: { q: '', state: '', label: '', assignee: '', author: '', priority: '', iteration: '', milestone: '' } };
+    try {
+      const saved = JSON.parse(localStorage.getItem(`${LS_KEY}.${scope}`) || '{}');
+      return { ...base, ...saved, group: GROUPS[saved.group] ? saved.group : base.group, filters: { ...base.filters, ...(saved.filters || {}) } };
+    } catch (e) { return base; }
   }
-  const savePrefs = () => { try { localStorage.setItem(LS_KEY, JSON.stringify(B.prefs)); } catch (e) { /* private mode */ } };
+  const savePrefs = () => { try { localStorage.setItem(`${LS_KEY}.${B.scope}`, JSON.stringify(B.prefs)); } catch (e) { /* private mode */ } };
 
   // ------------------------------------------------------------ data access
   async function fetchJson(url, opts={}) { return window.GSBLocalBoard.request(url, opts); }
@@ -53,7 +60,7 @@
   function filtered() {
     const f = B.prefs.filters, q = (f.q || '').trim().toLowerCase();
     return (B.data?.items || []).filter((i) => {
-      if (f.kind && i.kind !== f.kind) return false;
+      if (i.kind !== B.scope) return false;
       if (f.state === 'open' && i.state !== 'open') return false;
       if (f.state === 'closed' && i.state !== 'closed') return false;
       if (f.label && !i.labels.some((l) => l.name === f.label)) return false;
@@ -74,7 +81,6 @@
       case 'assignee': return item.assignees.length ? item.assignees : [NONE];
       case 'label': return item.labels.length ? item.labels.map((l) => l.name) : [NONE];
       case 'milestone': return [item.milestone || NONE];
-      case 'kind': return [item.kind];
       case 'author': return [item.author || NONE];
       default: return [NONE];
     }
@@ -85,11 +91,10 @@
     const put = (key, item) => { if (!buckets.has(key)) buckets.set(key, []); buckets.get(key).push(item); };
     items.forEach((i) => groupKeys(i, group).forEach((k) => put(k, i)));
     let keys = [];
-    const noneLabel = { status: '未分类', priority: '未设置', iteration: '未设置', assignee: '未指派', label: '无标签', milestone: '无里程碑', kind: '其他', author: '未知' }[group];
+    const noneLabel = { status: '未分类', priority: '未设置', iteration: '未设置', assignee: '未指派', label: '无标签', milestone: '无里程碑', author: '未知' }[group];
     if (group === 'status') keys = d.fields.status.options.map((o) => o.name);
     else if (group === 'priority') keys = d.fields.priority.options.map((o) => o.name);
     else if (group === 'iteration') keys = d.facets.iterations;
-    else if (group === 'kind') keys = ['issue', 'pr'];
     else keys = [...buckets.keys()].filter((k) => k !== NONE).sort((a, b) => (buckets.get(b).length - buckets.get(a).length) || a.localeCompare(b));
     if (!keys.includes(NONE) && buckets.has(NONE)) keys = group === 'status' ? [NONE, ...keys] : [...keys, NONE];
     const optByName = Object.fromEntries((d.fields.status.options || []).map((o) => [o.name, o]));
@@ -99,7 +104,7 @@
       const opt = group === 'status' ? optByName[k] : group === 'priority' ? prByName[k] : null;
       const openCount = cards.filter((c) => c.state === 'open').length;
       return {
-        key: k, label: k === NONE ? noneLabel : (group === 'kind' ? (k === 'pr' ? 'Pull Request' : 'Issue') : (group === 'priority' ? (opt?.label || k) : k)),
+        key: k, label: k === NONE ? noneLabel : (group === 'priority' ? (opt?.label || k) : k),
         color: opt?.color || null, limit: opt?.limit || null, description: opt?.description || '',
         over: !!(opt?.limit && openCount > opt.limit), open: openCount, items: cards,
         readonly: !DRAGGABLE.has(group),
@@ -130,35 +135,12 @@
     const body = col.items.length ? col.items.map((i) => cardHtml(i, !col.readonly)).join('') : '<div class="bcol-empty">拖卡片到这里</div>';
     return `<div class="bcol ${col.over ? 'over' : ''} ${col.readonly ? 'readonly' : ''}" data-key="${esc(col.key)}" data-group="${group}">${head}<div class="bcol-body">${body}</div></div>`;
   }
-  function tableHtml(items) {
-    const d = B.data, s = B.sort;
-    const cols = [
-      { key: 'kind', label: '类型' }, { key: 'number', label: '#' }, { key: 'title', label: '标题' }, { key: 'status', label: '状态' },
-      { key: 'priority', label: '优先级' }, { key: 'iteration', label: '迭代' }, { key: 'assignees', label: '负责人' }, { key: 'labels', label: '标签' },
-      { key: 'milestone', label: '里程碑' }, { key: 'state', label: 'GitHub 状态' }, { key: 'updated_at', label: '更新' },
-    ];
-    const val = (i, k) => (k === 'assignees' ? i.assignee_names.join(',') : k === 'labels' ? i.labels.map((l) => l.name).join(',') : k === 'status' ? d.fields.status.options.findIndex((o) => o.name === i.status) : i[k]);
-    const rows = items.slice().sort((a, b) => { const va = val(a, s.key), vb = val(b, s.key); if (va == null) return 1; if (vb == null) return -1; return (va > vb ? 1 : va < vb ? -1 : 0) * (s.dir === 'desc' ? -1 : 1); });
-    const opts = (list, cur, none) => `<option value=""${cur ? '' : ' selected'}>${none}</option>${list.map((o) => `<option value="${esc(o.name)}"${o.name === cur ? ' selected' : ''}>${esc(o.label || o.name)}</option>`).join('')}`;
-    return `<div class="table-wrap board-table"><table><thead><tr>${cols.map((c) => `<th class="sortable" data-bsort="${c.key}">${c.label}${s.key === c.key ? (s.dir === 'desc' ? ' ▼' : ' ▲') : ''}</th>`).join('')}</tr></thead><tbody>${rows.map((i) => `<tr data-id="${esc(i.id)}">
-      <td>${kindTag(i)}</td><td class="num">${link(i.url, `#${i.number}`)}</td>
-      <td>${link(i.url, esc(i.title))} <button class="icon-btn" data-open="${esc(i.id)}"${tip('详情')}>⤢</button>${i.note ? `<div class="sub">${esc(i.note)}</div>` : ''}</td>
-      <td><select data-field="status" data-id="${esc(i.id)}">${opts(d.fields.status.options, i.status, '未分类')}</select></td>
-      <td><select data-field="priority" data-id="${esc(i.id)}">${opts(d.fields.priority.options, i.priority, '无')}</select></td>
-      <td><input data-field="iteration" data-id="${esc(i.id)}" list="iteration-list" value="${esc(i.iteration || '')}" placeholder="如 2026-W39" size="10"></td>
-      <td>${i.assignee_names.map(esc).join(', ') || '<span class="muted">—</span>'}</td>
-      <td>${labelChips(i.labels)}</td><td>${esc(i.milestone || '')}</td>
-      <td>${i.state === 'open' ? badge('open', 'good') : badge(i.merged ? 'merged' : 'closed', 'none')}</td>
-      <td>${ago(i.updated_at)}</td></tr>`).join('')}</tbody></table></div>
-      <datalist id="iteration-list">${(d.facets.iterations || []).map((x) => `<option value="${esc(x)}">`).join('')}</datalist>`;
-  }
   function toolbarHtml(items) {
     const d = B.data, f = B.prefs.filters, p = B.prefs;
     const sel = (name, list, cur, allLabel, noneLabel) => `<select data-bfilter="${name}"><option value="">${allLabel}</option>${noneLabel ? `<option value="${NONE}"${cur === NONE ? ' selected' : ''}>${noneLabel}</option>` : ''}${list.map((x) => { const [v, l] = Array.isArray(x) ? x : [x, x]; return `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`; }).join('')}</select>`;
-    const chips = Object.entries(f).filter(([k, v]) => v).map(([k, v]) => `<span class="chip">${esc({ q: '搜索', kind: '类型', state: '状态', label: '标签', assignee: '负责人', author: '作者', priority: '优先级', iteration: '迭代', milestone: '里程碑' }[k])}: ${esc(v === NONE ? '无' : v)} <button data-bclear="${k}">×</button></span>`).join('');
+    const chips = Object.entries(f).filter(([k, v]) => v).map(([k, v]) => `<span class="chip">${esc({ q: '搜索', state: '状态', label: '标签', assignee: '负责人', author: '作者', priority: '优先级', iteration: '迭代', milestone: '里程碑' }[k])}: ${esc(v === NONE ? '无' : v)} <button data-bclear="${k}">×</button></span>`).join('');
     const summary = p.group === 'status' ? columns(items).map((c) => `<span class="sum ${c.over ? 'over' : ''}" style="--col:${c.color ? COLOR_VAR(c.color) : 'var(--axis)'}"><i></i>${esc(c.label)} <b>${c.items.length}</b>${c.limit ? `<span class="muted">/${c.limit}</span>` : ''}</span>`).join('') : '';
     return `<div class="board-toolbar">
-      <div class="seg" data-bpref="view">${['board', 'table'].map((v) => `<button class="${p.view === v ? 'on' : ''}" data-val="${v}">${v === 'board' ? '看板' : '表格'}</button>`).join('')}</div>
       <div class="seg" data-bpref="group"><span class="seg-label">分组</span>${Object.entries(GROUPS).map(([k, l]) => `<button class="${p.group === k ? 'on' : ''}" data-val="${k}">${l}</button>`).join('')}</div>
       <label class="check"><input type="checkbox" data-bpref="equal" ${p.equal ? 'checked' : ''}> 等高列</label>
       <span class="grow"></span>
@@ -168,11 +150,11 @@
     </div>
     <div class="board-filters">
       <input type="search" data-bfilter="q" placeholder="搜索编号 / 标题 / 备注" value="${esc(f.q)}">
-      ${sel('kind', [['issue', '只看 Issue'], ['pr', '只看 PR']], f.kind, '全部类型')}${sel('state', [['open', '只看开放'], ['closed', '只看已关闭']], f.state, '开放 + 最近关闭')}
+      ${sel('state', [['open', '只看开放'], ['closed', '只看已关闭']], f.state, '开放 + 最近关闭')}
       ${sel('label', d.facets.labels, f.label, '全部标签', '无标签')}${sel('assignee', d.facets.assignees, f.assignee, '全部负责人', '未指派')}
       ${sel('author', d.facets.authors, f.author, '全部作者')}${sel('priority', d.facets.priorities, f.priority, '全部优先级', '未设置')}
       ${sel('iteration', d.facets.iterations, f.iteration, '全部迭代', '未设置')}${sel('milestone', d.facets.milestones, f.milestone, '全部里程碑', '无里程碑')}
-      <span class="muted small">${items.length} / ${d.items.length} 张卡</span>
+      <span class="muted small">${items.length} / ${d.items.filter((i) => i.kind === B.scope).length} 张卡</span>
     </div>
     ${chips ? `<div class="chips">${chips}<button class="btn small" data-baction="clear-filters">清除全部</button></div>` : ''}
     ${summary ? `<div class="board-summary">${summary}<span class="muted small">规则：加入→${esc(d.rules.default_status)} · 指派→${esc(d.rules.doing_status)} · 关联 PR→${esc(d.rules.review_status)} · 关闭/合并→${esc(d.rules.done_status)}</span></div>` : ''}
@@ -191,7 +173,7 @@
 
   // ------------------------------------------------------------ rendering: page
   function render() {
-    const root = $('#tab-board');
+    const root = $(`#tab-${SCOPES[B.scope].tab} .work-board`);
     if (!root) return;
     if (B.error && !B.data) { root.innerHTML = `<div class="banner error"><span class="icon">⛔</span><div><div class="title">看板数据不可用</div><div>${esc(B.error)}</div></div><div class="banner-actions"><button class="btn small" data-baction="reload">重试</button></div></div>`; return; }
     if (!B.data) { root.innerHTML = `<div class="skeleton"><span class="spinner"></span>装配看板…</div>`; return; }
@@ -201,23 +183,24 @@
     if (B.error) html += `<div class="banner warn"><span class="icon">▲</span><div>${esc(B.error)}</div></div>`;
     if (B.historyOpen) html += historyHtml();
     html += '</div>';
-    if (B.prefs.view === 'table') html += `<div class="card board-table-panel">${tableHtml(items)}</div>`;
-    else {
-      const cols = columns(items);
-      html += `<div class="board ${B.prefs.equal ? 'equal' : ''}">${cols.map((c) => columnHtml(c, B.prefs.group)).join('')}</div>`;
-    }
-    html += `<div class="muted small board-foot">数据：快照 ${ago(B.data.snapshot_generated_at)} 的 Issue/PR + 本地字段（${B.data.counts.issues} Issue · ${B.data.counts.prs} PR，含最近 ${esc(String(B.data.rules.closed_window_days))} 天关闭的）。拖拽只改本地字段，不写回 GitHub。</div>`;
-    // Preserve the independent scroll areas when fields or the snapshot update.
-    const scrollKey = el => el.classList.contains('bcol-body')
-      ? 'column:' + el.parentElement.dataset.group + ':' + el.parentElement.dataset.key : el.classList.contains('board') ? 'board' : el.className;
-    const scrollable = '.board, .board-controls, .board-table, .bcol-body';
-    const positions = new Map([...root.querySelectorAll(scrollable)].map(el => [scrollKey(el), [el.scrollLeft, el.scrollTop]]));
+    const cols = columns(items);
+    html += `<div class="board ${B.prefs.equal ? 'equal' : ''}">${cols.map((c) => columnHtml(c, B.prefs.group)).join('')}</div>`;
+    html += `<div class="muted small board-foot">数据：快照 ${ago(B.data.snapshot_generated_at)} 的 ${SCOPES[B.scope].name} + 本地字段（${B.scope === 'pr' ? B.data.counts.prs : B.data.counts.issues} 个，含最近 ${esc(String(B.data.rules.closed_window_days))} 天关闭的）。拖拽只改本地字段，不写回 GitHub。</div>`;
+    // The page re-renders its mount point on every refresh, so scroll positions are
+    // recorded as the reader scrolls and restored whenever the board is drawn again.
     root.innerHTML = html;
-    root.querySelectorAll(scrollable).forEach(el => {
-      const pos = positions.get(scrollKey(el));
+    root.querySelectorAll(SCROLLABLE).forEach(el => {
+      const pos = B.scroll.get(`${B.scope}:${scrollKey(el)}`);
       if (pos) [el.scrollLeft, el.scrollTop] = pos;
     });
   }
+  const SCROLLABLE = '.board, .board-controls, .bcol-body';
+  const scrollKey = el => el.classList.contains('bcol-body')
+    ? 'column:' + el.parentElement.dataset.group + ':' + el.parentElement.dataset.key : el.classList.contains('board') ? 'board' : el.className;
+  document.addEventListener('scroll', (ev) => {
+    const el = ev.target;
+    if (el.matches?.(SCROLLABLE) && el.closest('.work-board')) B.scroll.set(`${B.scope}:${scrollKey(el)}`, [el.scrollLeft, el.scrollTop]);
+  }, true);
 
   // ------------------------------------------------------------ drawer
   function openDrawer(id) { B.drawer = id; renderDrawer(); if (!B.details[id]) loadDetail(id); }
@@ -391,12 +374,10 @@
     const t = ev.target;
     const open = t.closest?.('[data-open]');
     if (open) { ev.preventDefault(); openDrawer(open.dataset.open); return; }
-    const seg = t.closest?.('.seg button');
-    if (seg) { const pref = seg.closest('.seg').dataset.bpref; B.prefs[pref] = seg.dataset.val; savePrefs(); render(); return; }
+    const seg = t.closest?.('[data-bpref] button');
+    if (seg) { const pref = seg.closest('[data-bpref]').dataset.bpref; B.prefs[pref] = seg.dataset.val; savePrefs(); render(); return; }
     const clear = t.closest?.('[data-bclear]');
     if (clear) { B.prefs.filters[clear.dataset.bclear] = ''; savePrefs(); render(); return; }
-    const th = t.closest?.('th[data-bsort]');
-    if (th) { const k = th.dataset.bsort; B.sort = B.sort.key === k ? { key: k, dir: B.sort.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'asc' }; render(); return; }
     const rowBtn = t.closest?.('[data-srow]');
     if (rowBtn) {
       const tr = rowBtn.closest('tr'), op = rowBtn.dataset.srow;
@@ -426,10 +407,7 @@
   });
   document.addEventListener('change', (ev) => {
     const el = ev.target;
-    if (el.matches?.('[data-field]')) {
-      const id = el.dataset.id, field = el.dataset.field, value = el.value === '' ? null : el.value;
-      mutate(() => post(`/api/board/items/${id}`, { [field]: value }));
-    } else if (el.matches?.('[data-dfield]') && B.drawer) {
+    if (el.matches?.('[data-dfield]') && B.drawer) {
       const field = el.dataset.dfield, value = el.value === '' ? null : el.value;
       mutate(() => post(`/api/board/items/${B.drawer}`, { [field]: value }));
     }
@@ -457,6 +435,8 @@
     try {const file=ev.target.files[0];if(!file)return;if(file.size>5*1024*1024)throw Error('导入文件超过 5 MiB');window.GSBLocalBoard.import(await file.text());await load();}
     catch(err){flash('导入失败：'+err.message);}
   });
-  window.GSBBoard = { onSnapshot, load, render };
+  // Issue and PR pages call this when their list switches to the board.
+  function mount(scope) { if (!SCOPES[scope]) return; B.scope = scope; if (B.data) render(); else if (H.snapshot()) onSnapshot(H.snapshot()); }
+  window.GSBBoard = { onSnapshot, load, render, mount };
   if(H.snapshot())onSnapshot(H.snapshot());
 })();
