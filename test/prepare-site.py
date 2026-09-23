@@ -47,7 +47,14 @@ python_totals=dict(lines=dict(covered=5845,total=8932,percentage=65.44),branches
 def coverage_language(name,totals,group):
     baseline=dict(artifact=f'{name}-coverage-summary-main-incremental-mainsha',created_at=time,kind='main full',sha='a'*40,totals=totals,groups=[dict(name=group,files=4,totals=totals)])
     current=dict(kind='authoritative',totals=totals,groups=[dict(name=group,files=4,totals=totals,source_sha='a'*40,updated_at=time,update_kind='full baseline')],increments=[])
-    return dict(language=name,source='artifact:'+baseline['artifact'],scope='fixture coverage scope',baseline=baseline,current=current,history=[dict(created_at=time,sha='a'*40,totals=totals)],pull_requests=[dict(number=3,branch='fix-timeout',created_at=time,sha='a'*40,groups=current['groups'],totals=totals)])
+    percentages=[totals['lines']['percentage']-1.8,totals['lines']['percentage']-1.2,totals['lines']['percentage']-0.4,totals['lines']['percentage']]
+    history=[]
+    for day,percentage in zip(range(17,21),percentages):
+        historical_totals=json.loads(json.dumps(totals))
+        historical_totals['lines']['percentage']=round(percentage,2)
+        historical_totals['lines']['covered']=round(historical_totals['lines']['total']*percentage/100)
+        history.append(dict(created_at=f'2026-09-{day}T12:00:00Z',sha='a'*40,totals=historical_totals))
+    return dict(language=name,source='artifact:'+baseline['artifact'],scope='fixture coverage scope',baseline=baseline,current=current,history=history,pull_requests=[dict(number=3,branch='fix-timeout',created_at=time,sha='a'*40,groups=current['groups'],totals=totals)])
 combined=dict(lines=dict(covered=54723,total=67796,percentage=80.72),branches=dict(covered=15494,total=20634,percentage=75.09),functions=node_totals['functions'])
 tests['coverage']=dict(source='Actions coverage summaries',value=dict(format='sciencediscovery-summary',lines_pct=80.72,branches_pct=75.09,functions_pct=83.56),current=dict(kind='authoritative',totals=combined),languages=dict(node=coverage_language('node',node_totals,'packages/core'),python=coverage_language('python',python_totals,'services/evolve')),attempts=[dict(step='Actions 覆盖率摘要',ok=True,detail='Node.js + Python')])
 runs[0]['jobs'].append(dict(name='Coverage',status='completed',conclusion='success',url=runs[0]['url']+'/job/coverage',failed_steps=[],duration_s=385))
