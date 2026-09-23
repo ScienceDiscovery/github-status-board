@@ -27,7 +27,7 @@ from gsb.collectors import Context
 from gsb.public_sections import public_tests
 
 item.update(state='open',created_at=time,comments=0,idle_days=4,body='## Reproduction\nDetails for #1. <script>alert(2)</script>')
-pr.update(state='open',created_at=time,comments=1,idle_days=4,body='Fixes #1',head='fix-timeout',base='main',requested_reviewers=['reviewer'],reviews=[],waiting_review=True,mergeable='CONFLICTING',linked_issues=[1])
+pr.update(state='open',created_at=time,comments=1,idle_days=4,body='Fixes #1',head='fix-timeout',base='feat/jiuwenswarm',requested_reviewers=['reviewer'],reviews=[],waiting_review=True,mergeable='CONFLICTING',linked_issues=[1])
 issues=doc['issues']; issues.update(unlabeled_count=0,no_response_count=1,median_age_days=4,oldest_age_days=4,stale_days_threshold=30,labels=[dict(name='bug',color='aa3333',count=1)],unused_labels=[],aging=[dict(bucket='0–7 天',count=1)],assignee_load=[],milestones=[dict(name='v1.0',count=1)],recent=[item],stale=[],oldest=[item],closed_recent=[])
 issues['counts'].update(closed_total=3,opened_7d=1,closed_7d=0)
 prs=doc['prs'];prs.update(review_sla_days=3,ci_states={'failure':1},review_decisions={'CHANGES_REQUESTED':1},closed_unmerged_30d=0,p90_time_to_merge_h=5,median_time_to_merge_h_human=3,merged_human_count=2,reviewer_load=[dict(login='reviewer',count=1)],authors=[dict(login='maintainer',count=1)],recent_merged=[],recent_closed_unmerged=[])
