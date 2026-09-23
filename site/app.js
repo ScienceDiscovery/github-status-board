@@ -48,7 +48,7 @@
   const CONCLUSION_TONE = { success: 'good', failure: 'bad', timed_out: 'bad', cancelled: '', skipped: '', in_progress: 'warn', queued: 'warn', pending: 'warn', neutral: '', action_required: 'warn', startup_failure: 'bad', error: 'bad', expected: 'warn' };
   const CONCLUSION_NAME = { success: '成功', failure: '失败', timed_out: '超时', cancelled: '取消', skipped: '跳过', in_progress: '运行中', queued: '排队', pending: '等待', neutral: '中性', action_required: '需处理', startup_failure: '启动失败', error: '错误', expected: '等待' };
 
-  const STATE = { snap: null, status: null, tab: 'overview', sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, pollTimer: null };
+  const STATE = { snap: null, status: null, tab: 'overview', sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, coverageWeekOffset: 0, pollTimer: null };
 
   // ------------------------------------------------------------ components
   const badge = (text, tone = '', extra = '') => `<span class="badge ${tone}"${extra}>${esc(text)}</span>`;
@@ -90,11 +90,55 @@
     const dots = pts.map((p, i) => `<rect x="${(p[0] - 6).toFixed(1)}" y="0" width="12" height="${h}" fill="transparent"${tip(`${labels[i] || ''}: ${values[i]} ${unit}`)}></rect>`).join('');
     return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path class="area" d="${area}"></path><line class="base" x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}"></line><path d="${path}"></path><circle cx="${last[0]}" cy="${last[1]}" r="3"></circle>${dots}</svg>`;
   };
-  const coverageTrend = (history) => {
-    if (!history.length) return '';
+  const dayDate = (day) => new Date(`${day}T00:00:00Z`);
+  const dayString = (value) => {
+    const d = value instanceof Date ? value : dayDate(value);
+    return d.toISOString().slice(0, 10);
+  };
+  const addDays = (day, count) => {
+    const d = dayDate(day);
+    d.setUTCDate(d.getUTCDate() + count);
+    return dayString(d);
+  };
+  const weekStart = (day) => {
+    const d = dayDate(day);
+    const offset = (d.getUTCDay() + 6) % 7;
+    return addDays(day, -offset);
+  };
+  const dayLabel = (day) => {
+    const d = dayDate(day);
+    return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+  };
+  const coverageRange = (languages) => {
+    const days = Object.values(languages).flatMap((dataset) => (dataset.history || []).map((row) => row.day).filter(Boolean)).sort();
+    if (!days.length) return null;
+    const latestDay = days[days.length - 1];
+    const earliest = weekStart(days[0]);
+    const firstHistoryWeek = addDays(weekStart(latestDay), -7);
+    const maxOffset = dayDate(firstHistoryWeek) < dayDate(earliest)
+      ? 0
+      : Math.floor((dayDate(firstHistoryWeek) - dayDate(earliest)) / 604800000) + 1;
+    STATE.coverageWeekOffset = Math.max(0, Math.min(STATE.coverageWeekOffset, maxOffset));
+    if (STATE.coverageWeekOffset === 0) {
+      return { start: addDays(latestDay, -6), end: latestDay, maxOffset, recent: true };
+    }
+    const start = addDays(firstHistoryWeek, -7 * (STATE.coverageWeekOffset - 1));
+    return { start, end: addDays(start, 6), maxOffset, recent: false };
+  };
+  const coverageTrend = (history, selectedWeek) => {
+    if (!selectedWeek) return '';
     const w = 800, h = 210, left = 58, right = 18, top = 12, bottom = 34;
     const plotW = w - left - right, plotH = h - top - bottom;
-    const values = history.map((row) => Number(row.totals.lines.percentage));
+    const byDay = new Map(history.filter((row) => row.day).map((row) => [row.day, row]));
+    const slots = Array.from({ length: 7 }, (_, index) => {
+      const day = addDays(selectedWeek, index);
+      return { day, row: byDay.get(day) || null };
+    });
+    const values = slots.filter((slot) => slot.row?.totals?.lines?.percentage != null)
+      .map((slot) => Number(slot.row.totals.lines.percentage));
+    if (!values.length) {
+      return `<div class="coverage-week-empty">${slots.map((slot) => `<span>${dayLabel(slot.day)}</span>`).join('')}<strong>该周没有成功的完整覆盖率结果</strong></div>`;
+    }
     const rawMin = Math.min(...values), rawMax = Math.max(...values);
     const margin = Math.max((rawMax - rawMin) * 0.18, 0.5);
     const paddedMin = Math.max(0, rawMin - margin), paddedMax = Math.min(100, rawMax + margin);
@@ -105,42 +149,49 @@
     const yMin = Math.max(0, Math.floor(paddedMin / tickStep) * tickStep);
     const yMax = Math.min(100, Math.ceil(paddedMax / tickStep) * tickStep);
     const yRange = yMax - yMin || 1;
-    const pts = values.map((value, index) => ({
-      x: left + (index * plotW) / Math.max(values.length - 1, 1),
-      y: top + ((yMax - value) / yRange) * plotH,
-      value,
-      row: history[index],
-    }));
-    const path = pts.map((point, index) => `${index ? 'L' : 'M'}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
+    const pts = slots.map((slot, index) => {
+      if (!slot.row) return null;
+      const value = Number(slot.row.totals.lines.percentage);
+      return {
+        x: left + (index * plotW) / 6,
+        y: top + ((yMax - value) / yRange) * plotH,
+        value,
+        row: slot.row,
+        day: slot.day,
+      };
+    });
+    const segments = [];
+    for (const point of pts) {
+      if (!point) {
+        if (segments.length && segments[segments.length - 1].length) segments.push([]);
+        continue;
+      }
+      if (!segments.length) segments.push([]);
+      segments[segments.length - 1].push(point);
+    }
+    const populated = segments.filter((segment) => segment.length);
+    const paths = populated.map((segment) => segment.map((point, index) => `${index ? 'L' : 'M'}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' '));
     const baseY = top + plotH;
-    const area = `${path} L${pts[pts.length - 1].x.toFixed(1)},${baseY} L${pts[0].x.toFixed(1)},${baseY} Z`;
+    const areas = populated.filter((segment) => segment.length > 1).map((segment) => {
+      const path = segment.map((point, index) => `${index ? 'L' : 'M'}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
+      return `${path} L${segment[segment.length - 1].x.toFixed(1)},${baseY} L${segment[0].x.toFixed(1)},${baseY} Z`;
+    });
     const ticks = Array.from({ length: Math.round((yMax - yMin) / tickStep) + 1 }, (_, index) => yMin + tickStep * index);
     const yAxis = ticks.map((value) => {
       const y = top + ((yMax - value) / yRange) * plotH;
       const label = tickStep < 1 ? value.toFixed(1) : value.toFixed(0);
       return `<line class="coverage-grid" x1="${left}" y1="${y.toFixed(1)}" x2="${w - right}" y2="${y.toFixed(1)}"></line><text class="coverage-y-label" x="${left - 9}" y="${(y + 4).toFixed(1)}" text-anchor="end">${label}%</text>`;
     }).join('');
-    const dates = [];
-    pts.forEach((point) => {
-      const label = shortDate(point.row.created_at);
-      const bucket = dates.find((item) => item.label === label);
-      if (bucket) bucket.points.push(point);
-      else dates.push({ label, points: [point] });
-    });
-    const dateIndexes = dates.length <= 6
-      ? dates.map((_, index) => index)
-      : [...new Set(Array.from({ length: 6 }, (_, index) => Math.round((index * (dates.length - 1)) / 5)))];
-    const xAxis = dateIndexes.map((index) => {
-      const bucket = dates[index];
-      const x = bucket.points.reduce((sum, point) => sum + point.x, 0) / bucket.points.length;
-      const anchor = index === 0 && x === left ? 'start' : index === dates.length - 1 && x === w - right ? 'end' : 'middle';
-      return `<text class="coverage-x-label" x="${x.toFixed(1)}" y="${h - 8}" text-anchor="${anchor}">${esc(bucket.label)}</text>`;
+    const xAxis = slots.map((slot, index) => {
+      const x = left + (index * plotW) / 6;
+      const anchor = index === 0 ? 'start' : index === 6 ? 'end' : 'middle';
+      return `<text class="coverage-x-label" x="${x.toFixed(1)}" y="${h - 8}" text-anchor="${anchor}">${dayLabel(slot.day)}</text>`;
     }).join('');
-    const dots = pts.map((point) => {
-      const label = `${shortDateTime(point.row.created_at)} · ${pct(point.value)}`;
+    const dots = pts.filter(Boolean).map((point) => {
+      const label = `${date(point.row.created_at)} · ${pct(point.value)}\n${point.row.kind === 'nightly' ? 'nightly' : 'main push'} · ${(point.row.sha || '').slice(0, 12)}\n${point.row.artifact || ''}`;
       return `<circle class="coverage-dot" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4"></circle><circle class="coverage-hit" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="11"${tip(label)}></circle>`;
     }).join('');
-    return `<svg class="coverage-trend" viewBox="0 0 ${w} ${h}" role="img" aria-label="完整行覆盖率历史趋势">${yAxis}<line class="coverage-axis" x1="${left}" y1="${top}" x2="${left}" y2="${baseY}"></line><line class="coverage-axis" x1="${left}" y1="${baseY}" x2="${w - right}" y2="${baseY}"></line><path class="coverage-area" d="${area}"></path><path class="coverage-line" d="${path}"></path>${dots}${xAxis}</svg>`;
+    return `<svg class="coverage-trend" viewBox="0 0 ${w} ${h}" role="img" aria-label="完整行覆盖率历史趋势">${yAxis}<line class="coverage-axis" x1="${left}" y1="${top}" x2="${left}" y2="${baseY}"></line><line class="coverage-axis" x1="${left}" y1="${baseY}" x2="${w - right}" y2="${baseY}"></line>${areas.map((area) => `<path class="coverage-area" d="${area}"></path>`).join('')}${paths.map((path) => `<path class="coverage-line" d="${path}"></path>`).join('')}${dots}${xAxis}</svg>`;
   };
   // CI history lanes: one row per trigger lane, one column per day on a shared axis.
   // The collector buckets days and orders runs, so a column simply stacks them top-down.
@@ -247,6 +298,11 @@
     const e2e = tests?.executed?.find((e) => e.layer === 'e2e');
     const mainRate = ci?.main?.success_rate;
     const cov = tests?.coverage;
+    const coverageLanguages = [['node', 'Node.js'], ['python', 'Python']].map(([key, label]) => {
+      const dataset = cov?.languages?.[key];
+      const value = dataset?.current?.totals?.lines?.percentage ?? dataset?.baseline?.totals?.lines?.percentage;
+      return value == null ? null : `${label} ${pct(value)}`;
+    }).filter(Boolean).join(' · ');
     const rel = ops?.releases?.latest;
     let html = window.GSBQuality?.summary() || '';
     html += repo ? `<div class="muted" style="margin-bottom:10px">${esc(repo.description || '')} · ⭐ ${n(repo.stars)} · fork ${n(repo.forks)} · ${esc(repo.language || '')} · ${esc(repo.license || '无 license')} · 默认分支 <code>${esc(repo.default_branch)}</code> · 最近 push ${ago(repo.pushed_at)}</div>` : '';
@@ -256,7 +312,7 @@
       { label: `CI 主干成功率`, value: pct(mainRate), href: '#ci', sub: ci ? `连续失败 ${ci.red_streak_main} 次 · 7 天失败 ${ci.failures_7d}` : '—', tone: mainRate == null ? '' : mainRate >= 80 ? 'good' : mainRate >= 50 ? 'warn' : 'bad' },
       { label: 'CI 最近执行用例', value: n(ut?.totals?.tests), href: '#tests', sub: ut?.totals ? `UT 通过 ${n(ut.totals.passed)} · 失败 ${n(ut.totals.failed)}${e2e?.totals ? ` · E2E ${e2e.totals.passed}/${e2e.totals.tests}` : ''}` : ut ? '产物存在但没有解析出用例数' : '无产物', tone: ut?.totals?.failed ? 'bad' : '' },
       { label: '测试文件', value: n(tests?.tree?.total), href: '#tests', sub: tests?.tree ? Object.entries(tests.tree.by_layer).map(([k, v]) => `${k} ${v}`).join(' · ') : '—' },
-      { label: '整仓行覆盖率', value: cov?.value?.lines_pct != null ? pct(cov.value.lines_pct) : '无数据源', href: '#coverage', sub: cov?.source ? `${cov?.current?.kind === 'authoritative' ? '权威完整结果' : cov?.current?.kind === 'incremental' ? '增量估算' : '部分结果'} · ${Object.keys(cov.languages || {}).map((key) => key === 'node' ? 'Node.js' : 'Python').join(' + ') || '单一来源'}` : '已探测 Actions / Codecov / check-run，均未命中', tone: cov?.source ? (cov?.current?.kind === 'authoritative' ? 'good' : 'warn') : 'warn' },
+      { label: '整仓行覆盖率', value: cov?.value?.lines_pct != null ? pct(cov.value.lines_pct) : '无数据源', href: '#coverage', sub: cov?.source ? (coverageLanguages || '单一来源') : '已探测 Actions / Codecov / check-run，均未命中', tone: cov?.source ? (cov?.current?.kind === 'authoritative' ? 'good' : 'warn') : 'warn' },
       { label: '最新 Release', value: rel ? esc(rel.tag) : '—', href: '#ops', sub: rel ? `${days(rel.age_days)}前 · 未发布提交 ${n(ops.releases.unreleased?.commits)}` : '无 release' },
       { label: '社区健康度', value: ops?.community ? pct(ops.community.health_percentage) : '—', href: '#ops', sub: ops?.community ? `缺 ${ops.community.missing.join(', ') || '无'}` : '—' },
     ]);
@@ -584,6 +640,16 @@
       { label: '数据集', value: Object.keys(languages).length, tone: Object.keys(languages).length === 2 ? 'good' : 'warn', sub: Object.keys(languages).map((key) => key === 'node' ? 'Node.js' : 'Python').join(' + ') },
     ]);
 
+    const selectedRange = coverageRange(languages);
+    if (selectedRange) {
+      html += `<div class="coverage-week-toolbar" aria-label="覆盖率趋势时间范围">
+        <button class="btn small" data-coverage-week="older"${STATE.coverageWeekOffset >= selectedRange.maxOffset ? ' disabled' : ''}>‹ 上一周</button>
+        <strong>${selectedRange.recent ? '最新 · ' : ''}${dayLabel(selectedRange.start)}–${dayLabel(selectedRange.end)}</strong>
+        <button class="btn small" data-coverage-week="newer"${STATE.coverageWeekOffset === 0 ? ' disabled' : ''}>下一周 ›</button>
+        <button class="btn small" data-coverage-week="latest"${STATE.coverageWeekOffset === 0 ? ' disabled' : ''}>最新</button>
+      </div>`;
+    }
+
     const query = (STATE.filters.coverageQ || '').trim().toLowerCase();
     const renderLanguage = (key, label) => {
       const dataset = languages[key];
@@ -598,7 +664,6 @@
         { label: `${label} 分支覆盖率`, value: pct(totals.branches?.percentage), sub: `${n(totals.branches?.covered)} / ${n(totals.branches?.total)}` },
       ];
       if (key === 'node') metricTiles.push({ label: `${label} 函数覆盖率`, value: pct(totals.functions?.percentage), sub: `${n(totals.functions?.covered)} / ${n(totals.functions?.total)}` });
-      metricTiles.push({ label: '口径', value: kind, tone, sub: baseline ? `${baseline.kind === 'nightly' ? 'nightly' : 'main 全量'} · ${ago(baseline.created_at)}` : '尚无完整基线' });
       let body = sectionHead(label, dataset.scope || dataset.source);
       if (current.kind !== 'authoritative') {
         body += `<div class="banner warn"><span class="icon">≈</span><div><div class="title">${esc(label)} 当前不是独立完整基线</div><div>${baseline ? `以 ${date(baseline.created_at)} 的完整结果为基线，叠加 ${(current.increments || []).length} 次 main 增量。` : '当前只拿到部分模块摘要；整仓结果会在完整运行后校准。'}</div></div></div>`;
@@ -606,7 +671,7 @@
       body += tiles(metricTiles);
       const history = (dataset.history || []).filter((row) => row.totals?.lines?.percentage != null);
       body += `<div class="grid wide" style="margin-top:12px">
-        ${card(`${label} 完整行覆盖率趋势`, history.length ? coverageTrend(history) : empty('下一次完整运行后会形成趋势'), { sub: '只使用成功的 main push / nightly 完整结果，不混入 PR 结果' })}
+        ${card(`${label} 每日完整行覆盖率`, history.length ? coverageTrend(history, selectedRange?.start) : empty('下一次完整运行后会形成趋势'), { sub: '默认展示最新数据窗口；历史按自然周查看。每天取北京时间最后一个成功的 main push / nightly 完整结果；不混入 PR 结果' })}
         ${card(`${label} 数据身份`, kv([
           ['当前', `${badge(kind, tone)} ${esc(dataset.source)}`],
           ['完整基线', baseline ? `${date(baseline.created_at)} · <code>${esc((baseline.sha || '').slice(0, 12))}</code>` : '尚无'],
@@ -811,6 +876,15 @@
   }
   // ------------------------------------------------------------ events
   document.addEventListener('click', (ev) => {
+    const coverageWeekButton = ev.target.closest('[data-coverage-week]');
+    if (coverageWeekButton && !coverageWeekButton.disabled) {
+      const direction = coverageWeekButton.dataset.coverageWeek;
+      if (direction === 'older') STATE.coverageWeekOffset += 1;
+      if (direction === 'newer') STATE.coverageWeekOffset = Math.max(0, STATE.coverageWeekOffset - 1);
+      if (direction === 'latest') STATE.coverageWeekOffset = 0;
+      renderTabs();
+      return;
+    }
     const th = ev.target.closest('th.sortable[data-table]');
     if (th) {
       const id = th.dataset.table, key = th.dataset.key;
