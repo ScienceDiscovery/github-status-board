@@ -8,9 +8,13 @@
 
 ## 配置和运行
 
-正式看板使用正式 App，测试看板使用独立测试 App；两套 App ID 和私钥不得复用。在两个看板仓各自配置变量 `SDBOT_GITHUB_APP_ID`、Secret `SDBOT_GITHUB_APP_PRIVATE_KEY`。私钥保持多行 PEM，仅保存到 Secrets；不会作为 workflow_dispatch 参数传入，也不写站点或 artifact。App 必须安装到源仓和目标仓，跨组织分别取 installation。
+正式与测试分别配置 Actions Variables：`SDBOT_TOKEN_BROKER_URL` 为对应 Worker 的 HTTPS `/actions/token` 地址，`SDBOT_TOKEN_AUDIENCE` 与该 Worker 的 OIDC audience 一致。采集 job 使用 `id-token: write`，通过 `collect_with_oidc.py` 领取临时凭据，不再使用仓库 App ID 或私钥 Secret。
 
-源仓令牌仅申请 Contents／Issues／Pull requests／Actions／Checks／Commit statuses 读取权限；目标仓令牌仅申请 Contents 写权限。令牌由 `actions/create-github-app-token@v2` 申请，在任务结束时撤销。Worker 触发 collect.yml 的令牌另需目标仓 Actions 写权限。
+Worker 校验 GitHub OIDC 签名、issuer、audience、不可变仓库与组织 ID、main 分支、collect.yml 和 schedule／workflow_dispatch 事件，固定映射决定令牌的仓库和权限。源仓令牌仅有 Contents／Issues／Pull requests／Actions／Checks／Commit statuses 读取权限，目标仓仅有 Contents 写权限；Metadata 均只读。App 私钥保存在对应 Worker，不能把正式私钥交给测试实例。
+
+客户端领取令牌后先遮蔽日志，只把两个安装令牌传给采集子进程；不会传递 OIDC 请求凭据或私钥。结束时尝试撤销两令牌，部分兑换失败也撤销已领取的令牌；强制终止或撤销失败时由令牌有效期兜底。没有长期 Secret 或个人令牌回退。
+
+同一个 run／attempt 对每种用途仅能兑换一次，Worker 持久保存非秘密签发记录。网络失败或响应丢失后使用 GitHub Re-run jobs 或新的运行恢复。先部署支持兑换的 Worker，再更新本仓工作流；验证成功后删除旧 `SDBOT_GITHUB_APP_PRIVATE_KEY` 仓库 Secret。不要撤销 Worker 正在使用的 App 私钥本身。
 
 App 的 Actions 写权限在 App 注册页 **Permissions & events → Repository permissions → Actions → Read and write** 设置，并由目标组织在安装页批准更新；仅修改注册页不等于既有 installation 已获授权。即使两个看板仓同属一个组织，也要分别批准正式与测试 App 各自的 installation；测试 App 只安装到实验源仓及测试看板仓。仓库 Settings → Actions 的默认 `GITHUB_TOKEN` 权限继续保持只读；触发所需的 App Actions 写权限与此设置不同。
 
@@ -36,4 +40,4 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 
 将此功能同步到测试仓前，先比较目标 main 与共同源码基线；目标已有的独立功能须三方合并并在该目标源码上验证。只同步本次明确的源码、工作流、测试与文档，保留目标仓自己的 `.sync/` 和 `site/`，不要整条分支覆盖。切换前停止同站点的本机自动采集，避免两种调度同时写入。
 
-参考：[GitHub App token Action](https://github.com/actions/create-github-app-token/tree/v2)、[工作流触发 API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)。
+参考：[GitHub OIDC](https://docs.github.com/en/actions/reference/security/oidc)、[工作流触发 API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)。

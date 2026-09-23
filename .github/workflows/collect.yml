@@ -25,6 +25,9 @@ jobs:
   collect:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -39,35 +42,11 @@ jobs:
           SOURCE_REPOSITORY: ${{ inputs.source_repository }}
           COLLECTION_REQUEST_ID: ${{ inputs.request_id }}
         run: python3 collection_context.py
-      - name: Create source read token
-        id: source
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ vars.SDBOT_GITHUB_APP_ID }}
-          private-key: ${{ secrets.SDBOT_GITHUB_APP_PRIVATE_KEY }}
-          owner: ${{ steps.context.outputs.source_owner }}
-          repositories: ${{ steps.context.outputs.source_name }}
-          permission-contents: read
-          permission-issues: read
-          permission-pull-requests: read
-          permission-actions: read
-          permission-checks: read
-          permission-statuses: read
-      - name: Create dashboard write token
-        id: target
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ vars.SDBOT_GITHUB_APP_ID }}
-          private-key: ${{ secrets.SDBOT_GITHUB_APP_PRIVATE_KEY }}
-          owner: ${{ steps.context.outputs.target_owner }}
-          repositories: ${{ steps.context.outputs.target_name }}
-          permission-contents: write
-      - name: Collect and commit site snapshot
+      - name: Exchange OIDC credentials and collect
         env:
-          GITHUB_TOKEN: ${{ steps.source.outputs.token }}
-          GSB_PUBLISH_TOKEN: ${{ steps.target.outputs.token }}
           SOURCE_REPOSITORY: ${{ steps.context.outputs.source }}
-          TARGET_REPOSITORY: ${{ steps.context.outputs.target }}
-        run: python3 publish.py --repo "$SOURCE_REPOSITORY" --publish-repo "$TARGET_REPOSITORY" --output .tmp/collected-site --incremental
-      # The App-authored site commit triggers pages.yml. Do not replace the write
-      # token with GITHUB_TOKEN: its push would not trigger that second workflow.
+          COLLECTION_REQUEST_ID: ${{ inputs.request_id }}
+          SDBOT_TOKEN_BROKER_URL: ${{ vars.SDBOT_TOKEN_BROKER_URL }}
+          SDBOT_TOKEN_AUDIENCE: ${{ vars.SDBOT_TOKEN_AUDIENCE }}
+        run: python3 collect_with_oidc.py
+      # Scoped App tokens are revoked after collection. The App commit triggers pages.yml.
