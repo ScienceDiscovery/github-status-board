@@ -193,6 +193,120 @@ class CoverageParserTests(unittest.TestCase):
         self.assertEqual(result["languages"]["node"]["baseline"]["kind"], "main full")
         self.assertEqual(result["languages"]["python"]["baseline"]["kind"], "main full")
 
+    def test_complete_gate_push_is_authoritative_without_legacy_metadata(self):
+        artifacts = [
+            {"id": 2, "name": "python-coverage-summary-push-mainsha", "branch": "main",
+             "sha": "mainsha", "created_at": "2026-09-23T03:00:00Z"},
+            {"id": 1, "name": "node-coverage-summary-push-mainsha", "branch": "main",
+             "sha": "mainsha", "created_at": "2026-09-23T02:59:00Z"},
+        ]
+        layers = {
+            "ut": {"complete": True, "producer": "success"},
+            "st": {"complete": True, "producer": "success"},
+        }
+        node_totals = {
+            "lines": {"covered": 84, "total": 100, "percentage": 84},
+            "branches": {"covered": 64, "total": 100, "percentage": 64},
+            "functions": {"covered": 8, "total": 10, "percentage": 80},
+        }
+        python_totals = {
+            "lines": {"covered": 66, "total": 100, "percentage": 66},
+            "branches": {"covered": 49, "total": 100, "percentage": 49},
+        }
+        manifests = {
+            1: {"schema_version": 1, "layers": layers,
+                "groups": [{"name": "packages/example", "files": 1, "totals": node_totals}],
+                "totals": node_totals},
+            2: {"schema_version": 1, "language": "python", "layers": layers,
+                "groups": [{"name": "services/example", "files": 1, "totals": python_totals}],
+                "totals": python_totals},
+        }
+        ctx = Context(gh=object(), cfg=Config(), now=datetime(2026, 9, 23),
+                      repo_meta={"default_branch": "main"})
+
+        with patch("gsb.collectors._load_artifact",
+                   side_effect=lambda _ctx, artifact, _notes: {"coverage_manifest": manifests[artifact["id"]]}):
+            result = _coverage_probe(ctx, artifacts, [], {}, [])
+
+        self.assertEqual(result["current"]["kind"], "authoritative")
+        self.assertEqual(result["languages"]["node"]["baseline"]["artifact"], artifacts[1]["name"])
+        self.assertEqual(result["languages"]["node"]["baseline"]["sha"], "mainsha")
+        self.assertEqual(result["languages"]["python"]["current"]["groups"][0]["source_sha"], "mainsha")
+
+    def test_incomplete_gate_push_does_not_replace_last_successful_main_result(self):
+        artifacts = [
+            {"id": 2, "name": "node-coverage-summary-push-newsha", "branch": "main",
+             "sha": "newsha", "created_at": "2026-09-23T04:00:00Z"},
+            {"id": 1, "name": "node-coverage-summary-push-goodsha", "branch": "main",
+             "sha": "goodsha", "created_at": "2026-09-23T03:00:00Z"},
+        ]
+        metric = lambda covered: {  # noqa: E731 - compact fixture
+            "lines": {"covered": covered, "total": 100, "percentage": covered},
+            "branches": {"covered": covered, "total": 100, "percentage": covered},
+            "functions": {"covered": covered, "total": 100, "percentage": covered},
+        }
+        manifests = {
+            1: {"schema_version": 1,
+                "layers": {"ut": {"complete": True, "producer": "success"},
+                           "st": {"complete": True, "producer": "success"}},
+                "groups": [{"name": "packages/example", "files": 1, "totals": metric(80)}],
+                "totals": metric(80)},
+            2: {"schema_version": 1,
+                "layers": {"ut": {"complete": False, "producer": "failure"},
+                           "st": {"complete": True, "producer": "success"}},
+                "groups": [{"name": "packages/example", "files": 1, "totals": metric(10)}],
+                "totals": metric(10)},
+        }
+        ctx = Context(gh=object(), cfg=Config(), now=datetime(2026, 9, 23),
+                      repo_meta={"default_branch": "main"})
+
+        with patch("gsb.collectors._load_artifact",
+                   side_effect=lambda _ctx, artifact, _notes: {"coverage_manifest": manifests[artifact["id"]]}):
+            result = _coverage_probe(ctx, artifacts, [], {}, [])
+
+        node = result["languages"]["node"]
+        self.assertEqual(node["baseline"]["artifact"], "node-coverage-summary-push-goodsha")
+        self.assertEqual(node["current"]["totals"]["lines"]["percentage"], 80)
+
+    def test_multiple_pull_requests_are_listed_without_replacing_main(self):
+        artifacts = [
+            {"id": 4, "name": "node-coverage-summary-pr-18-pr18sha", "branch": "feature/18",
+             "sha": "pr18sha", "created_at": "2026-09-23T05:00:00Z"},
+            {"id": 3, "name": "node-coverage-summary-pr-17-pr17new", "branch": "feature/17",
+             "sha": "pr17new", "created_at": "2026-09-23T04:00:00Z"},
+            {"id": 2, "name": "node-coverage-summary-pr-17-pr17old", "branch": "feature/17",
+             "sha": "pr17old", "created_at": "2026-09-23T03:00:00Z"},
+            {"id": 1, "name": "node-coverage-summary-push-mainsha", "branch": "main",
+             "sha": "mainsha", "created_at": "2026-09-23T02:00:00Z"},
+        ]
+        metric = lambda covered: {  # noqa: E731 - compact fixture
+            "lines": {"covered": covered, "total": 100, "percentage": covered},
+            "branches": {"covered": covered, "total": 100, "percentage": covered},
+            "functions": {"covered": covered, "total": 100, "percentage": covered},
+        }
+        complete = {"ut": {"complete": True, "producer": "success"},
+                    "st": {"complete": True, "producer": "success"}}
+        manifests = {
+            artifact["id"]: {"schema_version": 1, "layers": complete,
+                              "groups": [{"name": "packages/example", "files": 1,
+                                          "totals": metric({1: 80, 2: 70, 3: 75, 4: 90}[artifact["id"]])}],
+                              "totals": metric({1: 80, 2: 70, 3: 75, 4: 90}[artifact["id"]])}
+            for artifact in artifacts
+        }
+        ctx = Context(gh=object(), cfg=Config(), now=datetime(2026, 9, 23),
+                      repo_meta={"default_branch": "main"})
+
+        with patch("gsb.collectors._load_artifact",
+                   side_effect=lambda _ctx, artifact, _notes: {"coverage_manifest": manifests[artifact["id"]]}):
+            result = _coverage_probe(ctx, artifacts, [], {}, [])
+
+        node = result["languages"]["node"]
+        self.assertEqual(node["current"]["totals"]["lines"]["percentage"], 80)
+        prs = {row["number"]: row for row in node["pull_requests"]}
+        self.assertEqual(set(prs), {17, 18})
+        self.assertEqual(prs[17]["sha"], "pr17new")
+        self.assertEqual(prs[17]["totals"]["lines"]["percentage"], 75)
+
 
 if __name__ == "__main__":
     unittest.main()

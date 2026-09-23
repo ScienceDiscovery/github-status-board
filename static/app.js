@@ -544,7 +544,7 @@
       body += tiles(metricTiles);
       const history = (dataset.history || []).filter((row) => row.totals?.lines?.percentage != null);
       body += `<div class="grid wide" style="margin-top:12px">
-        ${card(`${label} 完整行覆盖率趋势`, history.length ? coverageTrend(history) : empty('下一次完整运行后会形成趋势'), { sub: '只使用 authoritative/full 摘要，不混入 PR 增量' })}
+        ${card(`${label} 完整行覆盖率趋势`, history.length ? coverageTrend(history) : empty('下一次完整运行后会形成趋势'), { sub: '只使用成功的 main push / nightly 完整结果，不混入 PR 结果' })}
         ${card(`${label} 数据身份`, kv([
           ['当前', `${badge(kind, tone)} ${esc(dataset.source)}`],
           ['完整基线', baseline ? `${date(baseline.created_at)} · <code>${esc((baseline.sha || '').slice(0, 12))}</code>` : '尚无'],
@@ -572,12 +572,12 @@
         lines_pct: row.totals?.lines?.percentage,
         group_names: (row.groups || []).map((group) => group.name).join(', '),
       }));
-      body += sectionHead(`${label} 最近 PR 覆盖率`, '仅代表该 PR 选择到的模块，不是整仓覆盖率');
+      body += sectionHead(`${label} 最近 PR 覆盖率`, '该 PR 的 UT/ST 门禁实测范围；不会更新 main 当前覆盖率');
       body += `<div class="card">${table(`cov-prs-${key}`, [
         { key: 'number', label: 'PR', render: (row) => link(`${STATE.snap.repo_url}/pull/${row.number}`, `#${row.number}`) },
         { key: 'branch', label: '分支', render: (row) => `<code>${esc(row.branch || '—')}</code>` },
-        { key: 'lines_pct', label: '受影响模块行覆盖率', num: true, render: (row) => pct(row.lines_pct) },
-        { key: 'group_names', label: '模块', render: (row) => `<span class="mono">${esc(row.group_names)}</span>` },
+        { key: 'lines_pct', label: '门禁实测行覆盖率', num: true, render: (row) => pct(row.lines_pct) },
+        { key: 'group_names', label: '覆盖路径', render: (row) => `<span class="mono">${esc(row.group_names)}</span>` },
         { key: 'created_at', label: '时间', render: (row) => ago(row.created_at) },
       ], prs, { limit: 10, emptyText: '还没有 PR 覆盖率摘要' })}</div>`;
       return body;

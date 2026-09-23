@@ -141,6 +141,8 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await expect(page.locator('#tab-coverage')).toContainText('83.0%');
   await expect(page.locator('#tab-coverage')).toContainText('Python');
   await expect(page.locator('#tab-coverage')).toContainText('65.4%');
+  await expect(page.locator('#tab-coverage')).toContainText('不会更新 main 当前覆盖率');
+  await expect(page.locator('#tab-coverage')).toContainText('门禁实测行覆盖率');
   await expect(page.locator('#tab-coverage .coverage-trend')).toHaveCount(2);
   await expect(page.locator('#tab-coverage .coverage-trend').first().locator('.coverage-dot')).toHaveCount(4);
   await expect(page.locator('#tab-coverage .coverage-trend').first().locator('.coverage-y-label')).toHaveCount(5);

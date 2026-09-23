@@ -619,6 +619,42 @@ def _coverage_language(artifact: dict, manifest: dict) -> str | None:
     return None
 
 
+def _coverage_source_sha(entry: dict) -> str | None:
+    artifact, manifest = entry["artifact"], entry["manifest"]
+    return (manifest.get("source_sha") or artifact.get("sha")
+            or (artifact.get("workflow_run") or {}).get("head_sha"))
+
+
+def _coverage_layers_complete(manifest: dict) -> bool | None:
+    """Return the new gate-report completeness signal, or None for legacy summaries."""
+    layers = manifest.get("layers")
+    if not isinstance(layers, dict) or not layers:
+        return None
+    return all(isinstance(layer, dict)
+               and layer.get("complete") is True
+               and layer.get("producer") == "success"
+               for layer in layers.values())
+
+
+def _coverage_is_full(entry: dict, default_branch: str) -> bool:
+    artifact, manifest = entry["artifact"], entry["manifest"]
+    completeness = _coverage_layers_complete(manifest)
+    if completeness is False:
+        return False
+    name = artifact.get("name", "")
+    legacy_full = (manifest.get("authoritative") is True
+                   or manifest.get("mode") == "full"
+                   or "-nightly-" in name)
+    # The current ScienceDiscovery contract records the whole UT/ST gate and
+    # publishes it as *-coverage-summary-push-<sha>.  It deliberately omits
+    # the legacy mode/authoritative fields; the per-layer completeness signal
+    # is the authority marker instead.
+    gate_push = (artifact.get("branch") == default_branch
+                 and "-coverage-summary-push-" in name
+                 and completeness is True)
+    return legacy_full or gate_push
+
+
 def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, language: str) -> dict | None:
     prefix = f"{language}-coverage-summary-"
     candidates = sorted(
@@ -638,10 +674,7 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
         return None
 
     default_entries = [entry for entry in entries if entry["artifact"].get("branch") == ctx.default_branch]
-    full_entries = [entry for entry in default_entries
-                    if entry["manifest"].get("authoritative") is True
-                    or entry["manifest"].get("mode") == "full"
-                    or "-nightly-" in entry["artifact"].get("name", "")]
+    full_entries = [entry for entry in default_entries if _coverage_is_full(entry, ctx.default_branch)]
     baseline_entry = full_entries[0] if full_entries else None
 
     if baseline_entry:
@@ -650,7 +683,7 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
         groups = {
             group["name"]: {
                 **group,
-                "source_sha": baseline.get("source_sha"),
+                "source_sha": _coverage_source_sha(baseline_entry),
                 "updated_at": baseline.get("generated_at") or baseline_artifact.get("created_at"),
                 "update_kind": "full baseline",
             }
@@ -672,21 +705,21 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
                     continue
                 groups[group["name"]] = {
                     **group,
-                    "source_sha": manifest.get("source_sha"),
+                    "source_sha": _coverage_source_sha(entry),
                     "updated_at": manifest.get("generated_at") or artifact.get("created_at"),
                     "update_kind": "main increment",
                 }
                 changed.append(group["name"])
             if changed:
                 applied.append({"artifact": artifact["name"], "created_at": artifact.get("created_at"),
-                                "sha": manifest.get("source_sha"), "groups": changed})
+                                "sha": _coverage_source_sha(entry), "groups": changed})
         current_groups = sorted(groups.values(), key=lambda group: group["name"])
         current_totals = _coverage_totals(current_groups)
         baseline_payload = {
             "artifact": baseline_artifact["name"],
             "created_at": baseline.get("generated_at") or baseline_artifact.get("created_at"),
             "kind": "nightly" if "-nightly-" in baseline_artifact["name"] else "main full",
-            "sha": baseline.get("source_sha"),
+            "sha": _coverage_source_sha(baseline_entry),
             "totals": baseline.get("totals") or {},
             "groups": baseline.get("groups", []),
         }
@@ -701,7 +734,7 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
         artifact, manifest = latest["artifact"], latest["manifest"]
         current_groups = [{
             **group,
-            "source_sha": manifest.get("source_sha"),
+            "source_sha": _coverage_source_sha(latest),
             "updated_at": manifest.get("generated_at") or artifact.get("created_at"),
             "update_kind": "partial",
         } for group in manifest.get("groups", []) if group.get("name")]
@@ -716,7 +749,7 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
     history = [{
         "artifact": entry["artifact"]["name"],
         "created_at": entry["manifest"].get("generated_at") or entry["artifact"].get("created_at"),
-        "sha": entry["manifest"].get("source_sha"),
+        "sha": _coverage_source_sha(entry),
         "totals": entry["manifest"].get("totals") or {},
     } for entry in reversed(full_entries[:14])]
 
@@ -729,7 +762,7 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
     for number, entry in list(latest_pr.items())[:10]:
         artifact, manifest = entry["artifact"], entry["manifest"]
         pull_requests.append({"number": int(number), "branch": artifact.get("branch"),
-                              "created_at": artifact.get("created_at"), "sha": manifest.get("source_sha"),
+                              "created_at": artifact.get("created_at"), "sha": _coverage_source_sha(entry),
                               "groups": manifest.get("groups", []), "totals": manifest.get("totals") or {}})
 
     source_artifact = (baseline_payload or {}).get("artifact") or (default_entries[0] if default_entries else entries[0])["artifact"]["name"]
