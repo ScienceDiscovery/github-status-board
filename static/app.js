@@ -48,10 +48,11 @@
   const CONCLUSION_TONE = { success: 'good', failure: 'bad', timed_out: 'bad', cancelled: '', skipped: '', in_progress: 'warn', queued: 'warn', pending: 'warn', neutral: '', action_required: 'warn', startup_failure: 'bad', error: 'bad', expected: 'warn' };
   const CONCLUSION_NAME = { success: '成功', failure: '失败', timed_out: '超时', cancelled: '取消', skipped: '跳过', in_progress: '运行中', queued: '排队', pending: '等待', neutral: '中性', action_required: '需处理', startup_failure: '启动失败', error: '错误', expected: '等待' };
 
-  const VIEW_KEY = 'gsb.list.view', LINE_KEY = 'gsb.line';
+  const VIEW_KEY = 'gsb.list.view', LINE_KEY = 'gsb.line', COV_SORT_KEY = 'gsb.coverage.sort';
   const loadViews = () => { try { return { issues: 'table', prs: 'table', ...JSON.parse(localStorage.getItem(VIEW_KEY) || '{}') }; } catch (e) { return { issues: 'table', prs: 'table' }; } };
   const loadLine = () => { try { return localStorage.getItem(LINE_KEY); } catch (e) { return null; } };
-  const STATE = { snap: null, status: null, tab: 'overview', views: loadViews(), line: loadLine(), covOpen: new Set(), sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, coverageWeekOffset: 0, pollTimer: null };
+  const loadCovSort = () => { try { return localStorage.getItem(COV_SORT_KEY) === 'lines' ? 'lines' : 'name'; } catch (e) { return 'name'; } };
+  const STATE = { snap: null, status: null, tab: 'overview', views: loadViews(), line: loadLine(), covOpen: new Set(), covSort: loadCovSort(), sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, coverageWeekOffset: 0, pollTimer: null };
 
   // ------------------------------------------------------------ components
   const badge = (text, tone = '', extra = '') => `<span class="badge ${tone}"${extra}>${esc(text)}</span>`;
@@ -720,26 +721,28 @@
 
   // Directory tree over per-file totals. Directories add up their files; a chain of
   // single directories collapses into one row, like compact folders in an editor.
+  // Summaries without per-file totals pass their groups instead: each group is a
+  // directory leaf carrying its own file count, so the tree stops at that level.
   const coverageTone = (v) => (v == null ? '' : v >= 80 ? 'good' : v >= 50 ? 'warn' : 'bad');
-  function coverageTree(language, sources, query) {
+  function coverageTree(language, entries, query, { groups = false } = {}) {
     const metrics = language === 'node' ? ['lines', 'branches', 'functions'] : ['lines', 'branches'];
     const make = (name, path) => ({ name, path, dirs: new Map(), files: [], totals: {}, count: 0 });
-    const add = (node, totals) => {
-      node.count++;
+    const add = (node, totals, files) => {
+      node.count += files;
       for (const m of metrics) { const t = node.totals[m] ||= { covered: 0, total: 0 }; t.covered += totals?.[m]?.covered || 0; t.total += totals?.[m]?.total || 0; }
     };
     const root = make('', '');
-    for (const source of sources) {
-      if (query && !source.path.toLowerCase().includes(query)) continue;
-      const parts = source.path.split('/');
-      let node = root; add(root, source.totals);
+    for (const entry of entries) {
+      if (query && !entry.path.toLowerCase().includes(query)) continue;
+      const parts = entry.path.split('/'), files = groups ? entry.files || 0 : 1;
+      let node = root; add(root, entry.totals, files);
       parts.slice(0, -1).forEach((part, i) => {
         if (!node.dirs.has(part)) node.dirs.set(part, make(part, parts.slice(0, i + 1).join('/')));
-        node = node.dirs.get(part); add(node, source.totals);
+        node = node.dirs.get(part); add(node, entry.totals, files);
       });
-      node.files.push({ name: parts[parts.length - 1], path: source.path, totals: source.totals });
+      node.files.push({ name: parts[parts.length - 1], path: entry.path, totals: entry.totals, files: groups ? files : null });
     }
-    if (!root.count) return empty(query ? '没有匹配的文件' : '没有文件');
+    if (!root.count && !root.files.length) return empty(query ? '没有匹配的路径' : '没有路径');
     const compact = (node) => { while (node.dirs.size === 1 && !node.files.length) { const [only] = node.dirs.values(); node = { ...only, name: `${node.name}/${only.name}` }; } return node; };
     const percent = (t) => (t && t.total ? (t.covered * 100) / t.total : null);
     const describe = (path, totals) => [path, ...metrics.map((m) => `${COVERAGE_METRIC[m]} ${n(totals?.[m]?.covered)} / ${n(totals?.[m]?.total)}（${pct(percent(totals?.[m]))}）`)].join('\n');
@@ -748,11 +751,13 @@
       return `<span class="cov-cell${i ? '' : ' main'}">${i ? '' : ratioBar(v ?? 0, coverageTone(v))}<span class="${coverageTone(v)}-text">${pct(v)}</span></span>`;
     }).join('') + `<span class="cov-count">${n(totals?.lines?.covered)} / ${n(totals?.lines?.total)}${files == null ? '' : ` · ${n(files)} 个文件`}</span>`;
     const row = (label, totals, files, path) => `<span class="cov-name"${tip(describe(path, totals))}>${label}</span>${cells(totals, files)}`;
-    const byName = (a, b) => a.name.localeCompare(b.name);
-    const branch = (node, depth) => [...node.dirs.values()].map(compact).sort(byName).map((dir) => {
+    // Lowest line coverage first when asked; paths without lines go last, then by name.
+    const lineRate = (item) => percent(item.totals?.lines) ?? Infinity;
+    const order = STATE.covSort === 'lines' ? (a, b) => lineRate(a) - lineRate(b) || a.name.localeCompare(b.name) : (a, b) => a.name.localeCompare(b.name);
+    const branch = (node, depth) => [...node.dirs.values()].map(compact).sort(order).map((dir) => {
       const key = `${language}:${dir.path}`, open = query || STATE.covOpen.has(key);
       return `<details class="cov-dir" data-cov-path="${esc(key)}"${open ? ' open' : ''} style="--depth:${depth}"><summary class="cov-row">${row(`<span class="cov-toggle" aria-hidden="true"></span>${esc(dir.name)}/`, dir.totals, dir.count, dir.path)}</summary>${branch(dir, depth + 1)}</details>`;
-    }).join('') + node.files.slice().sort(byName).map((file) => `<div class="cov-row cov-file" style="--depth:${depth}">${row(esc(file.name), file.totals, null, file.path)}</div>`).join('');
+    }).join('') + node.files.slice().sort(order).map((file) => `<div class="cov-row cov-file${groups ? ' cov-group' : ''}" style="--depth:${depth}">${row(groups ? `${esc(file.name)}/` : esc(file.name), file.totals, file.files, file.path)}</div>`).join('');
     const head = `<div class="cov-row cov-head"><span class="cov-name">路径</span>${metrics.map((m) => `<span class="cov-cell">${COVERAGE_METRIC[m]}</span>`).join('')}<span class="cov-count">已覆盖 / 总行数</span></div>`;
     return `<div class="cov-tree" data-language="${language}" style="--metrics:${metrics.length}">${head}${branch(root, 0)}</div>`;
   }
@@ -832,25 +837,17 @@
           ['路径数', n(current.groups?.length || baseline?.groups?.length)],
         ]))}
       </div>`;
-      const groupRows = (current.groups || baseline?.groups || []).map((group) => ({
-        ...group,
-        lines_pct: group.totals?.lines?.percentage,
-        branches_pct: group.totals?.branches?.percentage,
-        functions_pct: group.totals?.functions?.percentage,
-      })).filter((group) => !query || group.name.toLowerCase().includes(query));
-      const columns = [
-        { key: 'name', label: '路径', render: (row) => `<code>${esc(row.name)}</code>${row.update_kind === 'main increment' ? ` ${badge('main 增量', 'warn')}` : ''}<div class="sub"><code>${esc((row.source_sha || '').slice(0, 10))}</code> · ${ago(row.updated_at)}</div>` },
-        { key: 'lines_pct', label: '行', num: true, render: (row) => pct(row.lines_pct) },
-        { key: 'branches_pct', label: '分支', num: true, render: (row) => pct(row.branches_pct) },
-      ];
-      if (key === 'node') columns.push({ key: 'functions_pct', label: '函数', num: true, render: (row) => pct(row.functions_pct) });
-      columns.push({ key: 'files', label: '源文件', num: true });
-      const sources = current.sources || [];
-      body += sectionHead(`${label} 目录覆盖率`, sources.length ? `${n(sources.length)} 个文件，逐层展开到文件；数据同上方“${kind}”` : '');
-      body += `<div class="card"><div class="cov-tools"><label class="filter"><span>过滤路径</span><input type="search" data-filter="coverageQ" value="${esc(STATE.filters.coverageQ || '')}" placeholder="packages/schema 或 services/evolve"></label>${sources.length ? `<span class="grow"></span><button class="btn small" data-cov-expand="${key}">全部展开</button><button class="btn small" data-cov-collapse="${key}">全部收起</button>` : ''}</div>
-        ${sources.length ? coverageTree(key, sources, query) : empty('当前覆盖率摘要没有逐文件数据；源仓覆盖率摘要带上文件列表（sources）后显示目录树。')}</div>`;
-      body += sectionHead(`${label} 路径覆盖率`, '按源仓的覆盖率分组；过滤条件同上');
-      body += `<div class="card">${table(`cov-groups-${key}`, columns, groupRows, { defaultSort: { key: 'lines_pct', dir: 'asc' }, emptyText: '没有匹配的覆盖率路径' })}</div>`;
+      // Without per-file totals the tree stops at the summary's groups (directories).
+      const sources = current.sources || [], groups = (current.groups || baseline?.groups || []).map((group) => ({ path: group.name, totals: group.totals, files: group.files }));
+      const byFile = sources.length > 0, entries = byFile ? sources : groups;
+      // One source for the whole tree: the newest result any path took its numbers from.
+      const latest = (current.groups || []).reduce((a, g) => ((g.updated_at || '') > (a?.updated_at || '') ? g : a), null);
+      const source = latest ? `最新数据：${date(latest.updated_at)}（${ago(latest.updated_at)}）· 提交 <code>${esc((latest.source_sha || '').slice(0, 10))}</code>` : '';
+      const reach = byFile ? `${n(sources.length)} 个文件，逐层展开到文件` : `${n(groups.length)} 个覆盖率分组；源仓摘要暂无逐文件数据，只能展开到分组目录`;
+      body += sectionHead(`${label} 目录覆盖率`, [reach, source].filter(Boolean).join(' · '));
+      const sortSwitch = `<div class="seg cov-sort" role="group" aria-label="排序"><span class="seg-label">排序</span>${[['name', '按名称'], ['lines', '行覆盖率从低到高']].map(([v, l]) => `<button type="button" class="${STATE.covSort === v ? 'on' : ''}" data-cov-sort="${v}" aria-pressed="${STATE.covSort === v}">${l}</button>`).join('')}</div>`;
+      body += `<div class="card"><div class="cov-tools"><label class="filter"><span>过滤路径</span><input type="search" data-filter="coverageQ" value="${esc(STATE.filters.coverageQ || '')}" placeholder="packages/schema 或 services/evolve"></label>${entries.length ? `${sortSwitch}<span class="grow"></span><button class="btn small" data-cov-expand="${key}">全部展开</button><button class="btn small" data-cov-collapse="${key}">全部收起</button>` : ''}</div>
+        ${entries.length ? coverageTree(key, entries, query, { groups: !byFile }) : empty('当前覆盖率摘要没有路径数据。')}</div>`;
       const prs = (dataset.pull_requests || []).map((row) => ({
         ...row,
         base_branch: row.base_branch || prTargetByNumber.get(Number(row.number)),
@@ -1063,6 +1060,13 @@
       STATE.filters.runBranch = '';
       STATE.coverageWeekOffset = 0;
       try { localStorage.setItem(LINE_KEY, STATE.line); } catch (e) { /* private mode */ }
+      renderTabs();
+      return;
+    }
+    const covSort = ev.target.closest('[data-cov-sort]');
+    if (covSort) {
+      STATE.covSort = covSort.dataset.covSort;
+      try { localStorage.setItem(COV_SORT_KEY, STATE.covSort); } catch (e) { /* private mode */ }
       renderTabs();
       return;
     }

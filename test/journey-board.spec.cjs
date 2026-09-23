@@ -246,6 +246,22 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await expect(tree.locator('.cov-file')).toHaveCount(1);
   await expect(tree.locator('.cov-file')).toContainText('20.0%');
   await page.locator('[data-filter="coverageQ"]').first().fill('');
+  // The tree replaced the per-group table and carries one source line for the latest data.
+  await expect(page.locator('th[data-table^="cov-groups"]')).toHaveCount(0);
+  await expect(page.locator('#tab-coverage')).not.toContainText('路径覆盖率');
+  await expect(page.locator('#tab-coverage .section-head', {hasText:'Node.js 目录覆盖率'})).toContainText('4 个文件，逐层展开到文件 · 最新数据：');
+  await expect(page.locator('#tab-coverage .section-head', {hasText:'Node.js 目录覆盖率'})).toContainText('提交 aaaaaaaaaa');
+  // Lowest line coverage first, remembered across a reload.
+  const pyFiles=page.locator('#tab-coverage .cov-tree[data-language="python"] .cov-file .cov-name');
+  await page.locator('[data-cov-expand="python"]').click();
+  await expect(pyFiles).toHaveText(['auth.py','candidates.py']);
+  await page.locator('[data-cov-sort="lines"]').first().click();
+  await expect(page.locator('[data-cov-sort="lines"]').first()).toHaveClass(/on/);
+  await page.locator('[data-cov-expand="python"]').click();
+  await expect(pyFiles).toHaveText(['candidates.py','auth.py']);
+  await page.reload();
+  await expect(page.locator('[data-cov-sort="lines"]').first()).toHaveClass(/on/);
+  await page.locator('[data-cov-sort="name"]').first().click();
   await page.screenshot({path:shot('coverage-desktop'),fullPage:true});
   await page.locator('[data-tab="ops"]').click();
   await expect(page.locator('#tab-ops')).toContainText('贡献者');
@@ -327,8 +343,18 @@ test('CI, tests and coverage switch between main and the jiuwen branch line with
   await expect(tests.locator('.tile', { hasText: 'Daily 选中' })).toHaveCount(0);
   await expect(tests.locator('.tag-matrix thead th.take-col')).toHaveCount(1);
   await page.locator('[data-tab="coverage"]').click();
-  await expect(page.locator('#tab-coverage')).toContainText('feat/jiuwenswarm 还没有覆盖率摘要');
-  await expect(page.locator('#tab-coverage')).not.toContainText('80.7%');
+  // This line's summaries have no per-file totals: the tree stops at its own groups.
+  const swarmCov = page.locator('#tab-coverage');
+  await expect(swarmCov.locator('.section-head', { hasText: 'Node.js 目录覆盖率' })).toContainText('2 个覆盖率分组；源仓摘要暂无逐文件数据');
+  await expect(swarmCov.locator('.section-head', { hasText: 'Node.js 目录覆盖率' })).toContainText('提交 cccccccccc');
+  await page.locator('[data-cov-expand="node"]').click();
+  const groupRows = swarmCov.locator('.cov-tree[data-language="node"] .cov-group');
+  await expect(groupRows).toHaveCount(2);
+  await expect(groupRows.filter({ hasText: 'web/' })).toContainText('12 个文件');
+  await expect(groupRows.filter({ hasText: 'web/' })).toContainText('50.0%');
+  await expect(swarmCov.locator('.cov-file:not(.cov-group)')).toHaveCount(0);
+  await page.mouse.move(0, 0);
+  await swarmCov.locator('.card:has(.cov-tree[data-language="node"])').screenshot({ path: shot('coverage-groups-jiuwen-desktop') });
   await page.reload();
   await expect(switchOf('coverage').locator('button.on')).toHaveText('feat/jiuwenswarm');
   await page.setViewportSize({ width: 390, height: 844 });
