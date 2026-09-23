@@ -18,6 +18,10 @@
       "版本"
     ]
   },
+  "branch_lines": [
+    { "key": "main", "ref": "main" },
+    { "key": "jiuwen", "ref": "feat/jiuwenswarm" }
+  ],
   "deployments": {
     "openJiuwen-ai/sciencediscovery": {
       "environment": "production",

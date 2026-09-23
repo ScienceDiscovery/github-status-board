@@ -144,7 +144,7 @@ class SelectionTests(unittest.TestCase):
 
 class ViewTests(unittest.TestCase):
     def test_dimensions_profiles_and_never_covered_cases(self):
-        view = store((meta(1), slices()), (meta(2, created="2026-09-22T11:00:00Z", event="schedule"), slices("daily-"))).view()
+        view = store((meta(1), slices()), (meta(2, created="2026-09-22T11:00:00Z", event="schedule"), slices("daily-"))).view("main")
         # command:real is collected by every slice but counted once.
         self.assertEqual(view["cases"], 7)
         profiles = {p["name"]: p for p in view["profiles"]}
@@ -170,7 +170,7 @@ class ViewTests(unittest.TestCase):
         self.assertEqual(sum(c["cases"] for c in view["combinations"]), 7)
 
     def test_drift_from_the_frozen_plan_is_reported(self):
-        view = store((meta(1), slices(planned=9))).view()
+        view = store((meta(1), slices(planned=9))).view("main")
         self.assertIn({"slice": "ut", "planned": 9, "computed": 2}, view["checks"])
 
     def test_no_catalog_means_no_view(self):
@@ -182,18 +182,44 @@ class StoreTests(unittest.TestCase):
         tagged = store((meta(1, branch="feature", event="pull_request", created="2026-09-22T11:59:00Z"), slices()),
                        (meta(2, branch="main", event="push"), slices()),
                        (meta(3, branch="0.3.0", event="push"), slices("release-")))
-        self.assertEqual(tagged.state["profiles"]["pr"]["run"]["id"], 2)
-        self.assertEqual(tagged.state["profiles"]["release"]["run"]["id"], 3)
-        self.assertEqual(tagged.state["catalog"]["run"]["id"], 2)
+        self.assertEqual(tagged.state["lines"]["main"]["profiles"]["pr"]["run"]["id"], 2)
+        self.assertEqual(tagged.state["lines"]["main"]["profiles"]["release"]["run"]["id"], 3)
+        self.assertEqual(tagged.state["lines"]["main"]["catalog"]["run"]["id"], 2)
+
+    def test_each_branch_line_keeps_its_own_profiles_and_catalog(self):
+        tagged = TaggedStore()
+        refs = ("main", "feat/swarm")
+        tagged.observe(meta(1), slices(), "main", refs)
+        tagged.observe(meta(2, branch="feat/swarm", event="workflow_dispatch", created="2026-09-22T11:00:00Z"), slices(), "main", refs)
+        # A PR into the line may edit the policy it runs; an unlisted branch has no line.
+        tagged.observe(meta(3, branch="swarm-fix", event="pull_request", created="2026-09-22T11:30:00Z"), slices(), "main", refs)
+        tagged.observe(meta(4, branch="topic", created="2026-09-22T11:40:00Z"), slices(), "main", refs)
+        tagged.observe(meta(5, branch="0.3.0", created="2026-09-22T11:50:00Z"), slices("release-"), "main", refs)
+        lines = tagged.state["lines"]
+        self.assertEqual(sorted(lines), ["feat/swarm", "main"])
+        self.assertEqual(lines["main"]["catalog"]["run"]["id"], 1)
+        self.assertEqual(lines["feat/swarm"]["catalog"]["run"]["id"], 2)
+        self.assertEqual(sorted(lines["main"]["profiles"]), ["pr", "release"])
+        self.assertEqual(sorted(lines["feat/swarm"]["profiles"]), ["pr"])
+        tagged.refresh_schema(lambda repo, path, ref: json.dumps(SCHEMA), REPO)
+        self.assertEqual(tagged.view("feat/swarm")["catalog"]["run"]["id"], 2)
+        self.assertIsNone(tagged.view("topic"))
+
+    def test_single_branch_state_becomes_the_default_line(self):
+        legacy = store((meta(1), slices()), (meta(2, branch="0.3.0", created="2026-09-22T11:00:00Z"), slices("release-"))).state["lines"]["main"]
+        tagged = TaggedStore({"version": 1, **legacy})
+        self.assertTrue(tagged.changed)
+        self.assertEqual(tagged.state, {"version": 2, "lines": {"main": legacy}})
+        self.assertEqual(tagged.view("main")["cases"], store((meta(1), slices())).view("main")["cases"])
 
     def test_newer_run_replaces_and_same_run_adds_missing_slices(self):
         tagged = TaggedStore()
         tagged.observe(meta(5, created="2026-09-22T11:00:00Z"), slices()[:1], "main")
         tagged.observe(meta(4, created="2026-09-22T10:00:00Z"), slices(), "main")  # older: ignored
-        self.assertEqual(sorted(tagged.state["catalog"]["slices"]), ["ut"])
+        self.assertEqual(sorted(tagged.state["lines"]["main"]["catalog"]["slices"]), ["ut"])
         tagged.observe(meta(5, created="2026-09-22T11:00:00Z"), slices()[1:], "main")
-        self.assertEqual(sorted(tagged.state["catalog"]["slices"]), ["e2e", "st", "ut"])
-        self.assertEqual(tagged.state["catalog"]["run"]["id"], 5)
+        self.assertEqual(sorted(tagged.state["lines"]["main"]["catalog"]["slices"]), ["e2e", "st", "ut"])
+        self.assertEqual(tagged.state["lines"]["main"]["catalog"]["run"]["id"], 5)
         tagged.changed = False
         tagged.observe(meta(5, created="2026-09-22T11:00:00Z"), slices(), "main")
         self.assertFalse(tagged.changed)
@@ -203,9 +229,9 @@ class StoreTests(unittest.TestCase):
         tagged = store((meta(1), slices()))
         tagged.refresh_schema(lambda *a: calls.append(a) or "{}", REPO)
         self.assertEqual(calls, [])
-        tagged.state["schema"]["revision"] = "old"
+        tagged.state["lines"]["main"]["schema"]["revision"] = "old"
         tagged.refresh_schema(lambda *a: "not json", REPO)
-        self.assertEqual(tagged.state["schema"]["revision"], "old")
+        self.assertEqual(tagged.state["lines"]["main"]["schema"]["revision"], "old")
 
 
 class SyncTests(unittest.TestCase):

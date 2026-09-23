@@ -222,7 +222,9 @@ class SnapshotLaneTests(unittest.TestCase):
         ci = self.snapshot(sync)['sections']['ci']['data']
         self.assertEqual(ci['pull_request']['total'], 1)
         self.assertEqual(points(ci['lanes']['lanes'][0]), [1])
-        self.assertFalse(any('/index/' in name for name in sync.history.changed))
+        # Those rows are rewritten from the records once; records are untouched.
+        self.assertTrue(any('/index/' in name for name in sync.history.changed))
+        self.assertFalse(any('/records/' in name for name in sync.history.changed))
 
 
 if __name__ == '__main__':

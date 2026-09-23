@@ -1,6 +1,6 @@
 # GitHub 项目状态看板
 
-静态 GitHub Pages 看板，展示 Issue、PR、门禁、每日构建、版本验证、UT / ST / E2E、标签化测试及 Node.js / Python 覆盖率（可展开到文件）。总览优先列出需要处理的流水线问题；Issue 与 PR 可在表格和本地看板之间切换。采集由看板仓 GitHub Actions 执行；Bot 负责接收 Webhook 和触发刷新。
+静态 GitHub Pages 看板，展示 Issue、PR、门禁、每日构建、版本验证、UT / ST / E2E、标签化测试及 Node.js / Python 覆盖率（可展开到文件）。总览优先列出需要处理的流水线问题；Issue 与 PR 可在表格和本地看板之间切换；CI、测试与 Coverage 可在 main 和长期开发分支之间切换查看。采集由看板仓 GitHub Actions 执行；Bot 负责接收 Webhook 和触发刷新。
 
 | 用途 | 数据源 | 站点 |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ Coverage 页从源仓 GitHub Actions 产物中读取 `node-coverage-summary-*` �
 
 ## 文档
 
-[文档目录](docs/README.md) · [增量同步与历史](docs/incremental-history.md) · [Actions 配置](docs/actions-collection.md) · [测试报告契约](docs/test-reports.md) · [页面与交互](docs/dashboard-pages.md) · [CI 分层历史](docs/ci-history-lanes.md) · [标签化测试](docs/tagged-tests.md)
+[文档目录](docs/README.md) · [增量同步与历史](docs/incremental-history.md) · [Actions 配置](docs/actions-collection.md) · [测试报告契约](docs/test-reports.md) · [页面与交互](docs/dashboard-pages.md) · [CI 分层历史](docs/ci-history-lanes.md) · [标签化测试](docs/tagged-tests.md) · [分支线](docs/branch-lines.md)
 
 看板的状态、优先级、迭代、备注与列设置保存在本浏览器，按源仓隔离；可导入／导出字段。浏览器不持有 GitHub 凭据，不连接 Bot，也不写回 GitHub。
 

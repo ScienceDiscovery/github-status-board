@@ -647,11 +647,12 @@ def _coverage_is_full(entry: dict, default_branch: str) -> bool:
                    or manifest.get("mode") == "full"
                    or "-nightly-" in name)
     # The current ScienceDiscovery contract records the whole UT/ST gate and
-    # publishes it as *-coverage-summary-push-<sha>.  It deliberately omits
+    # publishes it as *-coverage-summary-<event>-<sha>.  It deliberately omits
     # the legacy mode/authoritative fields; the per-layer completeness signal
-    # is the authority marker instead.
+    # is the authority marker instead. A branch without push CI, such as a
+    # long-lived feature line, gets its full gate from a manual dispatch.
     gate_push = (artifact.get("branch") == default_branch
-                 and "-coverage-summary-push-" in name
+                 and re.search(r"-coverage-summary-(push|workflow_dispatch)-", name) is not None
                  and completeness is True)
     return legacy_full or gate_push
 

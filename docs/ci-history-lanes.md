@@ -11,6 +11,8 @@ CI 页的「CI 分层历史」替代原来的单条「主干时间线」。四�
 | Daily | 名称匹配 daily 规则（Nightly）的 run，包括 `schedule` 和手动 `workflow_dispatch` |
 | 版本 | 名称匹配 release 规则（Release）的 run，即版本 tag 推送 |
 
+[分支线](branch-lines.md)的其他分支只画 PR（目标为该分支）与该分支 push / 手动两层，层名为分支线名称。
+
 名称规则取 `board-config.json` 的 `workflows.gate` / `daily` / `release`，缺省时使用相同默认值。Nightly 与 Release 通过 `workflow_call` 调用 CI，被调用的 job 属于调用方的 run，只在 Daily / 版本层计一次。若出现 `event=workflow_call` 的 run，或门禁工作流带有自身没有的触发事件（如 `schedule`），均视为被调用的子 run，不在任何层画点，只在图下计数。其他工作流、门禁工作流在非默认分支的 push 计为“其他”，同样不画入。
 
 ## 使用
@@ -28,7 +30,7 @@ CI 页的「CI 分层历史」替代原来的单条「主干时间线」。四�
 - `gsb/ci_lanes.py`：`lane_of` 分层，`pr_number` 取 PR 号，`build_lanes` 生成 `sections.ci.data.lanes`。`days` 是共同日期轴，每层 `days[i]` 与之对齐，格内已按时间排序。前端 `static/app.js` 的 `ciLanes` 只负责渲染。
 - PR 号优先使用 run 的 `pull_requests`。fork PR 的该字段为空，改为按 head 分支匹配当时开放的 PR，再用 head 仓库、SHA、标题排除歧义；仍不唯一时不显示号码。推断出的号码在提示中标“按分支推断”。
 - 增量模式（`incremental_project.build_snapshot`）只为窗口内的 run 读取完整记录，并只读取窗口内开放过的 PR。兼容模式（`project.build_project`）使用本次读取的 run 页。
-- run 与 PR 记录新增 `head_repo`，历史搜索索引新增 `event`。旧索引分片缺少 `event` 时，快照从对应记录读取，不重写分片、不删除历史；新字段随增量采集与每周对账补齐。既无触发事件又无关联 PR 的 run 计为“无法分层”。
+- run 与 PR 记录新增 `head_repo`，历史搜索索引新增 `event`。旧索引行缺少 `event` 时，快照从对应记录重建该行一次，不改记录、不删除历史；新字段随增量采集与每周对账补齐。既无触发事件又无关联 PR 的 run 计为“无法分层”。
 - 已发布快照没有 `lanes` 时，下一轮采集会重建一次快照。
 
 ## 边界

@@ -38,7 +38,9 @@ def slim_run(run, rules):
             "pull_requests": [p["number"] for p in run.get("pull_requests", [])],
             # Fork PR runs carry no pull_requests; the head repository lets the
             # CI lanes match them to the right PR.
-            "head_repo": (run.get("head_repository") or {}).get("full_name"), "tests": [], "jobs": [],
+            "head_repo": (run.get("head_repository") or {}).get("full_name"),
+            # The branch a same-repository PR run targets; fork PRs are matched later.
+            "base_branch": ((run.get("pull_requests") or [{}])[0].get("base") or {}).get("ref"), "tests": [], "jobs": [],
             "reports_status": "not_inspected"}
 
 
@@ -205,7 +207,7 @@ def build_project(gh, repo, settings=None):
         pass
     tests = doc["sections"]["tests"].get("data")
     if isinstance(tests, dict):
-        tests["tagged"] = tagged.view()
+        tests["tagged"] = tagged.view(meta["default_branch"])
     if gh.token and gh.token in json.dumps(doc, ensure_ascii=False):
         raise ValueError("credential detected in export")
     return doc

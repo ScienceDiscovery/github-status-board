@@ -48,9 +48,11 @@
   const CONCLUSION_TONE = { success: 'good', failure: 'bad', timed_out: 'bad', cancelled: '', skipped: '', in_progress: 'warn', queued: 'warn', pending: 'warn', neutral: '', action_required: 'warn', startup_failure: 'bad', error: 'bad', expected: 'warn' };
   const CONCLUSION_NAME = { success: '成功', failure: '失败', timed_out: '超时', cancelled: '取消', skipped: '跳过', in_progress: '运行中', queued: '排队', pending: '等待', neutral: '中性', action_required: '需处理', startup_failure: '启动失败', error: '错误', expected: '等待' };
 
-  const VIEW_KEY = 'gsb.list.view';
+  const VIEW_KEY = 'gsb.list.view', LINE_KEY = 'gsb.line', COV_SORT_KEY = 'gsb.coverage.sort';
   const loadViews = () => { try { return { issues: 'table', prs: 'table', ...JSON.parse(localStorage.getItem(VIEW_KEY) || '{}') }; } catch (e) { return { issues: 'table', prs: 'table' }; } };
-  const STATE = { snap: null, status: null, tab: 'overview', views: loadViews(), covOpen: new Set(), sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, coverageWeekOffset: 0, pollTimer: null };
+  const loadLine = () => { try { return localStorage.getItem(LINE_KEY); } catch (e) { return null; } };
+  const loadCovSort = () => { try { return localStorage.getItem(COV_SORT_KEY) === 'lines' ? 'lines' : 'name'; } catch (e) { return 'name'; } };
+  const STATE = { snap: null, status: null, tab: 'overview', views: loadViews(), line: loadLine(), covOpen: new Set(), covSort: loadCovSort(), sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, coverageWeekOffset: 0, pollTimer: null };
 
   // ------------------------------------------------------------ components
   const badge = (text, tone = '', extra = '') => `<span class="badge ${tone}"${extra}>${esc(text)}</span>`;
@@ -190,7 +192,7 @@
       return `<text class="coverage-x-label" x="${x.toFixed(1)}" y="${h - 8}" text-anchor="${anchor}">${dayLabel(slot.day)}</text>`;
     }).join('');
     const dots = pts.filter(Boolean).map((point) => {
-      const label = `${date(point.row.created_at)} · ${pct(point.value)}\n${point.row.kind === 'nightly' ? 'nightly' : 'main push'} · ${(point.row.sha || '').slice(0, 12)}\n${point.row.artifact || ''}`;
+      const label = `${date(point.row.created_at)} · ${pct(point.value)}\n${point.row.kind === 'nightly' ? 'nightly' : '完整门禁'} · ${(point.row.sha || '').slice(0, 12)}\n${point.row.artifact || ''}`;
       return `<circle class="coverage-dot" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4"></circle><circle class="coverage-hit" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="11"${tip(label)}></circle>`;
     }).join('');
     return `<svg class="coverage-trend" viewBox="0 0 ${w} ${h}" role="img" aria-label="完整行覆盖率历史趋势">${yAxis}<line class="coverage-axis" x1="${left}" y1="${top}" x2="${left}" y2="${baseY}"></line><line class="coverage-axis" x1="${left}" y1="${baseY}" x2="${w - right}" y2="${baseY}"></line>${areas.map((area) => `<path class="coverage-area" d="${area}"></path>`).join('')}${paths.map((path) => `<path class="coverage-line" d="${path}"></path>`).join('')}${dots}${xAxis}</svg>`;
@@ -198,6 +200,7 @@
   // CI history lanes: one row per trigger lane, one column per day on a shared axis.
   // The collector buckets days and orders runs, so a column simply stacks them top-down.
   const LANE_SOURCE = { pr: 'CI · pull_request', main: 'CI · 默认分支 push / 手动', daily: 'Nightly · 定时 / 手动', release: 'Release · 版本 tag' };
+  const laneSource = (L, key) => (key === 'main' && L.branch ? `CI · ${L.branch} push / 手动` : LANE_SOURCE[key] || '');
   const LANE_OUTCOMES = [['success', '成功'], ['failure', '失败/超时'], ['cancelled', '取消'], ['running', '运行中'], ['other', '其他（待批准等）']];
   const LANE_EVENT = { schedule: 'schedule · 定时', workflow_dispatch: 'workflow_dispatch · 手动' };
   const LANE_STACK = 10; // runs visible per day before that column scrolls
@@ -222,7 +225,7 @@
     const rows = L.lanes.map((lane) => {
       const s = lane.summary;
       const counts = [['成功', s.success], ['失败', s.failure], ['取消', s.cancelled], ['运行中', s.running], ...(s.other ? [['其他', s.other]] : [])];
-      const head = `<div class="ci-lane-head" role="rowheader"><b>${esc(lane.label)}</b><span class="ci-lane-src">${esc(LANE_SOURCE[lane.key] || '')}</span>`
+      const head = `<div class="ci-lane-head" role="rowheader"><b>${esc(lane.label).replace(/\//g, '/<wbr>')}</b><span class="ci-lane-src">${esc(laneSource(L, lane.key))}</span>`
         + `<span class="ci-lane-rate">成功率 ${pct(s.success_rate)}</span>`
         + `<span class="ci-lane-sum">${s.total ? counts.map(([name, count]) => `<span>${name} ${count}</span>`).join(' · ') : '窗口内没有 run'}</span></div>`;
       const days = lane.days.map((runs, i) => {
@@ -235,11 +238,11 @@
       return `<div class="ci-lane-row" role="row" data-lane="${esc(lane.key)}">${head}${days}</div>`;
     }).join('');
     const axis = L.days.map((day, i) => `<div class="ci-axis-day" role="columnheader">${i === 0 || day.endsWith('-01') ? laneDay(day) : Number(day.slice(8))}</div>`).join('');
-    const ex = L.excluded || {};
+    const ex = L.excluded || {}, daily = L.lanes.some((lane) => lane.key === 'daily');
     const notes = [
       '成功率 = 成功 ÷（成功 + 失败/超时），取消、运行中与其他不计入；重跑按最后一次尝试着色，仍放在 run 创建的那天。',
-      'Nightly / Release 通过 workflow_call 调用的 CI 不单独成点，只计入调用方所在的 Daily / 版本层。',
-      ex.other ? `另有 ${ex.other} 次 run 不属于这四层（其他工作流或非默认分支 push），未画入。` : '',
+      daily ? 'Nightly / Release 通过 workflow_call 调用的 CI 不单独成点，只计入调用方所在的 Daily / 版本层。' : '',
+      ex.other ? `另有 ${ex.other} 次 run 不属于这${'一两三四'[L.lanes.length - 1] || ` ${L.lanes.length} `}层（其他工作流或${L.branch ? ` ${L.branch} 以外分支的` : '非默认分支'} push），未画入。` : '',
       ex.called ? `${ex.called} 次由其他工作流调用的 CI 子 run 已并入调用方。` : '',
       ex.unknown ? `${ex.unknown} 次 run 缺少触发事件，无法分层。` : '',
       L.collected_since ? `${laneDay(L.collected_since)} 之前的日期尚未采集（斜纹），不代表没有运行。` : '',
@@ -261,6 +264,18 @@
     const scope = { issues: 'issue', prs: 'pr' }[STATE.tab];
     if (scope && STATE.views[STATE.tab] === 'board') { try { window.GSBBoard?.mount(scope); } catch (err) { console.error(err); } }
   };
+  // Branch lines: CI, 测试 and Coverage show one long-lived branch at a time. PR runs
+  // belong to the branch they target; sections hold the default line.
+  const currentLine = (snap) => { const lines = snap?.lines || []; return lines.find((l) => l.key === STATE.line) || lines[0] || { key: '', ref: snap?.repository?.default_branch, default: true }; };
+  const lineSection = (snap, name) => { const line = currentLine(snap); return line.default ? snap.sections[name] : snap.line_sections?.[line.key]?.[name]; };
+  const lineBar = (snap) => {
+    const lines = snap.lines || [], line = currentLine(snap);
+    if (lines.length < 2) return '';
+    return `<div class="line-bar"><div class="seg line-switch" role="group" aria-label="分支线"><span class="seg-label">分支线</span>${lines.map((l) => `<button type="button" class="${l.key === line.key ? 'on' : ''}" data-line="${esc(l.key)}" aria-pressed="${l.key === line.key}">${esc(l.ref)}</button>`).join('')}</div>`
+      + `<span class="muted">当前 <code>${esc(line.ref)}</code>：${line.default ? '默认分支的 push、定时、版本运行，以及目标为它的 PR' : '该分支的 push / 手动运行，以及目标为它的 PR'}；各分支线的数据互不混合。</span></div>`;
+  };
+  // The word for a line's own branch runs: 主干 on the default branch, the full branch name elsewhere.
+  const trunkName = (line) => (line.default ? '主干' : ` ${line.ref} 分支`);
   const labelChips = (labels) => labels.map((l) => `<span class="label-chip"><span class="sw" style="background:#${esc(l.color || '999')}"></span>${esc(l.name)}</span>`).join('');
 
   /** Sortable table. cols: [{key,label,num,render,sort}] ; rows: objects. Sorting is client-side by id. */
@@ -347,6 +362,10 @@
     if (prs?.ci_states?.failure) items.push(['warn', `${prs.ci_states.failure} 个开放 PR 的检查失败：${prs.items.filter((p) => p.ci?.state === 'failure').map((p) => link(p.url, `#${p.number}`)).join(' ')}`, '#prs']);
     if (prs?.waiting_review_count) items.push(['warn', `${prs.waiting_review_count} 个 PR 超过 ${prs.review_sla_days} 天无人评审：${prs.items.filter((p) => p.waiting_review).map((p) => link(p.url, `#${p.number}`)).join(' ')}`, '#prs']);
     if (prs?.items?.some((p) => p.mergeable === 'CONFLICTING')) items.push(['warn', `存在冲突的 PR：${prs.items.filter((p) => p.mergeable === 'CONFLICTING').map((p) => link(p.url, `#${p.number}`)).join(' ')}`, '#prs']);
+    (snap.lines || []).slice(1).forEach((l) => {
+      const other = snap.line_sections?.[l.key]?.ci?.data?.lanes?.lanes?.find((lane) => lane.key === 'main'), last = latestInLane(other);
+      if (last?.outcome === 'failure') items.push(['warn', `<code>${esc(l.ref)}</code> 分支最近一次运行失败（${shortDate(last.created_at)} ${esc(last.time)}）${runLink(last)}`, '#ci']);
+    });
     const hints = [];
     if (tagged?.uncovered?.cases) hints.push(['info', `${n(tagged.uncovered.cases)} 个标签化用例不会被任何流水线组合选中`, '#tests']);
     if (iss?.no_response_count) hints.push(['info', `${iss.no_response_count} 个开放 Issue 还没有评论，${iss.unassigned_count} 个无人认领`, '#issues']);
@@ -365,7 +384,7 @@
       const rate = lane?.summary?.success_rate;
       return { label, value: text, tone, href, sub: run ? `${shortDate(run.created_at)} ${esc(run.time)} · ${esc(run.workflow)}${run.pr ? ` · PR #${run.pr}` : ''}<br>近 ${L.window_days} 天成功率 ${pct(rate)}（${n(lane.summary.total)} 次）` : lane ? `近 ${L.window_days} 天没有运行` : '分层历史尚未生成' };
     };
-    html += sectionHead('流水线', L ? `最近一次运行的结论；成功率 = 成功 ÷（成功 + 失败）` : '');
+    html += sectionHead('流水线', L ? `最近一次运行的结论；成功率 = 成功 ÷（成功 + 失败）${(snap.lines || []).length > 1 ? `；此处为 ${esc(snap.lines[0].ref)} 分支线，其他分支线在 CI 页切换` : ''}` : '');
     html += tiles([laneTile('pr', 'PR 门禁', '#ci'), laneTile('main', '主干', '#ci'), laneTile('daily', '每日构建', '#ci'), laneTile('release', '版本构建', '#releases')]);
     if (L) html += `<div class="grid one" style="margin-top:12px">${card('近 14 天', ciLanes(recentLanes(L, Math.min(14, L.days.length)), { notes: false }), { sub: `每格一次运行，颜色为结论；<a href="#ci">完整 ${L.window_days} 天与 job 明细</a>` })}</div>`;
 
@@ -525,18 +544,18 @@
     return html;
   }
 
-  function renderCI(sec) {
-    const d = sec?.data;
+  function renderCI(sec, line) {
+    const d = sec?.data, trunk = trunkName(line);
     let html = sectionState(sec, 'CI');
     if (!d) return html;
     const rateTone = (r) => (r == null ? '' : r >= 80 ? 'good' : r >= 50 ? 'warn' : 'bad');
     html += tiles([
-      { label: `主干 (${d.default_branch}) 成功率`, value: pct(d.main.success_rate), tone: rateTone(d.main.success_rate), sub: `${d.main.success} 成功 / ${d.main.failure} 失败 / ${d.main.cancelled} 取消` },
+      { label: line.default ? `主干 (${d.default_branch}) 成功率` : `${trunk}成功率`, value: pct(d.main.success_rate), tone: rateTone(d.main.success_rate), sub: `${d.main.success} 成功 / ${d.main.failure} 失败 / ${d.main.cancelled} 取消` },
       { label: 'PR 触发成功率', value: pct(d.pull_request.success_rate), tone: rateTone(d.pull_request.success_rate), sub: `${d.pull_request.success} 成功 / ${d.pull_request.failure} 失败` },
-      { label: '主干连续失败', value: n(d.red_streak_main), tone: d.red_streak_main ? 'bad' : 'good', unit: '次' },
+      { label: `${trunk}连续失败`, value: n(d.red_streak_main), tone: d.red_streak_main ? 'bad' : 'good', unit: '次' },
       { label: '7 天失败', value: n(d.failures_7d), tone: d.failures_7d ? 'warn' : '' },
-      { label: '主干中位耗时', value: dur(d.main.median_duration_s) },
-      { label: '采样 run', value: n(d.runs_sampled), sub: `job 明细取最近 ${d.job_history_runs} 次主干 run` },
+      { label: `${trunk}中位耗时`, value: dur(d.main.median_duration_s) },
+      { label: '采样 run', value: n(d.runs_sampled), sub: `job 明细取最近 ${d.job_history_runs} 次${trunk} run` },
     ]);
     const L = d.lanes;
     const range = L ? `近 ${L.window_days} 天（${laneDay(L.days[0])}–${laneDay(L.days[L.days.length - 1])}，${esc(L.zone)}）` : '';
@@ -544,22 +563,22 @@
       ${card('CI 分层历史', ciLanes(L), { sub: `${range} · 各层共用日期轴，每格一次 run，同一天自上而下按时间排列（上早下晚）· 点击打开 run` })}
     </div>`;
     html += `<div class="grid wide" style="margin-top:12px">
-      ${card('最近一次主干 run', d.latest_main ? `${kv([
+      ${card(`最近一次${trunk} run`, d.latest_main ? `${kv([
         ['Run', `${link(d.latest_main.run.url, esc(d.latest_main.run.title))} ${conclusionBadge(d.latest_main.run.conclusion)}`],
         ['时间', `${date(d.latest_main.run.created_at)} · ${dur(d.latest_main.run.duration_s)} · ${esc(d.latest_main.run.actor)}`],
-      ])}<ul class="checks" style="margin-top:8px">${d.latest_main.jobs.map((j) => `<li>${conclusionBadge(j.conclusion)} ${link(j.url, esc(j.name))} <span class="muted">${dur(j.duration_s)}</span>${j.failed_steps.length ? ` <span class="bad">失败步骤：${esc(j.failed_steps.join('、'))}</span>` : ''}</li>`).join('')}</ul>` : empty('没有主干 run'))}
+      ])}<ul class="checks" style="margin-top:8px">${d.latest_main.jobs.map((j) => `<li>${conclusionBadge(j.conclusion)} ${link(j.url, esc(j.name))} <span class="muted">${dur(j.duration_s)}</span>${j.failed_steps.length ? ` <span class="bad">失败步骤：${esc(j.failed_steps.join('、'))}</span>` : ''}</li>`).join('')}</ul>` : empty(line.default ? '没有主干 run' : `近期没有 ${d.default_branch} 上的 push / 手动运行`))}
     </div>`;
     html += sectionHead('Workflow 健康');
     html += `<div class="card">${table('ci-wf', [
       { key: 'name', label: 'Workflow', render: (w) => `${link(w.url, esc(w.name))}<div class="sub"><code>${esc(w.path)}</code> · ${esc(w.state)}</div>` },
       { key: 'all', label: '总体成功率', num: true, render: (w) => `${ratioBar(w.all.success_rate, rateTone(w.all.success_rate))}${pct(w.all.success_rate)} <span class="muted">(${w.all.total})</span>`, sort: (w) => w.all.success_rate },
-      { key: 'main', label: '主干', num: true, render: (w) => `${pct(w.main.success_rate)} <span class="muted">(${w.main.total})</span>`, sort: (w) => w.main.success_rate },
+      { key: 'main', label: trunk.trim(), num: true, render: (w) => `${pct(w.main.success_rate)} <span class="muted">(${w.main.total})</span>`, sort: (w) => w.main.success_rate },
       { key: 'pull_request', label: 'PR', num: true, render: (w) => `${pct(w.pull_request.success_rate)} <span class="muted">(${w.pull_request.total})</span>`, sort: (w) => w.pull_request.success_rate },
       { key: 'failures_7d', label: '7 天失败', num: true },
       { key: 'median', label: '中位耗时', num: true, render: (w) => dur(w.all.median_duration_s), sort: (w) => w.all.median_duration_s },
       { key: 'last', label: '最近 run', render: (w) => (w.last_run ? `${conclusionBadge(w.last_run.conclusion || w.last_run.status)} ${link(w.last_run.url, esc(w.last_run.branch))} <span class="muted">${ago(w.last_run.created_at)}</span>` : '—'), sortable: false },
     ], d.workflows)}</div>`;
-    html += sectionHead('Job 健康', `最近 ${d.job_history_runs} 次主干 run 的 job 级统计`);
+    html += sectionHead('Job 健康', `最近 ${d.job_history_runs} 次${trunk} run 的 job 级统计`);
     html += `<div class="card">${table('ci-jobs', [
       { key: 'name', label: 'Job' },
       { key: 'success_rate', label: '成功率', num: true, render: (j) => `${ratioBar(j.success_rate, rateTone(j.success_rate))}${pct(j.success_rate)}` },
@@ -589,9 +608,11 @@
   const SLICE_NAME = { ut: 'UT', st: 'ST', e2e: 'E2E' };
   const TAKE = { yes: ['✓', '选取'], any: ['不限', '不限制该维度'], no: ['✗', '不选'] };
   const tagChip = (tag, muted) => `<span class="tag-chip${muted ? ' muted' : ''}">${esc(tag)}</span>`;
-  function taggedSection(t) {
-    let html = sectionHead('标签化测试', t ? `默认分支最新 CI 冻结的用例目录 · ${n(t.cases)} 个用例 · ${t.dimensions.length} 个标签维度 · ${n(t.signatures)} 种标签组合` : '');
-    if (!t) return html + `<div class="banner warn"><span class="icon">▲</span><div><div class="title">尚未读取到标签化测试目录</div><div>需要源仓 CI 在 ut / st / e2e-results 产物中上传各层的 <code>tagged/catalog.json</code> 与 <code>plan.json</code>；读取到默认分支的一次运行后，这里显示各维度标签、PR / Daily / Release 的组合与覆盖情况。</div></div></div>`;
+  function taggedSection(t, line) {
+    const where = line.default ? '默认分支' : ` ${line.ref} `;
+    if (t && !line.default) t = { ...t, profiles: t.profiles.filter((p) => p.run) };
+    let html = sectionHead('标签化测试', t ? `${where}最新 CI 冻结的用例目录 · ${n(t.cases)} 个用例 · ${t.dimensions.length} 个标签维度 · ${n(t.signatures)} 种标签组合` : '');
+    if (!t) return html + `<div class="banner warn"><span class="icon">▲</span><div><div class="title">尚未读取到标签化测试目录</div><div>需要源仓 CI 在 ut / st / e2e-results 产物中上传各层的 <code>tagged/catalog.json</code> 与 <code>plan.json</code>；读取到${esc(where)}的一次运行后，这里显示各维度标签、PR / Daily / Release 的组合与覆盖情况。${line.default ? '' : `该分支没有 push 触发的 CI，需要在 <code>${esc(line.ref)}</code> 上手动运行一次 CI；目标为它的 PR 可能修改规则，不作为依据。`}</div></div></div>`;
     const share = (x) => (t.cases ? `${((x / t.cases) * 100).toFixed(1)}%` : '—');
     const runText = (p) => {
       if (!p.run) return '暂无该组合的运行';
@@ -605,7 +626,7 @@
     const drift = t.checks.filter((c) => c.computed !== c.planned);
     if (drift.length) notes.push(`看板按规则计算的选中数与 CI 冻结计划不一致（${drift.map((c) => `${SLICE_NAME[c.slice] || c.slice}：计划 ${n(c.planned)}，计算 ${c.computed == null ? '无法解析' : n(c.computed)}`).join('；')}），覆盖数字仅供参考。`);
     t.profiles.filter((p) => p.run && p.revisions?.length && t.catalog.revision.length && p.revisions.join() !== t.catalog.revision.join()).forEach((p) => notes.push(`${PROFILE_NAME[p.name]} 的规则取自修订 ${p.revisions.map((r) => r.slice(0, 7)).join('/')}，目录为 ${t.catalog.revision.map((r) => r.slice(0, 7)).join('/')}；覆盖按同一目录计算。`));
-    html += `<div class="muted" style="margin:-4px 0 8px">目录来自 ${link(catalogRun.url, `run ${esc(catalogRun.id)}`)}（${esc(catalogRun.branch)} · ${esc(catalogRun.event)} · ${ago(catalogRun.created_at)} · 修订 <code>${esc(t.catalog.revision.map((r) => r.slice(0, 7)).join('/'))}</code>）；各组合的规则取自其最近一次默认分支 / 版本运行的冻结计划。</div>`;
+    html += `<div class="muted" style="margin:-4px 0 8px">目录来自 ${link(catalogRun.url, `run ${esc(catalogRun.id)}`)}（${esc(catalogRun.branch)} · ${esc(catalogRun.event)} · ${ago(catalogRun.created_at)} · 修订 <code>${esc(t.catalog.revision.map((r) => r.slice(0, 7)).join('/'))}</code>）；各组合的规则取自其最近一次${line.default ? '默认分支 / 版本' : esc(where)}运行的冻结计划。</div>`;
     html += tiles([
       { label: '目录用例', value: n(t.cases), sub: `${t.catalog.slices.map((s) => SLICE_NAME[s] || s).join(' + ')} 三层合并去重` },
       ...t.profiles.map((p) => ({ label: `${PROFILE_NAME[p.name]} 选中`, value: p.covered == null ? '—' : n(p.covered), sub: p.covered == null ? (p.error ? '规则无法解析' : '暂无运行，无法读取组合') : `${share(p.covered)} · ${esc(runText(p))}` })),
@@ -641,7 +662,7 @@
     html += `<div class="grid one" style="margin-top:12px">${card('每个维度的标签与组合', `<ul class="rule-list">${profiles.map((p) => `<li>${esc(ruleText(p))}</li>`).join('')}</ul>
       <div class="table-wrap"><table class="tag-matrix"><thead><tr><th>标签</th><th>用例数</th>${head}</tr></thead><tbody>${body}</tbody></table></div>
       <div class="legend"><span><i style="background:var(--s1)"></i>被任一组合选中</span><span><i style="background:var(--warning)"></i>从未覆盖</span><span>✓ 组合选取该标签 · 不限 = 组合不约束该维度 · ✗ 不选</span></div>
-      <div class="muted" style="margin-top:6px">读法：同一维度内多个 ✓ 是“或”，不同维度之间是“且”。可多选维度（os、arch）上一个用例可带多个值，各值计数之和会大于用例总数；多平台用例只要有一个平台实例被选中即算覆盖。</div>`, { sub: '标签值计数按默认分支目录；组合列来自冻结计划' })}</div>`;
+      <div class="muted" style="margin-top:6px">读法：同一维度内多个 ✓ 是“或”，不同维度之间是“且”。可多选维度（os、arch）上一个用例可带多个值，各值计数之和会大于用例总数；多平台用例只要有一个平台实例被选中即算覆盖。</div>`, { sub: `标签值计数按${esc(where)}目录；组合列来自冻结计划` })}</div>`;
 
     // Never covered: why, then which cases.
     const reasons = t.uncovered.reasons;
@@ -659,7 +680,7 @@
     return html;
   }
 
-  function renderTests(sec) {
+  function renderTests(sec, line) {
     const d = sec?.data;
     let html = sectionState(sec, '测试');
     if (!d) return html;
@@ -672,7 +693,7 @@
       { label: 'CI 最近 UT 用例', value: n(ut?.totals?.tests), sub: ut?.totals ? `${ut.totals.passed} 通过 · ${ut.totals.failed} 失败 · ${ut.totals.skipped} 跳过` : ut ? '产物存在但没有解析出用例数' : '无产物', tone: ut?.totals?.failed ? 'bad' : ut?.totals ? 'good' : '' },
       { label: 'CI 最近 E2E 用例', value: n(e2e?.totals?.tests), sub: e2e?.totals ? `${e2e.totals.passed} 通过 · ${e2e.totals.failed} 失败/超时 · ${e2e.totals.skipped} 跳过 · ${e2e.totals.flaky} 重试通过` : e2e ? '产物存在但没有解析出用例数' : '无产物', tone: e2e?.totals?.failed ? 'bad' : e2e?.totals ? 'good' : '' },
     ]);
-    html += taggedSection(d.tagged);
+    html += taggedSection(d.tagged, line);
 
     // Distribution ----------------------------------------------------------
     if (tree) {
@@ -700,26 +721,28 @@
 
   // Directory tree over per-file totals. Directories add up their files; a chain of
   // single directories collapses into one row, like compact folders in an editor.
+  // Summaries without per-file totals pass their groups instead: each group is a
+  // directory leaf carrying its own file count, so the tree stops at that level.
   const coverageTone = (v) => (v == null ? '' : v >= 80 ? 'good' : v >= 50 ? 'warn' : 'bad');
-  function coverageTree(language, sources, query) {
+  function coverageTree(language, entries, query, { groups = false } = {}) {
     const metrics = language === 'node' ? ['lines', 'branches', 'functions'] : ['lines', 'branches'];
     const make = (name, path) => ({ name, path, dirs: new Map(), files: [], totals: {}, count: 0 });
-    const add = (node, totals) => {
-      node.count++;
+    const add = (node, totals, files) => {
+      node.count += files;
       for (const m of metrics) { const t = node.totals[m] ||= { covered: 0, total: 0 }; t.covered += totals?.[m]?.covered || 0; t.total += totals?.[m]?.total || 0; }
     };
     const root = make('', '');
-    for (const source of sources) {
-      if (query && !source.path.toLowerCase().includes(query)) continue;
-      const parts = source.path.split('/');
-      let node = root; add(root, source.totals);
+    for (const entry of entries) {
+      if (query && !entry.path.toLowerCase().includes(query)) continue;
+      const parts = entry.path.split('/'), files = groups ? entry.files || 0 : 1;
+      let node = root; add(root, entry.totals, files);
       parts.slice(0, -1).forEach((part, i) => {
         if (!node.dirs.has(part)) node.dirs.set(part, make(part, parts.slice(0, i + 1).join('/')));
-        node = node.dirs.get(part); add(node, source.totals);
+        node = node.dirs.get(part); add(node, entry.totals, files);
       });
-      node.files.push({ name: parts[parts.length - 1], path: source.path, totals: source.totals });
+      node.files.push({ name: parts[parts.length - 1], path: entry.path, totals: entry.totals, files: groups ? files : null });
     }
-    if (!root.count) return empty(query ? '没有匹配的文件' : '没有文件');
+    if (!root.count && !root.files.length) return empty(query ? '没有匹配的路径' : '没有路径');
     const compact = (node) => { while (node.dirs.size === 1 && !node.files.length) { const [only] = node.dirs.values(); node = { ...only, name: `${node.name}/${only.name}` }; } return node; };
     const percent = (t) => (t && t.total ? (t.covered * 100) / t.total : null);
     const describe = (path, totals) => [path, ...metrics.map((m) => `${COVERAGE_METRIC[m]} ${n(totals?.[m]?.covered)} / ${n(totals?.[m]?.total)}（${pct(percent(totals?.[m]))}）`)].join('\n');
@@ -728,17 +751,19 @@
       return `<span class="cov-cell${i ? '' : ' main'}">${i ? '' : ratioBar(v ?? 0, coverageTone(v))}<span class="${coverageTone(v)}-text">${pct(v)}</span></span>`;
     }).join('') + `<span class="cov-count">${n(totals?.lines?.covered)} / ${n(totals?.lines?.total)}${files == null ? '' : ` · ${n(files)} 个文件`}</span>`;
     const row = (label, totals, files, path) => `<span class="cov-name"${tip(describe(path, totals))}>${label}</span>${cells(totals, files)}`;
-    const byName = (a, b) => a.name.localeCompare(b.name);
-    const branch = (node, depth) => [...node.dirs.values()].map(compact).sort(byName).map((dir) => {
+    // Lowest line coverage first when asked; paths without lines go last, then by name.
+    const lineRate = (item) => percent(item.totals?.lines) ?? Infinity;
+    const order = STATE.covSort === 'lines' ? (a, b) => lineRate(a) - lineRate(b) || a.name.localeCompare(b.name) : (a, b) => a.name.localeCompare(b.name);
+    const branch = (node, depth) => [...node.dirs.values()].map(compact).sort(order).map((dir) => {
       const key = `${language}:${dir.path}`, open = query || STATE.covOpen.has(key);
       return `<details class="cov-dir" data-cov-path="${esc(key)}"${open ? ' open' : ''} style="--depth:${depth}"><summary class="cov-row">${row(`<span class="cov-toggle" aria-hidden="true"></span>${esc(dir.name)}/`, dir.totals, dir.count, dir.path)}</summary>${branch(dir, depth + 1)}</details>`;
-    }).join('') + node.files.slice().sort(byName).map((file) => `<div class="cov-row cov-file" style="--depth:${depth}">${row(esc(file.name), file.totals, null, file.path)}</div>`).join('');
+    }).join('') + node.files.slice().sort(order).map((file) => `<div class="cov-row cov-file${groups ? ' cov-group' : ''}" style="--depth:${depth}">${row(groups ? `${esc(file.name)}/` : esc(file.name), file.totals, file.files, file.path)}</div>`).join('');
     const head = `<div class="cov-row cov-head"><span class="cov-name">路径</span>${metrics.map((m) => `<span class="cov-cell">${COVERAGE_METRIC[m]}</span>`).join('')}<span class="cov-count">已覆盖 / 总行数</span></div>`;
     return `<div class="cov-tree" data-language="${language}" style="--metrics:${metrics.length}">${head}${branch(root, 0)}</div>`;
   }
   const COVERAGE_METRIC = { lines: '行', branches: '分支', functions: '函数' };
 
-  function renderCoverage(sec) {
+  function renderCoverage(sec, line) {
     const d = sec?.data;
     let html = sectionState(sec, 'Coverage');
     if (!d) return html;
@@ -746,7 +771,9 @@
     if (!cov.source) {
       const steps = `<ul class="steps">${(cov.attempts || []).map((a) => `<li><span class="mark ${a.ok ? 'ok' : 'no'}">${a.ok ? '✓' : '✗'}</span><span><b>${esc(a.step)}</b> <span class="muted">${esc(a.detail)}</span></span></li>`).join('')}</ul>`;
       return html + sectionHead('Coverage', '尚无可解析的覆盖率产物')
-        + `<div class="banner warn"><span class="icon">▲</span><div><div class="title">等待 ScienceDiscovery 覆盖率工作流首次发布摘要</div><div>每日完整基线成功后，这里会显示整仓趋势和路径明细；PR 与 main 增量随后自动叠加。</div></div></div><div class="card" style="margin-top:12px">${steps}</div>`;
+        + (line.default ? `<div class="banner warn"><span class="icon">▲</span><div><div class="title">等待 ScienceDiscovery 覆盖率工作流首次发布摘要</div><div>每日完整基线成功后，这里会显示整仓趋势和路径明细；PR 与 main 增量随后自动叠加。</div></div></div>`
+          : `<div class="banner warn"><span class="icon">▲</span><div><div class="title"><code>${esc(line.ref)}</code> 还没有覆盖率摘要</div><div>该分支的 CI 由目标为它的 PR 和手动运行触发；PR 或手动运行上传覆盖率摘要后，这里显示该分支自己的结果，不借用主干数据。</div></div></div>`)
+        + `<div class="card" style="margin-top:12px">${steps}</div>`;
     }
     const languages = cov.languages || {};
     const prs = STATE.snap.sections?.prs?.data || {};
@@ -802,7 +829,7 @@
       body += tiles(metricTiles);
       const history = (dataset.history || []).filter((row) => row.totals?.lines?.percentage != null);
       body += `<div class="grid wide" style="margin-top:12px">
-        ${card(`${label} 每日完整行覆盖率`, history.length ? coverageTrend(history, selectedRange?.start) : empty('下一次完整运行后会形成趋势'), { sub: '默认展示最新数据窗口；历史按自然周查看。每天取北京时间最后一个成功的 main push / nightly 完整结果；不混入 PR 结果' })}
+        ${card(`${label} 每日完整行覆盖率`, history.length ? coverageTrend(history, selectedRange?.start) : empty('下一次完整运行后会形成趋势'), { sub: `默认展示最新数据窗口；历史按自然周查看。每天取北京时间最后一个成功的 ${line.default ? 'main push / nightly' : `${esc(line.ref)} 手动 / push`} 完整结果；不混入 PR 结果` })}
         ${card(`${label} 数据身份`, kv([
           ['当前', `${badge(kind, tone)} ${esc(dataset.source)}`],
           ['完整基线', baseline ? `${date(baseline.created_at)} · <code>${esc((baseline.sha || '').slice(0, 12))}</code>` : '尚无'],
@@ -810,32 +837,24 @@
           ['路径数', n(current.groups?.length || baseline?.groups?.length)],
         ]))}
       </div>`;
-      const groupRows = (current.groups || baseline?.groups || []).map((group) => ({
-        ...group,
-        lines_pct: group.totals?.lines?.percentage,
-        branches_pct: group.totals?.branches?.percentage,
-        functions_pct: group.totals?.functions?.percentage,
-      })).filter((group) => !query || group.name.toLowerCase().includes(query));
-      const columns = [
-        { key: 'name', label: '路径', render: (row) => `<code>${esc(row.name)}</code>${row.update_kind === 'main increment' ? ` ${badge('main 增量', 'warn')}` : ''}<div class="sub"><code>${esc((row.source_sha || '').slice(0, 10))}</code> · ${ago(row.updated_at)}</div>` },
-        { key: 'lines_pct', label: '行', num: true, render: (row) => pct(row.lines_pct) },
-        { key: 'branches_pct', label: '分支', num: true, render: (row) => pct(row.branches_pct) },
-      ];
-      if (key === 'node') columns.push({ key: 'functions_pct', label: '函数', num: true, render: (row) => pct(row.functions_pct) });
-      columns.push({ key: 'files', label: '源文件', num: true });
-      const sources = current.sources || [];
-      body += sectionHead(`${label} 目录覆盖率`, sources.length ? `${n(sources.length)} 个文件，逐层展开到文件；数据同上方“${kind}”` : '');
-      body += `<div class="card"><div class="cov-tools"><label class="filter"><span>过滤路径</span><input type="search" data-filter="coverageQ" value="${esc(STATE.filters.coverageQ || '')}" placeholder="packages/schema 或 services/evolve"></label>${sources.length ? `<span class="grow"></span><button class="btn small" data-cov-expand="${key}">全部展开</button><button class="btn small" data-cov-collapse="${key}">全部收起</button>` : ''}</div>
-        ${sources.length ? coverageTree(key, sources, query) : empty('当前覆盖率摘要没有逐文件数据；源仓覆盖率摘要带上文件列表（sources）后显示目录树。')}</div>`;
-      body += sectionHead(`${label} 路径覆盖率`, '按源仓的覆盖率分组；过滤条件同上');
-      body += `<div class="card">${table(`cov-groups-${key}`, columns, groupRows, { defaultSort: { key: 'lines_pct', dir: 'asc' }, emptyText: '没有匹配的覆盖率路径' })}</div>`;
+      // Without per-file totals the tree stops at the summary's groups (directories).
+      const sources = current.sources || [], groups = (current.groups || baseline?.groups || []).map((group) => ({ path: group.name, totals: group.totals, files: group.files }));
+      const byFile = sources.length > 0, entries = byFile ? sources : groups;
+      // One source for the whole tree: the newest result any path took its numbers from.
+      const latest = (current.groups || []).reduce((a, g) => ((g.updated_at || '') > (a?.updated_at || '') ? g : a), null);
+      const source = latest ? `最新数据：${date(latest.updated_at)}（${ago(latest.updated_at)}）· 提交 <code>${esc((latest.source_sha || '').slice(0, 10))}</code>` : '';
+      const reach = byFile ? `${n(sources.length)} 个文件，逐层展开到文件` : `${n(groups.length)} 个覆盖率分组；源仓摘要暂无逐文件数据，只能展开到分组目录`;
+      body += sectionHead(`${label} 目录覆盖率`, [reach, source].filter(Boolean).join(' · '));
+      const sortSwitch = `<div class="seg cov-sort" role="group" aria-label="排序"><span class="seg-label">排序</span>${[['name', '按名称'], ['lines', '行覆盖率从低到高']].map(([v, l]) => `<button type="button" class="${STATE.covSort === v ? 'on' : ''}" data-cov-sort="${v}" aria-pressed="${STATE.covSort === v}">${l}</button>`).join('')}</div>`;
+      body += `<div class="card"><div class="cov-tools"><label class="filter"><span>过滤路径</span><input type="search" data-filter="coverageQ" value="${esc(STATE.filters.coverageQ || '')}" placeholder="packages/schema 或 services/evolve"></label>${entries.length ? `${sortSwitch}<span class="grow"></span><button class="btn small" data-cov-expand="${key}">全部展开</button><button class="btn small" data-cov-collapse="${key}">全部收起</button>` : ''}</div>
+        ${entries.length ? coverageTree(key, entries, query, { groups: !byFile }) : empty('当前覆盖率摘要没有路径数据。')}</div>`;
       const prs = (dataset.pull_requests || []).map((row) => ({
         ...row,
         base_branch: row.base_branch || prTargetByNumber.get(Number(row.number)),
         lines_pct: row.totals?.lines?.percentage,
         group_names: (row.groups || []).map((group) => group.name).join(', '),
       }));
-      body += sectionHead(`${label} 最近 PR 覆盖率`, '该 PR 的 UT/ST 门禁实测范围；不会更新 main 当前覆盖率');
+      body += sectionHead(`${label} 最近 PR 覆盖率`, `目标为 ${esc(line.ref)} 的 PR 的 UT/ST 门禁实测范围；不会更新该分支当前覆盖率`);
       body += `<div class="card">${table(`cov-prs-${key}`, [
         { key: 'number', label: 'PR', render: (row) => link(`${STATE.snap.repo_url}/pull/${row.number}`, `#${row.number}`) },
         { key: 'branch', label: '来源分支', render: (row) => `<code>${esc(row.branch || '—')}</code>` },
@@ -939,9 +958,10 @@
     safe('overview', () => renderOverview(snap));
     safe('issues', () => renderIssues(snap.sections.issues));
     safe('prs', () => renderPRs(snap.sections.prs));
-    safe('ci', () => renderCI(snap.sections.ci));
-    safe('tests', () => renderTests(snap.sections.tests));
-    safe('coverage', () => renderCoverage(snap.sections.tests));
+    const line = currentLine(snap);
+    safe('ci', () => lineBar(snap) + renderCI(lineSection(snap, 'ci'), line));
+    safe('tests', () => lineBar(snap) + renderTests(lineSection(snap, 'tests'), line));
+    safe('coverage', () => lineBar(snap) + renderCoverage(lineSection(snap, 'tests'), line));
     safe('releases', () => renderReleases(snap));
     safe('ops', () => renderOps(snap.sections.ops));
     pinLanes(keep);
@@ -1030,6 +1050,23 @@
       const tab = view.closest('[data-work-view]').dataset.workView;
       STATE.views[tab] = view.dataset.val;
       try { localStorage.setItem(VIEW_KEY, JSON.stringify(STATE.views)); } catch (e) { /* private mode */ }
+      renderTabs();
+      return;
+    }
+    const lineButton = ev.target.closest('[data-line]');
+    if (lineButton) {
+      STATE.line = lineButton.dataset.line;
+      // Branch filters and coverage weeks belong to the line that was shown.
+      STATE.filters.runBranch = '';
+      STATE.coverageWeekOffset = 0;
+      try { localStorage.setItem(LINE_KEY, STATE.line); } catch (e) { /* private mode */ }
+      renderTabs();
+      return;
+    }
+    const covSort = ev.target.closest('[data-cov-sort]');
+    if (covSort) {
+      STATE.covSort = covSort.dataset.covSort;
+      try { localStorage.setItem(COV_SORT_KEY, STATE.covSort); } catch (e) { /* private mode */ }
       renderTabs();
       return;
     }

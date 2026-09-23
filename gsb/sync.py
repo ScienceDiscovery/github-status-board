@@ -11,6 +11,7 @@ from .config import Config
 from .github import GitHubError
 from .history import History, encode, read_json
 from .project import slim_run, run_details
+from .lines import configured_lines
 from .tagged import TaggedStore
 
 # 2: tagged catalogs and harness summaries are read from results artifacts.
@@ -289,7 +290,8 @@ class Sync:
                 finally:
                     slices = row.pop("tagged", None)
                     if slices:
-                        self.tagged.observe(row, slices, self.meta["default_branch"])
+                        self.tagged.observe(row, slices, self.meta["default_branch"],
+                                            [line["ref"] for line in configured_lines(self.settings, self.meta["default_branch"])])
                     # Budget interruption must not erase already parsed artifacts.
                     for report in previous.get("tests", []):
                         if report.get("counts") is not None and not any(t["artifact_id"] == report["artifact_id"] for t in row.get("tests", [])):

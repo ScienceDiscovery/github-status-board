@@ -209,7 +209,7 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await expect(page.locator('#tab-coverage')).toContainText('Python');
   await expect(page.locator('#tab-coverage')).toContainText('65.4%');
   await expect(page.locator('#tab-coverage')).not.toContainText('口径');
-  await expect(page.locator('#tab-coverage')).toContainText('不会更新 main 当前覆盖率');
+  await expect(page.locator('#tab-coverage')).toContainText('目标为 main 的 PR 的 UT/ST 门禁实测范围');
   await expect(page.locator('#tab-coverage')).toContainText('门禁实测行覆盖率');
   const nodePrCoverage = page.locator('th[data-table="cov-prs-node"]').locator('xpath=ancestor::table');
   await expect(nodePrCoverage).toContainText('来源分支');
@@ -246,6 +246,22 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await expect(tree.locator('.cov-file')).toHaveCount(1);
   await expect(tree.locator('.cov-file')).toContainText('20.0%');
   await page.locator('[data-filter="coverageQ"]').first().fill('');
+  // The tree replaced the per-group table and carries one source line for the latest data.
+  await expect(page.locator('th[data-table^="cov-groups"]')).toHaveCount(0);
+  await expect(page.locator('#tab-coverage')).not.toContainText('路径覆盖率');
+  await expect(page.locator('#tab-coverage .section-head', {hasText:'Node.js 目录覆盖率'})).toContainText('4 个文件，逐层展开到文件 · 最新数据：');
+  await expect(page.locator('#tab-coverage .section-head', {hasText:'Node.js 目录覆盖率'})).toContainText('提交 aaaaaaaaaa');
+  // Lowest line coverage first, remembered across a reload.
+  const pyFiles=page.locator('#tab-coverage .cov-tree[data-language="python"] .cov-file .cov-name');
+  await page.locator('[data-cov-expand="python"]').click();
+  await expect(pyFiles).toHaveText(['auth.py','candidates.py']);
+  await page.locator('[data-cov-sort="lines"]').first().click();
+  await expect(page.locator('[data-cov-sort="lines"]').first()).toHaveClass(/on/);
+  await page.locator('[data-cov-expand="python"]').click();
+  await expect(pyFiles).toHaveText(['candidates.py','auth.py']);
+  await page.reload();
+  await expect(page.locator('[data-cov-sort="lines"]').first()).toHaveClass(/on/);
+  await page.locator('[data-cov-sort="name"]').first().click();
   await page.screenshot({path:shot('coverage-desktop'),fullPage:true});
   await page.locator('[data-tab="ops"]').click();
   await expect(page.locator('#tab-ops')).toContainText('贡献者');
@@ -293,6 +309,72 @@ test('tagged dimensions, profile combinations and never-covered cases', async ({
   const wrap = matrix.locator('xpath=..');
   expect(await wrap.evaluate((el) => el.scrollWidth >= el.clientWidth)).toBeTruthy();
   await tab.locator('.card:has(.tag-matrix)').screenshot({ path: shot('tagged-matrix-narrow') });
+});
+
+test('CI, tests and coverage switch between main and the jiuwen branch line without mixing', async ({ page }) => {
+  await page.goto('/github-status-board/#ci');
+  const ci = page.locator('#tab-ci'), rows = ci.locator('.ci-lanes .ci-lane-row:not(.ci-axis)');
+  const switchOf = (tab) => page.locator(`#tab-${tab} .line-switch`);
+  await expect(switchOf('ci').locator('button')).toHaveText(['main', 'feat/jiuwenswarm']);
+  await expect(switchOf('ci').locator('button.on')).toHaveText('main');
+  await expect(rows).toHaveCount(4);
+  await expect(ci.locator('.ci-lanes')).not.toContainText('feat/jiuwenswarm');
+  await expect(ci.locator('.ci-lanes .ci-run[href$="/runs/602"]')).toHaveCount(0);
+  await switchOf('ci').getByRole('button', { name: 'feat/jiuwenswarm' }).click();
+  // The jiuwen line has PR and branch lanes only: no Nightly or Release runs there.
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(1).locator('.ci-lane-head b')).toHaveText('feat/jiuwenswarm');
+  await expect(rows.nth(1).locator('.ci-lane-head')).toContainText('CI · feat/jiuwenswarm push / 手动');
+  await expect(rows.first().locator('.ci-run')).toHaveCount(2);
+  await expect(rows.nth(1).locator('.ci-run.failure')).toHaveAttribute('href', /\/runs\/602$/);
+  await expect(ci.locator('.ci-lanes .ci-run[href$="/runs/500"]')).toHaveCount(0);
+  await expect(ci.locator('.tile').first()).toContainText('feat/jiuwenswarm 分支成功率');
+  await expect(ci).toContainText('Run unit tests');
+  await expect(ci.locator('.ci-lane-notes')).not.toContainText('Nightly');
+  const recent = ci.locator('th[data-table="ci-runs"]').first().locator('xpath=ancestor::table').locator('tbody tr');
+  await expect(recent).toHaveCount(3);
+  await page.mouse.move(0, 0);
+  await page.screenshot({ path: shot('line-ci-jiuwen-desktop') });
+  // The choice holds on the test and coverage pages and across a reload.
+  await page.locator('[data-tab="tests"]').click();
+  const tests = page.locator('#tab-tests');
+  await expect(switchOf('tests').locator('button.on')).toHaveText('feat/jiuwenswarm');
+  await expect(tests).toContainText('feat/jiuwenswarm 最新 CI 冻结的用例目录 · 323 个用例');
+  await expect(tests.locator('.tile', { hasText: 'Daily 选中' })).toHaveCount(0);
+  await expect(tests.locator('.tag-matrix thead th.take-col')).toHaveCount(1);
+  await page.locator('[data-tab="coverage"]').click();
+  // This line's summaries have no per-file totals: the tree stops at its own groups.
+  const swarmCov = page.locator('#tab-coverage');
+  await expect(swarmCov.locator('.section-head', { hasText: 'Node.js 目录覆盖率' })).toContainText('2 个覆盖率分组；源仓摘要暂无逐文件数据');
+  await expect(swarmCov.locator('.section-head', { hasText: 'Node.js 目录覆盖率' })).toContainText('提交 cccccccccc');
+  await page.locator('[data-cov-expand="node"]').click();
+  const groupRows = swarmCov.locator('.cov-tree[data-language="node"] .cov-group');
+  await expect(groupRows).toHaveCount(2);
+  await expect(groupRows.filter({ hasText: 'web/' })).toContainText('12 个文件');
+  await expect(groupRows.filter({ hasText: 'web/' })).toContainText('50.0%');
+  await expect(swarmCov.locator('.cov-file:not(.cov-group)')).toHaveCount(0);
+  await page.mouse.move(0, 0);
+  await swarmCov.locator('.card:has(.cov-tree[data-language="node"])').screenshot({ path: shot('coverage-groups-jiuwen-desktop') });
+  await page.reload();
+  await expect(switchOf('coverage').locator('button.on')).toHaveText('feat/jiuwenswarm');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  await page.locator('[data-tab="ci"]').click();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  await page.locator('#tab-ci .line-bar').screenshot({ path: shot('line-switch-narrow') });
+  // The full branch name fits the narrow lane header instead of being clipped.
+  const branchHead = rows.nth(1).locator('.ci-lane-head b');
+  await expect(branchHead).toHaveText('feat/jiuwenswarm');
+  expect(await branchHead.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && el.getBoundingClientRect().right <= el.closest('.ci-lane-head').getBoundingClientRect().right + 1)).toBeTruthy();
+  await page.locator('#tab-ci .card:has(.ci-lanes)').screenshot({ path: shot('line-ci-jiuwen-narrow') });
+  await switchOf('ci').getByRole('button', { name: 'main' }).click();
+  await expect(rows).toHaveCount(4);
+  await page.locator('[data-tab="tests"]').click();
+  await expect(page.locator('#tab-tests')).toContainText('349 个用例');
+  // The overview stays on main and still surfaces the failing jiuwen run.
+  await page.locator('[data-tab="overview"]').click();
+  await expect(page.locator('#tab-overview .health')).toContainText('feat/jiuwenswarm 分支最近一次运行失败');
+  await expect(page.locator('#tab-overview .ci-lane-row:not(.ci-axis)')).toHaveCount(4);
 });
 
 test('release evidence matches SHA; no evidence remains unknown',async({page})=>{
