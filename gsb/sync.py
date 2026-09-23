@@ -176,6 +176,10 @@ class Sync:
                 if field in old:
                     row[field] = old[field]
         self.history.put("runs", row)
+        job = self.state["pending"].get("run:" + key)
+        if job and old and old.get("status") != "completed" and row["status"] == "completed":
+            # Jobs that finished after the last inspection uploaded more reports.
+            job["due"] = stamp(self.now)
         self.queue("run:" + key)
 
     def runs(self, mode, pages=4):
@@ -304,7 +308,8 @@ class Sync:
                 job["tries"] += 1
                 job.pop("error", None)
                 delay = 120 if row["status"] != "completed" else min(86400, 300 * 2 ** min(job["tries"], 9))
-                if row.get("reports_status") == "available":
+                # Early reports of a running workflow are not the whole run.
+                if row.get("reports_status") == "available" and row["status"] == "completed":
                     delay = 86400
                 unavailable = row.get("reports_status") == "unavailable" or row.get("jobs_status") == "unavailable" or any(t["status"] == "unavailable" for t in row.get("tests", []))
                 if unavailable:
