@@ -222,7 +222,7 @@ def build_snapshot(sync):
         lane_runs = [history.get("runs", history_key(row)) or row for row in line_index.values() if (row.get("created_at") or "") >= start]
         ci["lanes"] = build_lanes(lane_runs, default_branch=line["ref"], now=sync.now,
                                   rules=sync.settings.get("workflows"), prs=[pr for pr in lane_prs if pr],
-                                  lanes=LANES if line["default"] else (LANES[0], ("main", line["label"])),
+                                  lanes=LANES if line["default"] else (LANES[0], ("main", line["ref"])),
                                   collected_since=None if progress["backfill"].get("runs", {}).get("complete")
                                   else min((row["created_at"] for row in index.values()), default=None))
         runs = history.select("runs", lambda r, key=key: run_line.get(r["id"]) == key and r["attempt"] == index[r["id"]]["attempt"], limit=100)

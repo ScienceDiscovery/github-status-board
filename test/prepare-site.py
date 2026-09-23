@@ -110,13 +110,13 @@ swarm_ci=dict(default_branch='feat/jiuwenswarm',main=swarm_rate,pull_request=dic
               main_timeline=swarm_recent[2:],latest_main=dict(run=swarm_recent[2],jobs=[dict(name='UT',conclusion='failure',url=base+'/actions/runs/602',duration_s=300,failed_steps=['Run unit tests'])]),
               workflows=[dict(name='CI',url=base+'/actions/workflows/ci.yml',path='.github/workflows/ci.yml',state='active',all=swarm_rate,main=swarm_rate,pull_request=swarm_rate,failures_7d=2,last_run=swarm_recent[2])],
               job_health=[],recent_runs=swarm_recent,
-              lanes=build_lanes(swarm_runs,default_branch='feat/jiuwenswarm',now=datetime(2026,9,20,12,tzinfo=timezone.utc),rules=json.loads((root/'board-config.json').read_text())['workflows'],prs=[pr],lanes=(('pr','PR'),('main','jiuwen'))))
+              lanes=build_lanes(swarm_runs,default_branch='feat/jiuwenswarm',now=datetime(2026,9,20,12,tzinfo=timezone.utc),rules=json.loads((root/'board-config.json').read_text())['workflows'],prs=[pr],lanes=(('pr','PR'),('main','feat/jiuwenswarm'))))
 swarm_tests=dict(json.loads(json.dumps(tests)),tagged=tag_store.view('feat/jiuwenswarm'),executed=[],
                  coverage=dict(source=None,value=None,attempts=[dict(step='Actions 覆盖率摘要',ok=False,detail='该分支没有覆盖率摘要')]))
 ops=dict(releases=dict(latest=None,count=0,items=[],tags=[],total_downloads=0,cadence_days=None,unreleased=None),branches=dict(default='main',protection=dict(enabled=True,required_reviews=1,required_checks=['E2E']),rulesets=[],items=[],count=1,stale=[]),public_advisories=[],community=dict(health_percentage=75,missing=['contributing'],files=dict(readme=True,contributing=False)),contributors=dict(count=2,total_commits=10,bus_factor_50=1,top=[dict(login='maintainer',contributions=8,share=80)]),activity=dict(weeks=[dict(week=1789819200,total=10)],commits_4w=10,commits_52w=10),recent_commits=[],commits_7d=3,stale_automation=dict(workflow=None))
 wrap=lambda value:dict(status='ok',data=value,notes=[],error=None)
 doc.update(repo=repo,repo_url=base,config=dict(artifact_names=['ut-results','e2e-results'],pr_idle_days=14),sections={k:wrap(v) for k,v in dict(repo=dict(description='浏览器验收数据',stars=10,forks=2,language='Python',license='MIT',default_branch='main',pushed_at=time),issues=issues,prs=prs,ci=ci,tests=tests,ops=ops).items()})
-doc['lines']=[dict(key='main',label='main',ref='main',default=True),dict(key='jiuwen',label='jiuwen',ref='feat/jiuwenswarm',default=False)]
+doc['lines']=[dict(key='main',ref='main',default=True),dict(key='jiuwen',ref='feat/jiuwenswarm',default=False)]
 doc['line_sections']={'jiuwen':dict(ci=wrap(swarm_ci),tests=wrap(swarm_tests))}
 doc['board']=BoardStore(cfg,persist=False).payload(doc)
 doc['details']={'issue:1':dict(body=item['body'],cross_references=[]),'pr:3':dict(body=pr['body'],cross_references=[])}

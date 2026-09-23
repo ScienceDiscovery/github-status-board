@@ -14,12 +14,12 @@
 
 ```json
 "branch_lines": [
-  { "key": "main", "label": "main", "ref": "main" },
-  { "key": "jiuwen", "label": "jiuwen", "ref": "feat/jiuwenswarm" }
+  { "key": "main", "ref": "main" },
+  { "key": "jiuwen", "ref": "feat/jiuwenswarm" }
 ]
 ```
 
-- `key` 用于页面状态，只能是小写字母、数字和连字符；`label` 是切换按钮文字；`ref` 是分支名。
+- `key` 用于页面状态，只能是小写字母、数字和连字符；`ref` 是分支名。切换按钮、CI 层名和各处文案都显示完整分支名，不做缩写。
 - 默认分支总是第一条线，即使未列出；重复的 key 或分支会被忽略。未配置 `branch_lines` 时不显示切换控件。
 - 页面选择保存在本浏览器，三页共用；切换时重置“最近 run”的分支筛选与覆盖率周次。
 
@@ -27,7 +27,7 @@
 
 | 页面 | 内容 |
 | --- | --- |
-| CI | 该分支 push / 手动运行（标为“<label> 分支”）和目标为它的 PR 的成功率、分层历史、Workflow 与 Job 健康、最近 run |
+| CI | 该分支 push / 手动运行（标为“<完整分支名> 分支”）和目标为它的 PR 的成功率、分层历史、Workflow 与 Job 健康、最近 run |
 | 测试 | 最近用例数，以及该分支最新 push / 手动运行冻结的[标签化测试](tagged-tests.md)目录和规则；没有运行过的组合不显示 |
 | Coverage | 只用该分支线运行上传的覆盖率摘要；完整基线来自该分支完整通过的 push 或手动门禁；PR 列表只含目标为它的 PR |
 

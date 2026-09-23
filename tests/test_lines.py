@@ -13,17 +13,17 @@ from test_ci_lanes import NOW, RULES, SnapshotLaneTests, points
 from test_incremental import REPO
 
 ROOT = Path(__file__).resolve().parents[1]
-LINES = [{"key": "jiuwen", "label": "jiuwen", "ref": "feat/jiuwenswarm"}]
+LINES = [{"key": "jiuwen", "ref": "feat/jiuwenswarm"}]
 
 
 class ConfigTests(unittest.TestCase):
     def test_default_branch_comes_first_and_invalid_entries_are_dropped(self):
         lines = configured_lines({"branch_lines": [
-            {"key": "jiuwen", "label": "jiuwen", "ref": "feat/jiuwenswarm"}, {"key": "main", "label": "main", "ref": "main"},
+            {"key": "jiuwen", "ref": "feat/jiuwenswarm"}, {"key": "main", "ref": "main"},
             {"key": "Bad Key", "ref": "x"}, {"key": "jiuwen", "ref": "other"}, {"key": "again", "ref": "feat/jiuwenswarm"}, "junk"]}, "main")
         self.assertEqual([(line["key"], line["ref"], line["default"]) for line in lines],
                          [("main", "main", True), ("jiuwen", "feat/jiuwenswarm", False)])
-        self.assertEqual(configured_lines({}, "main"), [{"key": "main", "label": "main", "ref": "main", "default": True}])
+        self.assertEqual(configured_lines({}, "main"), [{"key": "main", "ref": "main", "default": True}])
 
     def test_runs_belong_to_the_branch_their_work_targets(self):
         lines = configured_lines({"branch_lines": LINES}, "main")
@@ -80,7 +80,7 @@ class SnapshotTests(unittest.TestCase):
         main, swarm = doc["sections"]["ci"]["data"], doc["line_sections"]["jiuwen"]["ci"]["data"]
         self.assertEqual({lane["key"]: points(lane) for lane in main["lanes"]["lanes"]}, {"pr": [1], "main": [2, 5], "daily": [3], "release": [4]})
         self.assertEqual({lane["key"]: points(lane) for lane in swarm["lanes"]["lanes"]}, {"pr": [6, 7], "main": [8, 9]})
-        self.assertEqual([lane["label"] for lane in swarm["lanes"]["lanes"]], ["PR", "jiuwen"])
+        self.assertEqual([lane["label"] for lane in swarm["lanes"]["lanes"]], ["PR", "feat/jiuwenswarm"])
         self.assertEqual((swarm["default_branch"], swarm["lanes"]["branch"]), ("feat/jiuwenswarm", "feat/jiuwenswarm"))
         self.assertEqual((main["pull_request"]["total"], swarm["pull_request"]["total"], swarm["main"]["total"]), (1, 2, 2))
         self.assertEqual(sorted(calls["main"][0]), [1, 2, 3, 4, 5])

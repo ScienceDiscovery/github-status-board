@@ -23,10 +23,10 @@ def configured_lines(settings, default_branch):
         key, ref = str(entry.get("key") or ""), str(entry.get("ref") or "")
         if KEY_RE.match(key) and ref and key not in seen and ref not in {line["ref"] for line in lines}:
             seen.add(key)
-            lines.append({"key": key, "label": str(entry.get("label") or key)[:40], "ref": ref})
+            lines.append({"key": key, "ref": ref})
     default = next((line for line in lines if line["ref"] == default_branch), None)
     if not default:
-        default = {"key": default_branch if KEY_RE.match(default_branch) else "default", "label": default_branch, "ref": default_branch}
+        default = {"key": default_branch if KEY_RE.match(default_branch) else "default", "ref": default_branch}
     return [{**default, "default": True}] + [{**line, "default": False} for line in lines if line is not default]
 
 

@@ -224,7 +224,7 @@
     const rows = L.lanes.map((lane) => {
       const s = lane.summary;
       const counts = [['成功', s.success], ['失败', s.failure], ['取消', s.cancelled], ['运行中', s.running], ...(s.other ? [['其他', s.other]] : [])];
-      const head = `<div class="ci-lane-head" role="rowheader"><b>${esc(lane.label)}</b><span class="ci-lane-src">${esc(laneSource(L, lane.key))}</span>`
+      const head = `<div class="ci-lane-head" role="rowheader"><b>${esc(lane.label).replace(/\//g, '/<wbr>')}</b><span class="ci-lane-src">${esc(laneSource(L, lane.key))}</span>`
         + `<span class="ci-lane-rate">成功率 ${pct(s.success_rate)}</span>`
         + `<span class="ci-lane-sum">${s.total ? counts.map(([name, count]) => `<span>${name} ${count}</span>`).join(' · ') : '窗口内没有 run'}</span></div>`;
       const days = lane.days.map((runs, i) => {
@@ -265,16 +265,16 @@
   };
   // Branch lines: CI, 测试 and Coverage show one long-lived branch at a time. PR runs
   // belong to the branch they target; sections hold the default line.
-  const currentLine = (snap) => { const lines = snap?.lines || []; return lines.find((l) => l.key === STATE.line) || lines[0] || { key: '', label: '', ref: snap?.repository?.default_branch, default: true }; };
+  const currentLine = (snap) => { const lines = snap?.lines || []; return lines.find((l) => l.key === STATE.line) || lines[0] || { key: '', ref: snap?.repository?.default_branch, default: true }; };
   const lineSection = (snap, name) => { const line = currentLine(snap); return line.default ? snap.sections[name] : snap.line_sections?.[line.key]?.[name]; };
   const lineBar = (snap) => {
     const lines = snap.lines || [], line = currentLine(snap);
     if (lines.length < 2) return '';
-    return `<div class="line-bar"><div class="seg line-switch" role="group" aria-label="分支线"><span class="seg-label">分支线</span>${lines.map((l) => `<button type="button" class="${l.key === line.key ? 'on' : ''}" data-line="${esc(l.key)}" aria-pressed="${l.key === line.key}"${tip(l.ref)}>${esc(l.label)}</button>`).join('')}</div>`
+    return `<div class="line-bar"><div class="seg line-switch" role="group" aria-label="分支线"><span class="seg-label">分支线</span>${lines.map((l) => `<button type="button" class="${l.key === line.key ? 'on' : ''}" data-line="${esc(l.key)}" aria-pressed="${l.key === line.key}">${esc(l.ref)}</button>`).join('')}</div>`
       + `<span class="muted">当前 <code>${esc(line.ref)}</code>：${line.default ? '默认分支的 push、定时、版本运行，以及目标为它的 PR' : '该分支的 push / 手动运行，以及目标为它的 PR'}；各分支线的数据互不混合。</span></div>`;
   };
-  // The word for a line's own branch runs: 主干 on the default branch, the line's name elsewhere.
-  const trunkName = (line) => (line.default ? '主干' : ` ${line.label} 分支`);
+  // The word for a line's own branch runs: 主干 on the default branch, the full branch name elsewhere.
+  const trunkName = (line) => (line.default ? '主干' : ` ${line.ref} 分支`);
   const labelChips = (labels) => labels.map((l) => `<span class="label-chip"><span class="sw" style="background:#${esc(l.color || '999')}"></span>${esc(l.name)}</span>`).join('');
 
   /** Sortable table. cols: [{key,label,num,render,sort}] ; rows: objects. Sorting is client-side by id. */
@@ -363,7 +363,7 @@
     if (prs?.items?.some((p) => p.mergeable === 'CONFLICTING')) items.push(['warn', `存在冲突的 PR：${prs.items.filter((p) => p.mergeable === 'CONFLICTING').map((p) => link(p.url, `#${p.number}`)).join(' ')}`, '#prs']);
     (snap.lines || []).slice(1).forEach((l) => {
       const other = snap.line_sections?.[l.key]?.ci?.data?.lanes?.lanes?.find((lane) => lane.key === 'main'), last = latestInLane(other);
-      if (last?.outcome === 'failure') items.push(['warn', `${esc(l.label)} 分支（<code>${esc(l.ref)}</code>）最近一次运行失败（${shortDate(last.created_at)} ${esc(last.time)}）${runLink(last)}`, '#ci']);
+      if (last?.outcome === 'failure') items.push(['warn', `<code>${esc(l.ref)}</code> 分支最近一次运行失败（${shortDate(last.created_at)} ${esc(last.time)}）${runLink(last)}`, '#ci']);
     });
     const hints = [];
     if (tagged?.uncovered?.cases) hints.push(['info', `${n(tagged.uncovered.cases)} 个标签化用例不会被任何流水线组合选中`, '#tests']);
@@ -549,7 +549,7 @@
     if (!d) return html;
     const rateTone = (r) => (r == null ? '' : r >= 80 ? 'good' : r >= 50 ? 'warn' : 'bad');
     html += tiles([
-      { label: `${trunk} (${d.default_branch}) 成功率`, value: pct(d.main.success_rate), tone: rateTone(d.main.success_rate), sub: `${d.main.success} 成功 / ${d.main.failure} 失败 / ${d.main.cancelled} 取消` },
+      { label: line.default ? `主干 (${d.default_branch}) 成功率` : `${trunk}成功率`, value: pct(d.main.success_rate), tone: rateTone(d.main.success_rate), sub: `${d.main.success} 成功 / ${d.main.failure} 失败 / ${d.main.cancelled} 取消` },
       { label: 'PR 触发成功率', value: pct(d.pull_request.success_rate), tone: rateTone(d.pull_request.success_rate), sub: `${d.pull_request.success} 成功 / ${d.pull_request.failure} 失败` },
       { label: `${trunk}连续失败`, value: n(d.red_streak_main), tone: d.red_streak_main ? 'bad' : 'good', unit: '次' },
       { label: '7 天失败', value: n(d.failures_7d), tone: d.failures_7d ? 'warn' : '' },
