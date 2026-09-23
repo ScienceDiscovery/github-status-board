@@ -213,6 +213,48 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await expect(page.locator('#tab-ops a[href$="/graphs/traffic"]')).toHaveCount(1);
 });
 
+test('tagged dimensions, profile combinations and never-covered cases', async ({ page }) => {
+  await page.goto('/github-status-board/#tests');
+  const tab = page.locator('#tab-tests');
+  await expect(tab).toContainText('标签化测试');
+  await expect(tab).toContainText('349 个用例 · 8 个标签维度 · 10 种标签组合');
+  await expect(tab.locator('.tile', { hasText: '从未覆盖' })).toContainText('25');
+  await expect(tab.locator('.tile', { hasText: 'PR 选中' })).toContainText('324');
+  await expect(tab.locator('.tile', { hasText: 'Release 选中' })).toContainText('暂无运行');
+  const rulesText = tab.locator('.rule-list');
+  await expect(rulesText).toContainText('PR：category ∈ {ut, st, e2e} 且 os = linux 且 arch = amd64');
+  await expect(rulesText).toContainText('Daily：与 PR 规则相同');
+  await expect(rulesText).toContainText('Release：暂无运行，无法读取组合');
+  const matrix = tab.locator('.tag-matrix');
+  await expect(matrix.locator('.dim-row')).toHaveCount(8);
+  await expect(matrix.locator('.dim-row').first()).toContainText('category 单选 · 词表 3 个 · 使用 3 个');
+  const takes = (tag) => matrix.locator(`tr[data-tag="${tag}"] .take`);
+  await expect(takes('status:reviewed').first()).toHaveText('✓');
+  await expect(takes('os:macos').first()).toHaveText('✗');
+  await expect(takes('sandbox:seatbelt').first()).toHaveText('不限');
+  await expect(takes('os:macos')).toHaveCount(2); // Release has no run, so its column stays empty
+  await expect(matrix.locator('tr[data-tag="os:windows"]')).toHaveClass(/unused/);
+  await expect(matrix.locator('tr[data-tag="status:external"]')).toContainText('未覆盖 12');
+  await matrix.locator('tr[data-tag="status:external"] .tag-bar').hover();
+  await expect(page.locator('#tooltip')).toContainText('从未覆盖 12');
+  const uncovered = tab.locator('.card', { hasText: '从未覆盖的用例' });
+  await expect(uncovered.locator('.bars')).toContainText('status=external');
+  await expect(uncovered.locator('.bars')).toContainText('os=macos；arch=arm64');
+  await uncovered.locator('summary').click();
+  await expect(uncovered).toContainText('services/paper/tests/test_external.py::case 1');
+  const combos = tab.locator('.card', { hasText: '标签组合' }).locator('tbody tr');
+  await expect(combos).toHaveCount(10);
+  await expect(combos.first()).toContainText('280');
+  await page.mouse.move(0, 0);
+  await tab.locator('.card:has(.tag-matrix)').screenshot({ path: shot('tagged-matrix-desktop') });
+  await tab.locator('.grid.wide:has(.tag-chip)').screenshot({ path: shot('tagged-uncovered-desktop') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  const wrap = matrix.locator('xpath=..');
+  expect(await wrap.evaluate((el) => el.scrollWidth >= el.clientWidth)).toBeTruthy();
+  await tab.locator('.card:has(.tag-matrix)').screenshot({ path: shot('tagged-matrix-narrow') });
+});
+
 test('E2E retries, stage filter and case evidence',async({page})=>{
   await page.goto('/github-status-board/#quality');
   await page.getByLabel('阶段',{exact:true}).selectOption('daily');

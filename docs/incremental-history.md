@@ -13,6 +13,7 @@ Issue / PR 的开放及关闭记录不设保留条数上限。Actions 保存 run
 - `.sync/state.json`：源仓、schema、各列表的页码／水位／时间窗口、重试队列、对账进度及错误类别；不含凭据、Webhook 正文或测试日志。
 - `.sync/aggregate.json`：可撤销贡献的全量计数，Issue/PR 按状态和日，运行按工作流、阶段和日。
 - `.sync/supplements.json`：每日刷新一次的公开运维、测试文件分布和覆盖率信息。
+- `.sync/tagged.json`：默认分支最新标签化测试目录（按标签签名压缩）、各组合最近运行的选择器与结果、标签词表；见[标签化测试](tagged-tests.md)。
 - `site/data/history/records/<类型>/<编号段>.json`：完整记录或小型指标。Issue/PR 每 100 个编号一段；run 按稳定 ID 段保存，每个 attempt 独立键。
 - `site/data/history/index/`：对应分片的搜索摘要，run 摘要含触发事件（早期分片缺少时从记录读取）；`catalog/` 合并相邻稀疏索引，避免每几个 run 发起一次 HTTP 请求。manifest 给出类型、计数和内容版本。只重写变化分片和对应目录。
 - `site/data/snapshot.json`：当前汇总及轻量页面预览。

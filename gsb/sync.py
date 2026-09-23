@@ -11,8 +11,10 @@ from .config import Config
 from .github import GitHubError
 from .history import History, encode, read_json
 from .project import slim_run, run_details
+from .tagged import TaggedStore
 
-PARSER_VERSION = 1
+# 2: tagged catalogs and harness summaries are read from results artifacts.
+PARSER_VERSION = 2
 
 
 def stamp(value):
@@ -56,6 +58,9 @@ class Budget:
                 return out
             page += 1
 
+    def get_text_file(self, *a, **kw):
+        return self.call("get_text_file", *a, **kw)
+
     def download_artifact(self, *args, **kwargs):
         if self.downloaded >= 160 * 1024 * 1024:
             raise BudgetExhausted()
@@ -77,6 +82,7 @@ class Sync:
             raise ValueError("sync state belongs to a different repository or schema")
         self.base = f"/repos/{repo}"
         self.cfg = Config(repo=repo)
+        self.tagged = TaggedStore(read_json(self.history.root / ".sync/tagged.json", None))
         if not self.state.get("migrated"):
             old = read_json(self.history.root / "site/data/snapshot.json", {})
             source = (old.get("repository") or {}).get("name", "")
@@ -277,6 +283,9 @@ class Sync:
                 try:
                     run_details(self.gh, self.cfg, row, cache=previous, parser_version=PARSER_VERSION)
                 finally:
+                    slices = row.pop("tagged", None)
+                    if slices:
+                        self.tagged.observe(row, slices, self.meta["default_branch"])
                     # Budget interruption must not erase already parsed artifacts.
                     for report in previous.get("tests", []):
                         if report.get("counts") is not None and not any(t["artifact_id"] == report["artifact_id"] for t in row.get("tests", [])):
@@ -330,6 +339,7 @@ class Sync:
             self.guarded("reconcile:runs", lambda: self.runs("reconcile", pages=1))
             self.guarded("reconcile:releases", lambda: self.releases("reconcile", pages=1))
         self.guarded("details", self.pending)
+        self.guarded("tagged", lambda: self.tagged.refresh_schema(self.gh.get_text_file, self.repo))
         self.state["last_poll"] = stamp(self.now)
         return self
 
@@ -343,4 +353,7 @@ class Sync:
                 "failed": len(self.state["errors"]) + sum(bool(v.get("error")) for v in self.state["pending"].values())}
 
     def files(self):
-        return {**self.history.files(), ".sync/state.json": encode(self.state)}
+        files = {**self.history.files(), ".sync/state.json": encode(self.state)}
+        if self.tagged.changed:
+            files[".sync/tagged.json"] = encode(self.tagged.state)
+        return files
