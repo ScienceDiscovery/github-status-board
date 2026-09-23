@@ -208,6 +208,11 @@ a.ci-run:hover, a.ci-run:focus-visible { outline: 2px solid var(--ink); outline-
 .coverage-trend .coverage-dot { fill: var(--surface); stroke: var(--s1); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
 .coverage-trend .coverage-hit { fill: transparent; stroke: none; cursor: crosshair; }
 .coverage-trend text { fill: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.coverage-week-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin: 12px 0 -2px; }
+.coverage-week-toolbar strong { min-width: 142px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; }
+.coverage-week-toolbar .btn[disabled] { cursor: default; }
+.coverage-week-empty { min-height: 180px; display: grid; grid-template-columns: repeat(7, 1fr); align-items: end; gap: 4px; color: var(--muted); font-size: 12px; text-align: center; }
+.coverage-week-empty strong { grid-column: 1 / -1; align-self: center; font-weight: 500; }
 .ratio { display: inline-block; width: 60px; height: 8px; background: var(--surface-2); border-radius: 4px; vertical-align: middle; overflow: hidden; margin-right: 6px; }
 .ratio span { display: block; height: 100%; background: var(--s1); border-radius: 4px; }
 .ratio.bad span { background: var(--critical); }

@@ -166,7 +166,7 @@ class Sync:
         # A list response is metadata, never evidence that previously parsed
         # metrics disappeared. Keep them across expiration and transient errors.
         if old:
-            for field in ("tests", "jobs", "coverage", "reports_status", "metrics_version", "inspected_at"):
+            for field in ("tests", "jobs", "coverage", "coverage_summaries", "reports_status", "metrics_version", "inspected_at"):
                 if field in old:
                     row[field] = old[field]
         self.history.put("runs", row)

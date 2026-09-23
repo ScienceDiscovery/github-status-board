@@ -11,7 +11,7 @@ from gsb.sync import Sync, BudgetExhausted, stamp, date
 from gsb.project import run_details, slim_run
 from gsb.config import Config
 from gsb.github import GitHubError
-from gsb.incremental_project import build_snapshot
+from gsb.incremental_project import build_snapshot, _persist_coverage_summaries, _daily_coverage_history
 from publish import publish_batch
 from test_reports import archive
 
@@ -158,6 +158,38 @@ class SyncTests(unittest.TestCase):
         refreshed.assert_called_once()
         self.assertEqual(updated['sections']['ops']['data']['marker'],'old-ops')
         self.assertEqual(updated['sections']['tests']['data']['marker'],'new-tests')
+
+    def test_coverage_summaries_persist_on_runs_and_keep_latest_result_per_beijing_day(self):
+        history=History(self.root)
+        for number in (1,2,3):
+            raw=run(number)
+            raw['run_started_at']=stamp(NOW+timedelta(hours=number-1))
+            raw['created_at']=raw['run_started_at'];raw['updated_at']=stamp(NOW+timedelta(hours=number))
+            history.put('runs',slim_run(raw,{}))
+        metric=lambda value:{'lines':{'covered':value,'total':100,'percentage':value}}
+        entries=[
+            dict(artifact='node-coverage-summary-push-one',run_id=1,created_at=stamp(NOW+timedelta(minutes=30)),sha='1'*40,kind='main full',totals=metric(80)),
+            dict(artifact='node-coverage-summary-push-two',run_id=2,created_at=stamp(NOW+timedelta(hours=1,minutes=30)),sha='2'*40,kind='main full',totals=metric(82)),
+            dict(artifact='node-coverage-summary-nightly-three',run_id=3,created_at=stamp(NOW+timedelta(hours=12,minutes=30)),sha='3'*40,kind='nightly',totals=metric(83)),
+        ]
+        coverage={'languages':{'node':{'history':entries}}}
+
+        _persist_coverage_summaries(history,coverage,'main')
+        daily=_daily_coverage_history(history,'main')['node']
+
+        self.assertEqual(len(daily),2)
+        self.assertEqual(daily[0]['day'],'2026-09-22')
+        self.assertEqual(daily[0]['totals']['lines']['percentage'],82)
+        self.assertEqual(daily[1]['day'],'2026-09-23')
+        self.assertEqual(daily[1]['kind'],'nightly')
+        self.assertEqual(history.get('runs','2-1')['coverage_summaries'][0]['artifact'],entries[1]['artifact'])
+
+        for name,content in history.files().items():
+            path=self.root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(content)
+        refreshed=run(2);refreshed['updated_at']=stamp(NOW+timedelta(days=2))
+        sync=Sync(Source(),self.root,REPO,now=NOW+timedelta(days=2))
+        sync.save_run(refreshed)
+        self.assertEqual(sync.history.get('runs','2-1')['coverage_summaries'][0]['artifact'],entries[1]['artifact'])
 
 
 class MetricTests(unittest.TestCase):

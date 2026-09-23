@@ -749,10 +749,12 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
 
     history = [{
         "artifact": entry["artifact"]["name"],
+        "run_id": entry["artifact"].get("run_id"),
         "created_at": entry["manifest"].get("generated_at") or entry["artifact"].get("created_at"),
         "sha": _coverage_source_sha(entry),
+        "kind": "nightly" if "-nightly-" in entry["artifact"]["name"] else "main full",
         "totals": entry["manifest"].get("totals") or {},
-    } for entry in reversed(full_entries[:14])]
+    } for entry in reversed(full_entries)]
 
     latest_pr = {}
     for entry in entries:

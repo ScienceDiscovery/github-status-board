@@ -2,6 +2,7 @@
 from copy import deepcopy
 from datetime import timedelta
 import hashlib
+from zoneinfo import ZoneInfo
 
 from .board import BoardStore
 from .ci_lanes import build_lanes, window_start
@@ -11,13 +12,77 @@ from .public_sections import public_ops, public_tests, envelope
 from .sync import stamp, date
 
 
-SUPPLEMENT_TESTS_VERSION = 2
+SUPPLEMENT_TESTS_VERSION = 3
+COVERAGE_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 def _tests_revision(runs):
     identity = [[row["id"], row["attempt"], row.get("status"), row.get("conclusion"), row.get("updated_at")]
                 for row in runs]
     return hashlib.sha256(encode(identity).encode()).hexdigest()[:16]
+
+
+def _coverage_run(history, run_id, created_at):
+    """Find the attempt that owned an artifact created for a workflow run."""
+    if not run_id or not created_at:
+        return None
+    created = date(created_at)
+    candidates = []
+    for key, row in history.rows("runs"):
+        if row.get("id") != run_id or not row.get("started_at"):
+            continue
+        if date(row["started_at"]) <= created:
+            candidates.append((row.get("attempt", 1), key, row))
+    if not candidates:
+        return None
+    _, key, row = max(candidates)
+    return key, row
+
+
+def _persist_coverage_summaries(history, coverage, default_branch):
+    """Attach compact, complete coverage evidence to its canonical run record."""
+    for language, dataset in (coverage.get("languages") or {}).items():
+        for item in dataset.get("history", []):
+            matched = _coverage_run(history, item.get("run_id"), item.get("created_at"))
+            if not matched:
+                continue
+            key, index = matched
+            if index.get("branch") != default_branch or index.get("conclusion") != "success":
+                continue
+            record = history.get("runs", key)
+            if not record:
+                continue
+            summary = {k: item.get(k) for k in ("artifact", "run_id", "created_at", "sha", "kind", "totals")}
+            summary["language"] = language
+            summaries = {row.get("artifact"): row for row in record.get("coverage_summaries", [])}
+            summaries[summary["artifact"]] = summary
+            updated = sorted(summaries.values(), key=lambda row: (row.get("created_at") or "", row.get("artifact") or ""))
+            if updated != record.get("coverage_summaries", []):
+                record["coverage_summaries"] = updated
+                history.put("runs", record)
+
+
+def _daily_coverage_history(history, default_branch):
+    """Latest successful complete result per Beijing calendar day and language."""
+    daily = {}
+    for key, index in history.rows("runs"):
+        if index.get("branch") != default_branch or index.get("conclusion") != "success":
+            continue
+        record = history.get("runs", key)
+        for item in (record or {}).get("coverage_summaries", []):
+            created_at, language = item.get("created_at"), item.get("language")
+            if not created_at or language not in ("node", "python"):
+                continue
+            day = date(created_at).astimezone(COVERAGE_TIMEZONE).date().isoformat()
+            candidate = {**item, "day": day, "attempt": record.get("attempt")}
+            identity = (language, day)
+            previous = daily.get(identity)
+            if not previous or (candidate["created_at"], candidate.get("artifact") or "") > (previous["created_at"], previous.get("artifact") or ""):
+                daily[identity] = candidate
+    return {
+        language: sorted((row for (lang, _), row in daily.items() if lang == language), key=lambda row: row["day"])
+        for language in ("node", "python")
+    }
 
 
 def build_snapshot(sync):
@@ -126,6 +191,11 @@ def build_snapshot(sync):
         state["supplements_changed"] = True
         history.changed[".sync/supplements.json"] = encode(supplements)
     tests = deepcopy(supplements.get("tests", wrap({})))
+    coverage = (tests.get("data") or {}).get("coverage") or {}
+    _persist_coverage_summaries(history, coverage, meta.get("default_branch"))
+    daily_coverage = _daily_coverage_history(history, meta.get("default_branch"))
+    for language, dataset in (coverage.get("languages") or {}).items():
+        dataset["history"] = daily_coverage.get(language, [])
     latest_reports = {}
     for r in runs:
         for t in r["tests"]:
