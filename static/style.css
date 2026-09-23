@@ -299,6 +299,9 @@ details { margin-top: 4px; }
 .board-toolbar [data-bpref="group"] { max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
 .seg button + button { border-left: 1px solid var(--border); }
 .seg button.on { background: var(--s1); color: #fff; }
+/* Branch line switch above the CI, test and coverage pages. */
+.line-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0 0 14px; }
+.line-bar > .muted { font-size: 12.5px; min-width: 0; }
 .check { font-size: 13px; color: var(--ink-2); display: inline-flex; align-items: center; gap: 4px; }
 .grow { flex: 1 1 auto; }
 .small { font-size: 12px; }

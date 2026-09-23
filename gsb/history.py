@@ -16,6 +16,13 @@ def read_json(path, default):
     return json.loads(path.read_text()) if path.exists() else deepcopy(default)
 
 
+# Searchable summary of each record. Runs keep what places them on a branch
+# line (trigger, linked PRs, target, head repository); PRs keep their branches.
+INDEX_FIELDS = ("id", "number", "attempt", "tag", "name", "title", "state", "status", "conclusion", "channel", "workflow_id",
+                "event", "pull_requests", "base_branch", "head_repo", "head", "base", "head_sha", "started_at", "author",
+                "labels", "assignees", "created_at", "updated_at", "closed_at", "merged_at", "branch", "sha", "url")
+
+
 def contributions(kind, row):
     out = Counter()
     out[f"{kind}:total"] = 1
@@ -81,9 +88,7 @@ class History:
         counts.update(contributions(kind, row))
         self.aggregate = {k: v for k, v in counts.items() if v}
         records[key] = deepcopy(row)
-        self._index(bucket)[key] = {k: v for k, v in row.items() if k in (
-            "id", "number", "attempt", "tag", "name", "title", "state", "status", "conclusion", "channel", "workflow_id", "event",
-            "started_at", "author", "labels", "assignees", "created_at", "updated_at", "closed_at", "merged_at", "branch", "sha", "url")}
+        self._index(bucket)[key] = self._summary(row)
         self.changed[f"site/data/history/records/{bucket}.json"] = encode(records)
         self.changed[f"site/data/history/index/{bucket}.json"] = encode(self._index(bucket))
         self.manifest["shards"][bucket] = {
@@ -91,6 +96,24 @@ class History:
             "revision": hashlib.sha256(self.changed[f"site/data/history/records/{bucket}.json"].encode()).hexdigest()[:16]}
         self.manifest["totals"][kind] = self.aggregate.get(f"{kind}:total", 0)
         return True
+
+    @staticmethod
+    def _summary(row):
+        return {k: v for k, v in row.items() if k in INDEX_FIELDS}
+
+    def reindex(self, kind, key):
+        """Rewrite one index row from its record, e.g. after the index gained fields.
+
+        Records and counts are unchanged; returns the refreshed row or None."""
+        bucket = self.bucket(kind, str(key))
+        record = self._records(bucket).get(str(key))
+        if record is None:
+            return None
+        row = self._summary(record)
+        if self._index(bucket).get(str(key)) != row:
+            self._index(bucket)[str(key)] = row
+            self.changed[f"site/data/history/index/{bucket}.json"] = encode(self._index(bucket))
+        return deepcopy(row)
 
     def rows(self, kind):
         for bucket, info in self.manifest["shards"].items():
@@ -113,7 +136,7 @@ class History:
             groups.setdefault(group, []).append(bucket)
         catalogs = self.manifest.setdefault("catalogs", {})
         for group, buckets in groups.items():
-            if group in catalogs and not any(f"site/data/history/records/{b}.json" in self.changed for b in buckets):
+            if group in catalogs and not any(f"site/data/history/{part}/{b}.json" in self.changed for b in buckets for part in ("records", "index")):
                 continue
             entries = [{"key": key, "row": row, "record": self.manifest["shards"][b]["records"],
                         "revision": self.manifest["shards"][b]["revision"]}

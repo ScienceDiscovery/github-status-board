@@ -235,32 +235,49 @@ def merge_rules(rows):
     return rows
 
 
-def eligible(run, profile, default_branch):
-    # A branch or PR may edit its own policy; only default-branch runs and
-    # version tags state what a profile is.
-    if profile == "release":
-        return True
-    return run.get("branch") == default_branch and run.get("event") not in ("pull_request", "pull_request_target")
+PR_EVENTS = ("pull_request", "pull_request_target")
 
 
 class TaggedStore:
-    """Latest profile runs and the latest default-branch catalog, kept in ``.sync/tagged.json``."""
+    """Per branch: latest profile runs and the latest catalog, kept in ``.sync/tagged.json``.
+
+    Only pushes, dispatches and schedules on a configured branch state what that
+    branch's policy and catalog are; a PR branch may edit its own policy. Version
+    tags are held to the default branch's release profile.
+    """
 
     def __init__(self, state=None):
-        self.state = state or {"version": 1, "profiles": {}, "catalog": None, "schema": None}
+        state = state or {}
         self.changed = False
+        if "lines" not in state:
+            # Version 1 held the default branch only; its catalog or non-release
+            # profile runs name that branch.
+            runs = [(state.get("catalog") or {}).get("run")] + [
+                entry.get("run") for name, entry in (state.get("profiles") or {}).items() if name != "release"]
+            branch = next((run["branch"] for run in runs if run and run.get("branch")), None)
+            lines = {branch: {key: state.get(key) for key in ("profiles", "catalog", "schema")}} if branch else {}
+            state, self.changed = {"version": 2, "lines": lines}, bool(state)
+        self.state = state
 
-    def observe(self, run, slices, default_branch):
+    def _line(self, ref):
+        return self.state["lines"].setdefault(ref, {"profiles": {}, "catalog": None, "schema": None})
+
+    def observe(self, run, slices, default_branch, refs=()):
         """Record one run's slices; later calls for the same run add slices it lacked."""
         meta = {key: run.get(key) for key in ("id", "attempt", "url", "created_at", "branch", "event")}
         for slice_ in slices:
             profile = slice_["profile"]
-            if not eligible(run, profile, default_branch):
+            if profile == "release":
+                ref = default_branch
+            elif run.get("event") not in PR_EVENTS and run.get("branch") in {default_branch, *refs}:
+                ref = run["branch"]
+            else:
                 continue
+            line = self._line(ref)
             plan = {k: slice_[k] for k in ("revision", "selector", "targets", "planned", "result")}
-            self._put(self.state["profiles"], profile, meta, slice_["slice"], plan)
+            self._put(line["profiles"], profile, meta, slice_["slice"], plan)
             if profile != "release":
-                self._put(self.state, "catalog", meta, slice_["slice"],
+                self._put(line, "catalog", meta, slice_["slice"],
                           {**plan, **{k: slice_[k] for k in ("signatures", "sources", "cases")}})
 
     def _put(self, holder, key, meta, part, value):
@@ -276,21 +293,21 @@ class TaggedStore:
             self.changed = True
 
     def refresh_schema(self, fetch, repo):
-        """Read the vocabulary at the catalog's revision once; keep the last good copy on failure."""
-        catalog = self.state.get("catalog")
-        revisions = {part["revision"] for part in (catalog or {}).get("slices", {}).values() if part.get("revision")}
-        if not revisions:
-            return
-        revision = sorted(revisions)[0]
-        if (self.state.get("schema") or {}).get("revision") == revision:
-            return
-        groups = schema_groups(fetch(repo, SCHEMA_PATH, revision) or "")
-        if groups:
-            self.state["schema"] = {"revision": revision, "groups": groups}
-            self.changed = True
+        """Read each branch's vocabulary at its catalog revision once; keep the last good copy on failure."""
+        for line in self.state["lines"].values():
+            revisions = {part["revision"] for part in (line.get("catalog") or {}).get("slices", {}).values() if part.get("revision")}
+            if not revisions:
+                continue
+            revision = sorted(revisions)[0]
+            if (line.get("schema") or {}).get("revision") == revision:
+                continue
+            groups = schema_groups(fetch(repo, SCHEMA_PATH, revision) or "")
+            if groups:
+                line["schema"] = {"revision": revision, "groups": groups}
+                self.changed = True
 
-    def view(self):
-        return build_view(self.state)
+    def view(self, ref):
+        return build_view(self.state["lines"].get(ref) or {})
 
 
 def _label(groups, group, values):

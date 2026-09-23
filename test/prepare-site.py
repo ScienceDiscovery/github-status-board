@@ -69,9 +69,11 @@ groups_of={'ut':[(280,'packages/core/src/unit.test.ts',['os:linux','os:macos','a
   'st':[(2,'test/api/agent_loop_smoke.ts',['os:linux','arch:amd64','model:mock']),(1,'test/api/agent_loop_real_smoke.ts',['os:linux','arch:amd64','model:real']),(1,'services/runner/workloads/npu-smoke-test.py',['os:linux','arch:amd64','npu:required'])],
   'e2e':[(18,'test/journey-first-run.spec.ts',['os:linux','arch:amd64','model:mock','sandbox:bubblewrap']),(6,'test/legacy-console.spec.ts',['os:linux','arch:amd64','sandbox:bubblewrap','status:legacy']),(2,'test/journey-real-model.spec.ts',['os:linux','arch:amd64','model:real','sandbox:bubblewrap'])]}
 tag_store=TaggedStore()
-for label_prefix,created,event in (('','2026-09-20T10:00:00Z','push'),('daily-','2026-09-19T18:00:00Z','schedule')):
+# The jiuwen line has only UT and ST cases, from a manual run on its branch.
+for label_prefix,created,event,branch in (('','2026-09-20T10:00:00Z','push','main'),('daily-','2026-09-19T18:00:00Z','schedule','main'),('','2026-09-19T08:00:00Z','workflow_dispatch','feat/jiuwenswarm')):
     found=[]
     for part,groups in groups_of.items():
+        if branch!='main' and part=='e2e': continue
         catalog=[{'id':f'{source}::case {i+1}','source':source,'sourceHash':'0'*64,'runner':'node','tags':[f'category:{part}',*tags]} for count,source,tags in groups for i in range(count)]
         planned=sum(count for count,_,tags in groups if not any(t in tags for t in ('status:external','status:legacy','model:real','npu:required')) and 'os:linux' in tags)
         blob=io.BytesIO()
@@ -80,9 +82,9 @@ for label_prefix,created,event in (('','2026-09-20T10:00:00Z','push'),('daily-',
             archive.writestr(f'{label_prefix}{part}/tagged/plan.json',json.dumps({'revision':'a'*40,'selector':f'{policy} and (category:{part})','targets':[{'os':'linux','arch':'amd64'}],'entries':[{}]*planned}))
             archive.writestr(f'{label_prefix}{part}/tagged/summary.json',json.dumps({'status':'PASS','planned':planned,'executed':planned,'passed':planned,'failed':0,'skipped':0}))
         with zipfile.ZipFile(blob) as archive: found+=extract(archive)
-    tag_store.observe(dict(id=900+len(label_prefix),attempt=1,url=base+'/actions/runs/900',created_at=created,branch='main',event=event),found,'main')
+    tag_store.observe(dict(id=900+len(label_prefix)+(branch!='main'),attempt=1,url=base+'/actions/runs/900',created_at=created,branch=branch,event=event),found,'main',('main','feat/jiuwenswarm'))
 tag_store.refresh_schema(lambda *args: json.dumps(tag_schema),repo)
-tests['tagged']=tag_store.view()
+tests['tagged']=tag_store.view('main')
 runs[0]['jobs'].append(dict(name='Coverage',status='completed',conclusion='success',url=runs[0]['url']+'/job/coverage',failed_steps=[],duration_s=385))
 rate=dict(success_rate=50,total=2,success=1,failure=1,cancelled=0,median_duration_s=120)
 ci=dict(default_branch='main',main=rate,pull_request=rate,red_streak_main=1,failures_7d=2,runs_sampled=3,job_history_runs=2,main_timeline=runs,latest_main=dict(run=runs[0],jobs=runs[0]['jobs']),workflows=[dict(name='CI',url=runs[0]['url'],path='.github/workflows/ci.yml',state='active',all=rate,main=rate,pull_request=rate,failures_7d=2,last_run=runs[0])],job_health=[dict(name='E2E',success_rate=50,runs=2,success=1,failure=1,cancelled=0,median_duration_s=120,last=runs[0],top_failed_steps=[dict(step='Run browser journeys',count=1)]),dict(name='Coverage',success_rate=100,runs=1,success=1,failure=0,cancelled=0,median_duration_s=385,last=runs[0],top_failed_steps=[])],recent_runs=runs)
@@ -99,13 +101,27 @@ lane_runs+=[lane_run(400+d,'Nightly','schedule',f'2026-09-{d:02d}T18:00:00Z','ma
 lane_runs.append(lane_run(399,'CI','workflow_call','2026-09-19T18:00:05Z','main'))
 lanes=build_lanes(lane_runs,default_branch='main',now=datetime(2026,9,20,12,tzinfo=timezone.utc),rules=json.loads((root/'board-config.json').read_text())['workflows'],prs=[pr])
 ci['lanes']=lanes
+# Branch line feat/jiuwenswarm: PRs into it and a failing manual run, no Nightly or Release.
+swarm_runs=[lane_run(600,'CI','pull_request','2026-09-19T09:00:00Z','swarm-fix','success',pull_requests=[8]),lane_run(601,'CI','pull_request','2026-09-20T02:00:00Z','swarm-fix','failure',pull_requests=[8]),
+            lane_run(602,'CI','workflow_dispatch','2026-09-20T03:00:00Z','feat/jiuwenswarm','failure')]
+swarm_rate=dict(success_rate=0,total=1,success=0,failure=1,cancelled=0,median_duration_s=300)
+swarm_recent=[dict(r,title=r['title'],created_at=r['created_at'],duration_s=300,actor='maintainer') for r in swarm_runs]
+swarm_ci=dict(default_branch='feat/jiuwenswarm',main=swarm_rate,pull_request=dict(swarm_rate,success_rate=50,total=2,success=1),red_streak_main=1,failures_7d=2,runs_sampled=3,job_history_runs=1,
+              main_timeline=swarm_recent[2:],latest_main=dict(run=swarm_recent[2],jobs=[dict(name='UT',conclusion='failure',url=base+'/actions/runs/602',duration_s=300,failed_steps=['Run unit tests'])]),
+              workflows=[dict(name='CI',url=base+'/actions/workflows/ci.yml',path='.github/workflows/ci.yml',state='active',all=swarm_rate,main=swarm_rate,pull_request=swarm_rate,failures_7d=2,last_run=swarm_recent[2])],
+              job_health=[],recent_runs=swarm_recent,
+              lanes=build_lanes(swarm_runs,default_branch='feat/jiuwenswarm',now=datetime(2026,9,20,12,tzinfo=timezone.utc),rules=json.loads((root/'board-config.json').read_text())['workflows'],prs=[pr],lanes=(('pr','PR'),('main','jiuwen'))))
+swarm_tests=dict(json.loads(json.dumps(tests)),tagged=tag_store.view('feat/jiuwenswarm'),executed=[],
+                 coverage=dict(source=None,value=None,attempts=[dict(step='Actions 覆盖率摘要',ok=False,detail='该分支没有覆盖率摘要')]))
 ops=dict(releases=dict(latest=None,count=0,items=[],tags=[],total_downloads=0,cadence_days=None,unreleased=None),branches=dict(default='main',protection=dict(enabled=True,required_reviews=1,required_checks=['E2E']),rulesets=[],items=[],count=1,stale=[]),public_advisories=[],community=dict(health_percentage=75,missing=['contributing'],files=dict(readme=True,contributing=False)),contributors=dict(count=2,total_commits=10,bus_factor_50=1,top=[dict(login='maintainer',contributions=8,share=80)]),activity=dict(weeks=[dict(week=1789819200,total=10)],commits_4w=10,commits_52w=10),recent_commits=[],commits_7d=3,stale_automation=dict(workflow=None))
 wrap=lambda value:dict(status='ok',data=value,notes=[],error=None)
 doc.update(repo=repo,repo_url=base,config=dict(artifact_names=['ut-results','e2e-results'],pr_idle_days=14),sections={k:wrap(v) for k,v in dict(repo=dict(description='浏览器验收数据',stars=10,forks=2,language='Python',license='MIT',default_branch='main',pushed_at=time),issues=issues,prs=prs,ci=ci,tests=tests,ops=ops).items()})
+doc['lines']=[dict(key='main',label='main',ref='main',default=True),dict(key='jiuwen',label='jiuwen',ref='feat/jiuwenswarm',default=False)]
+doc['line_sections']={'jiuwen':dict(ci=wrap(swarm_ci),tests=wrap(swarm_tests))}
 doc['board']=BoardStore(cfg,persist=False).payload(doc)
 doc['details']={'issue:1':dict(body=item['body'],cross_references=[]),'pr:3':dict(body=pr['body'],cross_references=[])}
 export_site(root/'.e2e/site/github-status-board',doc)
 empty=json.loads(json.dumps(doc));empty['quality']['runs']=[];empty['releases']=[];empty['issues']=None;empty['prs']=None;empty['notices']=[{'message':'GitHub 数据不可读取，结果未知。'}]
 empty['sections']={k:dict(status='error',data=None,notes=[],error=dict(kind='error',message='结果未知')) for k in empty['sections']}
-empty['board']['items']=[];empty['details']={}
+empty['board']['items']=[];empty['details']={};empty['line_sections']={}
 export_site(root/'.e2e/site/empty',empty)

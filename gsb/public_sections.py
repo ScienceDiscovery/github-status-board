@@ -54,7 +54,8 @@ def public_ops(ctx):
     return out
 
 
-def public_tests(ctx, runs):
+def public_tests(ctx, runs, owns=None):
+    """Test evidence of ``runs``; ``owns`` keeps the coverage artifacts of their branch line."""
     notes = []
     paths, source = _tree_paths(ctx, notes)
     tree = summarize_tree(paths) if paths else None
@@ -121,6 +122,8 @@ def public_tests(ctx, runs):
         'branch': (artifact.get('workflow_run') or {}).get('head_branch'),
         'sha': (artifact.get('workflow_run') or {}).get('head_sha'),
     } for artifact in raw_artifacts]
+    if owns:
+        coverage_artifacts = [artifact for artifact in coverage_artifacts if owns(artifact)]
     coverage = _coverage_probe(ctx, coverage_artifacts, paths, {}, notes) if hasattr(ctx.gh, 'get') else {
         'source': None,
         'value': None,

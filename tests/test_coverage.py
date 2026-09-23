@@ -261,6 +261,26 @@ class CoverageParserTests(unittest.TestCase):
         self.assertEqual(result["languages"]["node"]["baseline"]["sha"], "mainsha")
         self.assertEqual(result["languages"]["python"]["current"]["groups"][0]["source_sha"], "mainsha")
 
+    def test_complete_dispatch_gate_is_the_baseline_of_a_branch_without_push_ci(self):
+        artifacts = [
+            {"id": 1, "name": "node-coverage-summary-workflow_dispatch-swarmsha", "branch": "feat/swarm",
+             "sha": "swarmsha", "created_at": "2026-09-23T03:00:00Z"},
+        ]
+        complete = {"ut": {"complete": True, "producer": "success"}, "st": {"complete": True, "producer": "success"}}
+        totals = {"lines": {"covered": 7, "total": 10, "percentage": 70}}
+        manifest = {"schema_version": 1, "layers": complete, "totals": totals,
+                    "groups": [{"name": "packages/example", "files": 1, "totals": totals}]}
+        ctx = Context(gh=object(), cfg=Config(), now=datetime(2026, 9, 23), repo_meta={"default_branch": "feat/swarm"})
+        with patch("gsb.collectors._load_artifact", side_effect=lambda *_: {"coverage_manifest": manifest}):
+            result = _coverage_probe(ctx, artifacts, [], {}, [])
+        self.assertEqual(result["current"]["kind"], "authoritative")
+        self.assertEqual(len(result["languages"]["node"]["history"]), 1)
+        # An incomplete dispatch is not a baseline.
+        manifest["layers"] = {**complete, "st": {"complete": False, "producer": "failure"}}
+        with patch("gsb.collectors._load_artifact", side_effect=lambda *_: {"coverage_manifest": manifest}):
+            result = _coverage_probe(ctx, artifacts, [], {}, [])
+        self.assertEqual(result["current"]["kind"], "partial")
+
     def test_incomplete_gate_push_does_not_replace_last_successful_main_result(self):
         artifacts = [
             {"id": 2, "name": "node-coverage-summary-push-newsha", "branch": "main",

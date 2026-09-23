@@ -109,8 +109,11 @@ def pr_number(run, prs=()):
 
 
 def build_lanes(runs, *, default_branch, now, rules=None, prs=(), days=WINDOW_DAYS, zone=DISPLAY_ZONE,
-                collected_since=None):
-    """Group the latest attempt of each run into lanes aligned on one day axis."""
+                collected_since=None, lanes=LANES):
+    """Group the latest attempt of each run into lanes aligned on one day axis.
+
+    ``default_branch`` is the branch whose pushes form the "main" lane; a branch
+    line passes its own branch and only the lanes it has."""
     first = now.astimezone(zone).date() - timedelta(days=days - 1)
     axis = [first + timedelta(days=offset) for offset in range(days)]
     position = {day: index for index, day in enumerate(axis)}
@@ -121,7 +124,7 @@ def build_lanes(runs, *, default_branch, now, rules=None, prs=(), days=WINDOW_DA
         previous = latest.get(run.get("id"))
         if previous is None or (run.get("attempt") or 1) > (previous.get("attempt") or 1):
             latest[run.get("id")] = run
-    cells = {key: [[] for _ in axis] for key, _ in LANES}
+    cells = {key: [[] for _ in axis] for key, _ in lanes}
     excluded = Counter()
     for run in latest.values():
         created = parse(run.get("created_at"))
@@ -145,16 +148,16 @@ def build_lanes(runs, *, default_branch, now, rules=None, prs=(), days=WINDOW_DA
             "pr": pr_number(run, prs), "pr_linked": bool(run.get("pull_requests")),
             "title": (run.get("title") or "")[:120], "created_at": run.get("created_at"),
             "time": local.strftime("%H:%M")}))
-    lanes = []
-    for key, label in LANES:
+    rows = []
+    for key, label in lanes:
         columns = [[cell for _, _, cell in sorted(column, key=lambda item: item[:2])] for column in cells[key]]
         counts = Counter(cell["outcome"] for column in columns for cell in column)
         decided = counts["success"] + counts["failure"]
-        lanes.append({"key": key, "label": label, "days": columns, "summary": {
+        rows.append({"key": key, "label": label, "days": columns, "summary": {
             "total": sum(counts.values()), **{name: counts[name] for name in ("success", "failure", "cancelled", "running", "other")},
             "success_rate": round(counts["success"] * 100 / decided, 1) if decided else None}})
     since = parse(collected_since)
     since = since.astimezone(zone).date() if since else None
     return {"days": [day.isoformat() for day in axis], "window_days": days, "zone": zone.tzname(None),
             "order": "earliest_first", "collected_since": since.isoformat() if since and since > first else None,
-            "lanes": lanes, "excluded": dict(excluded)}
+            "branch": default_branch, "lanes": rows, "excluded": dict(excluded)}
