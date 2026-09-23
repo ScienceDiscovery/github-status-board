@@ -103,8 +103,10 @@ def public_tests(ctx, runs, owns=None):
                                         **{k: report[k] for k in ('commands', 'packages') if k in report}},
                              'note': None if counts else '此运行没有可核验的用例数量。'})
     try:
+        store = ctx.coverage_store
         paginate = getattr(ctx.gh, 'paginate', None)
-        raw_artifacts = paginate(
+        # With a store, only artifacts created since the last build are listed.
+        raw_artifacts = store.listing(ctx.gh, ctx.repo, ctx.now) if store is not None else paginate(
             f'/repos/{ctx.repo}/actions/artifacts', {'per_page': 100}, max_pages=5, key='artifacts'
         ) if paginate else []
     except GitHubError:

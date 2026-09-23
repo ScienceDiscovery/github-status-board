@@ -40,6 +40,8 @@ class Context:
     cfg: Config
     now: datetime
     repo_meta: dict = field(default_factory=dict)
+    # Optional CoverageStore: summaries read by earlier builds are not downloaded again.
+    coverage_store: object = None
 
     @property
     def repo(self) -> str:
@@ -668,6 +670,24 @@ def _in_group(path: str, group: str) -> bool:
     return path == group or path.startswith(group.rstrip("/") + "/")
 
 
+def _coverage_manifest(ctx: Context, artifact: dict, notes: list, sources: bool = False) -> dict | None:
+    """A coverage summary, from the store when an earlier build already read it.
+
+    ``sources`` asks for the per-file list too; the store keeps it only for the
+    summaries the view shows, so an older one may be downloaded again."""
+    store = ctx.coverage_store
+    if store is not None:
+        known, manifest = store.get(artifact, sources)
+        if known:
+            return manifest
+    loaded = _load_artifact(ctx, artifact, notes)
+    manifest = (loaded or {}).get("coverage_manifest")
+    if store is not None and loaded is not None:
+        # A failed download stays unknown and is tried again next time.
+        store.put(artifact, manifest, sources)
+    return manifest
+
+
 def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, language: str) -> dict | None:
     prefix = f"{language}-coverage-summary-"
     candidates = sorted(
@@ -678,8 +698,7 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
     )[:80]
     entries = []
     for artifact in candidates:
-        loaded = _load_artifact(ctx, artifact, notes)
-        manifest = (loaded or {}).get("coverage_manifest")
+        manifest = _coverage_manifest(ctx, artifact, notes)
         if not manifest or _coverage_language(artifact, manifest) != language:
             continue
         entries.append({"artifact": artifact, "manifest": manifest})
@@ -703,7 +722,7 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
             for group in baseline.get("groups", []) if group.get("name")
         }
         # Files follow their group: an increment replaces the files of each group it measured.
-        files = _coverage_sources(baseline)
+        files = _coverage_sources(_coverage_manifest(ctx, baseline_artifact, notes, sources=True) or {})
         increments = [
             entry for entry in reversed(default_entries)
             if (entry["artifact"].get("created_at") or "") > (baseline_artifact.get("created_at") or "")
@@ -712,6 +731,13 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
                      and "-main-incremental-" in entry["artifact"].get("name", "")))
         ]
         applied = []
+        read_files = {}
+        def increment_files(entry):
+            # Per-file lists are read only for increments that are applied.
+            key = entry["artifact"]["id"]
+            if key not in read_files:
+                read_files[key] = _coverage_sources(_coverage_manifest(ctx, entry["artifact"], notes, sources=True) or {})
+            return read_files[key]
         for entry in increments:
             artifact, manifest = entry["artifact"], entry["manifest"]
             changed = []
@@ -726,7 +752,7 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
                 }
                 changed.append(group["name"])
                 files = {path: value for path, value in files.items() if not _in_group(path, group["name"])}
-                files.update({path: value for path, value in _coverage_sources(manifest).items() if _in_group(path, group["name"])})
+                files.update({path: value for path, value in increment_files(entry).items() if _in_group(path, group["name"])})
             if changed:
                 applied.append({"artifact": artifact["name"], "created_at": artifact.get("created_at"),
                                 "sha": _coverage_source_sha(entry), "groups": changed})
@@ -762,7 +788,7 @@ def _coverage_summary_dataset(ctx: Context, artifacts: list[dict], notes: list, 
             "totals": manifest.get("totals") or _coverage_totals(current_groups),
             "groups": current_groups,
             "increments": [],
-            "sources": sorted(_coverage_sources(manifest).values(), key=lambda source: source["path"]),
+            "sources": sorted(_coverage_sources(_coverage_manifest(ctx, artifact, notes, sources=True) or {}).values(), key=lambda source: source["path"]),
         }
 
     history = [{

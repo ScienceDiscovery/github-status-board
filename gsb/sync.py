@@ -173,7 +173,7 @@ class Sync:
         # A list response is metadata, never evidence that previously parsed
         # metrics disappeared. Keep them across expiration and transient errors.
         if old:
-            for field in ("tests", "jobs", "coverage", "coverage_summaries", "reports_status", "metrics_version", "inspected_at"):
+            for field in ("tests", "jobs", "coverage", "coverage_summaries", "reports_status", "metrics_version", "inspected_at", "inspected"):
                 if field in old:
                     row[field] = old[field]
         self.history.put("runs", row)
@@ -316,7 +316,14 @@ class Sync:
                 unavailable = row.get("reports_status") == "unavailable" or row.get("jobs_status") == "unavailable" or any(t["status"] == "unavailable" for t in row.get("tests", []))
                 if unavailable:
                     job["error"] = "details_unavailable"
-                if row["status"] == "completed" and date(row["updated_at"]) < self.now - timedelta(days=7) and not unavailable:
+                # A completed attempt's jobs and artifacts no longer change. It leaves
+                # the queue once its reports are read, or after a second look found
+                # nothing new; only unreadable details keep being retried for a week.
+                settled = row["status"] == "completed" and not unavailable
+                if settled:
+                    job["after"] = job.get("after", 0) + 1
+                if settled and (row.get("reports_status") == "available" or job["after"] >= 2
+                                or date(row["updated_at"]) < self.now - timedelta(days=7)):
                     del self.state["pending"][key]
                 else:
                     job["due"] = stamp(self.now + timedelta(seconds=delay))
