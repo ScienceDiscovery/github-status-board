@@ -16,7 +16,7 @@ Worker 校验 GitHub OIDC 签名、issuer、audience、不可变仓库与组织 
 
 同一个 run／attempt 对每种用途仅能兑换一次，Worker 持久保存非秘密签发记录。网络失败或响应丢失后使用 GitHub Re-run jobs 或新的运行恢复。先部署支持兑换的 Worker，再更新本仓工作流；验证成功后删除旧 `SDBOT_GITHUB_APP_PRIVATE_KEY` 仓库 Secret。不要撤销 Worker 正在使用的 App 私钥本身。
 
-App 的 Actions 写权限在 App 注册页 **Permissions & events → Repository permissions → Actions → Read and write** 设置，并由目标组织在安装页批准更新；仅修改注册页不等于既有 installation 已获授权。即使两个看板仓同属一个组织，也要分别批准正式与测试 App 各自的 installation；测试 App 只安装到实验源仓及测试看板仓。仓库 Settings → Actions 的默认 `GITHUB_TOKEN` 权限继续保持只读；触发所需的 App Actions 写权限与此设置不同。
+App 的 Actions 写权限在 App 注册页 **Permissions & events → Repository permissions → Actions → Read and write** 设置，并由目标组织在安装页批准更新；仅修改注册页不等于既有 installation 已获授权。即使两个看板仓同属一个组织，也要分别批准正式与测试 App 各自的 installation；测试 App 的安装范围须覆盖实验源仓及测试看板仓，也可以包含其他仓库。两套 App 的安装范围可以重叠；各 Bot 通过源仓过滤、看板目标映射和 OIDC 信任配置隔离业务，范围外 Webhook 仍归档，不触发业务。临时令牌只授予当前配置中的源仓读取或目标看板写入权限，不随 App 安装范围扩大。仓库 Settings → Actions 的默认 `GITHUB_TOKEN` 权限继续保持只读；触发所需的 App Actions 写权限与此设置不同。
 
 工作流接受 `workflow_dispatch`，并在每小时第 17、47 分钟定时续跑；固定 checkout main，禁止 checkout 输入指定的任意分支。输入 `source_repository` 可省略，填写时必须匹配本站源仓；`request_id` 为诊断用刷新编号，不包含原始 Webhook、私钥或安装令牌。可在 Actions 的 **Collect dashboard data** 手动执行，也可以由 Bot 调用 GitHub workflow dispatch API。
 
