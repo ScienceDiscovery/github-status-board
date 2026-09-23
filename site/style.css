@@ -173,6 +173,14 @@ td .sub { color: var(--muted); font-size: 12px; }
 .spark .area { fill: var(--seq-1); stroke: none; opacity: 0.7; }
 .spark .base { stroke: var(--axis); stroke-width: 1; }
 .spark circle { fill: var(--s1); }
+.coverage-trend { width: 100%; height: auto; display: block; margin-top: 4px; }
+.coverage-trend .coverage-grid { stroke: var(--grid); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.coverage-trend .coverage-axis { stroke: var(--axis); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.coverage-trend .coverage-area { fill: var(--seq-1); opacity: .55; stroke: none; }
+.coverage-trend .coverage-line { fill: none; stroke: var(--s1); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.coverage-trend .coverage-dot { fill: var(--surface); stroke: var(--s1); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+.coverage-trend .coverage-hit { fill: transparent; stroke: none; cursor: crosshair; }
+.coverage-trend text { fill: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
 .ratio { display: inline-block; width: 60px; height: 8px; background: var(--surface-2); border-radius: 4px; vertical-align: middle; overflow: hidden; margin-right: 6px; }
 .ratio span { display: block; height: 100%; background: var(--s1); border-radius: 4px; }
 .ratio.bad span { background: var(--critical); }

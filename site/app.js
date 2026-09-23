@@ -31,6 +31,15 @@
     return `${Math.floor(diff / 86400 / 30)} 个月前`;
   };
   const date = (iso) => (iso ? new Date(iso).toLocaleString('zh-CN', { hour12: false }) : '—');
+  const shortDate = (iso) => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? '—' : `${d.getMonth() + 1}/${d.getDate()}`;
+  };
+  const shortDateTime = (iso) => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    return `${shortDate(iso)} ${[d.getHours(), d.getMinutes(), d.getSeconds()].map((value) => String(value).padStart(2, '0')).join(':')}`;
+  };
   const days = (d) => (d == null ? '—' : d < 1 ? '<1 天' : `${Math.round(d)} 天`);
   const tip = (text) => ` data-tip="${esc(text)}"`;
   const link = (href, text, extra = '') => `<a href="${esc(/^https:\/\//.test(href || "") ? href : "#")}" target="_blank" rel="noopener"${extra}>${text}</a>`;
@@ -80,6 +89,58 @@
     const last = pts[pts.length - 1];
     const dots = pts.map((p, i) => `<rect x="${(p[0] - 6).toFixed(1)}" y="0" width="12" height="${h}" fill="transparent"${tip(`${labels[i] || ''}: ${values[i]} ${unit}`)}></rect>`).join('');
     return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path class="area" d="${area}"></path><line class="base" x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}"></line><path d="${path}"></path><circle cx="${last[0]}" cy="${last[1]}" r="3"></circle>${dots}</svg>`;
+  };
+  const coverageTrend = (history) => {
+    if (!history.length) return '';
+    const w = 800, h = 210, left = 58, right = 18, top = 12, bottom = 34;
+    const plotW = w - left - right, plotH = h - top - bottom;
+    const values = history.map((row) => Number(row.totals.lines.percentage));
+    const rawMin = Math.min(...values), rawMax = Math.max(...values);
+    const margin = Math.max((rawMax - rawMin) * 0.18, 0.5);
+    const paddedMin = Math.max(0, rawMin - margin), paddedMax = Math.min(100, rawMax + margin);
+    const roughStep = Math.max((paddedMax - paddedMin) / 4, 0.1);
+    const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+    const fraction = roughStep / magnitude;
+    const tickStep = (fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10) * magnitude;
+    const yMin = Math.max(0, Math.floor(paddedMin / tickStep) * tickStep);
+    const yMax = Math.min(100, Math.ceil(paddedMax / tickStep) * tickStep);
+    const yRange = yMax - yMin || 1;
+    const pts = values.map((value, index) => ({
+      x: left + (index * plotW) / Math.max(values.length - 1, 1),
+      y: top + ((yMax - value) / yRange) * plotH,
+      value,
+      row: history[index],
+    }));
+    const path = pts.map((point, index) => `${index ? 'L' : 'M'}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
+    const baseY = top + plotH;
+    const area = `${path} L${pts[pts.length - 1].x.toFixed(1)},${baseY} L${pts[0].x.toFixed(1)},${baseY} Z`;
+    const ticks = Array.from({ length: Math.round((yMax - yMin) / tickStep) + 1 }, (_, index) => yMin + tickStep * index);
+    const yAxis = ticks.map((value) => {
+      const y = top + ((yMax - value) / yRange) * plotH;
+      const label = tickStep < 1 ? value.toFixed(1) : value.toFixed(0);
+      return `<line class="coverage-grid" x1="${left}" y1="${y.toFixed(1)}" x2="${w - right}" y2="${y.toFixed(1)}"></line><text class="coverage-y-label" x="${left - 9}" y="${(y + 4).toFixed(1)}" text-anchor="end">${label}%</text>`;
+    }).join('');
+    const dates = [];
+    pts.forEach((point) => {
+      const label = shortDate(point.row.created_at);
+      const bucket = dates.find((item) => item.label === label);
+      if (bucket) bucket.points.push(point);
+      else dates.push({ label, points: [point] });
+    });
+    const dateIndexes = dates.length <= 6
+      ? dates.map((_, index) => index)
+      : [...new Set(Array.from({ length: 6 }, (_, index) => Math.round((index * (dates.length - 1)) / 5)))];
+    const xAxis = dateIndexes.map((index) => {
+      const bucket = dates[index];
+      const x = bucket.points.reduce((sum, point) => sum + point.x, 0) / bucket.points.length;
+      const anchor = index === 0 && x === left ? 'start' : index === dates.length - 1 && x === w - right ? 'end' : 'middle';
+      return `<text class="coverage-x-label" x="${x.toFixed(1)}" y="${h - 8}" text-anchor="${anchor}">${esc(bucket.label)}</text>`;
+    }).join('');
+    const dots = pts.map((point) => {
+      const label = `${shortDateTime(point.row.created_at)} · ${pct(point.value)}`;
+      return `<circle class="coverage-dot" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4"></circle><circle class="coverage-hit" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="11"${tip(label)}></circle>`;
+    }).join('');
+    return `<svg class="coverage-trend" viewBox="0 0 ${w} ${h}" role="img" aria-label="完整行覆盖率历史趋势">${yAxis}<line class="coverage-axis" x1="${left}" y1="${top}" x2="${left}" y2="${baseY}"></line><line class="coverage-axis" x1="${left}" y1="${baseY}" x2="${w - right}" y2="${baseY}"></line><path class="coverage-area" d="${area}"></path><path class="coverage-line" d="${path}"></path>${dots}${xAxis}</svg>`;
   };
   const strip = (runs) => `<div class="strip">${runs.slice().reverse().map((r) => `<a class="${esc(r.conclusion || r.status)}" href="${esc(r.url)}" target="_blank" rel="noopener"${tip(`${r.title || r.name}\n${CONCLUSION_NAME[r.conclusion] || r.status} · ${r.branch} · ${r.event}\n${date(r.created_at)} · ${dur(r.duration_s)}`)}></a>`).join('')}</div>`;
   const labelChips = (labels) => labels.map((l) => `<span class="label-chip"><span class="sw" style="background:#${esc(l.color || '999')}"></span>${esc(l.name)}</span>`).join('');
@@ -483,7 +544,7 @@
       body += tiles(metricTiles);
       const history = (dataset.history || []).filter((row) => row.totals?.lines?.percentage != null);
       body += `<div class="grid wide" style="margin-top:12px">
-        ${card(`${label} 完整行覆盖率趋势`, history.length ? sparkline(history.map((row) => row.totals.lines.percentage), history.map((row) => date(row.created_at)), '%') + `<div class="muted">${history.map((row) => `${date(row.created_at)} ${pct(row.totals.lines.percentage)}`).join(' · ')}</div>` : empty('下一次完整运行后会形成趋势'), { sub: '只使用 authoritative/full 摘要，不混入 PR 增量' })}
+        ${card(`${label} 完整行覆盖率趋势`, history.length ? coverageTrend(history) : empty('下一次完整运行后会形成趋势'), { sub: '只使用 authoritative/full 摘要，不混入 PR 增量' })}
         ${card(`${label} 数据身份`, kv([
           ['当前', `${badge(kind, tone)} ${esc(dataset.source)}`],
           ['完整基线', baseline ? `${date(baseline.created_at)} · <code>${esc((baseline.sha || '').slice(0, 12))}</code>` : '尚无'],
