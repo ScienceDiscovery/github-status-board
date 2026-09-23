@@ -1,24 +1,49 @@
+import json
 import unittest
+from unittest.mock import patch
 
+import collection_context as context_module
 from collection_context import collection_context
 
 
 class CollectionContextTests(unittest.TestCase):
-    def test_each_dashboard_chooses_its_own_source(self):
-        prod = collection_context("ScienceDiscovery/github-status-board")
-        test = collection_context("sciencediscovery/github-status-board-test", "SCiencediscovery/sciencediscovery", "refresh-17")
-        self.assertEqual(prod["source"], "openJiuwen-ai/sciencediscovery")
-        self.assertEqual(test["source"], "ScienceDiscovery/sciencediscovery")
-        self.assertEqual(prod["source_owner"], "openJiuwen-ai")
-        self.assertEqual(test["target_name"], "github-status-board-test")
+    def setUp(self):
+        self.deployments = json.loads((context_module.ROOT / "board-config.json").read_text())["deployments"]
+        self.assertEqual(len(self.deployments), 1, "each dashboard must configure exactly one source")
+        self.source, self.deployment = next(iter(self.deployments.items()))
+        self.target = self.deployment["repository"]
+
+    def test_this_dashboard_chooses_its_own_source(self):
+        result = collection_context(self.target.upper(), self.source.upper(), "refresh-17")
+        self.assertEqual(result["source"], self.source)
+        self.assertEqual(result["target"], self.target)
+        self.assertEqual(result["source_owner"], self.source.split("/")[0])
+        self.assertEqual(result["target_name"], self.target.split("/")[1])
+        expected = {
+            "production": ("openJiuwen-ai/sciencediscovery", "ScienceDiscovery/github-status-board"),
+            "test": ("ScienceDiscovery/sciencediscovery", "ScienceDiscovery/github-status-board-test"),
+        }
+        self.assertEqual((self.source, self.target), expected[self.deployment["environment"]])
 
     def test_cross_site_and_unknown_repository_are_rejected(self):
-        for destination, source in [("ScienceDiscovery/github-status-board", "ScienceDiscovery/sciencediscovery"),
-                                    ("evil/dashboard", ""), ("ScienceDiscovery/github-status-board-test", "openJiuwen-ai/sciencediscovery")]:
+        other_source, other_target = (
+            ("ScienceDiscovery/sciencediscovery", "ScienceDiscovery/github-status-board-test")
+            if self.deployment["environment"] == "production"
+            else ("openJiuwen-ai/sciencediscovery", "ScienceDiscovery/github-status-board")
+        )
+        for destination, source in [(self.target, other_source), (other_target, ""), ("evil/dashboard", "")]:
             with self.subTest(destination=destination, source=source), self.assertRaises(ValueError):
                 collection_context(destination, source)
 
     def test_request_id_cannot_inject_workflow_outputs(self):
         for request_id in ["refresh-1\nsource=other/repo", "$(curl example.org)", "x" * 101]:
             with self.subTest(request_id=request_id), self.assertRaises(ValueError):
-                collection_context("ScienceDiscovery/github-status-board", request_id=request_id)
+                collection_context(self.target, request_id=request_id)
+
+    def test_ambiguous_destination_is_rejected(self):
+        content = json.dumps({"deployments": {
+            "example/first": {"repository": self.target},
+            "example/second": {"repository": self.target},
+        }})
+        with patch("pathlib.Path.read_text", return_value=content), self.assertRaises(ValueError):
+            collection_context(self.target)

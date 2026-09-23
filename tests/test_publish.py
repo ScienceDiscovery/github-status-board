@@ -26,7 +26,10 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(commit.call_args.kwargs['source_token'],'read-token')
 
     def test_production_and_test_cannot_be_published_to_each_others_site(self):
-        settings = json.loads((ROOT / 'board-config.json').read_text())
+        settings = {'deployments': {
+            'openJiuwen-ai/sciencediscovery': {'label': '正式', 'repository': 'ScienceDiscovery/github-status-board'},
+            'ScienceDiscovery/sciencediscovery': {'label': '测试', 'repository': 'ScienceDiscovery/github-status-board-test'},
+        }}
         production = deployment_for('OPENJIUWEN-AI/sciencediscovery', settings, 'ScienceDiscovery/github-status-board')
         experiment = deployment_for('ScienceDiscovery/sciencediscovery', settings, 'ScienceDiscovery/github-status-board-test')
         self.assertEqual(production['label'], '正式')

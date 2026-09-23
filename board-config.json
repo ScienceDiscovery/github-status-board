@@ -23,11 +23,6 @@
       "environment": "production",
       "label": "正式",
       "repository": "ScienceDiscovery/github-status-board"
-    },
-    "ScienceDiscovery/sciencediscovery": {
-      "environment": "test",
-      "label": "测试",
-      "repository": "ScienceDiscovery/github-status-board-test"
     }
   }
 }

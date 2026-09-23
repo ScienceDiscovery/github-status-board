@@ -4,15 +4,15 @@
 
 `.github/workflows/collect.yml` 将已有 Python 采集器放到 GitHub Actions 运行。Node／Compose 或 Cloudflare Worker Bot 只接收／记录 Webhook、合并更新并触发该工作流；采集后的 App 提交继续触发 `pages.yml` 发布 GitHub Pages。现有本机 `publish.py` 用法保持兼容。
 
-正式仓和测试仓使用相同工作流及脚本，保留各自的站点快照。`collection_context.py` 从本仓 `board-config.json` 按当前 `GITHUB_REPOSITORY` 反查唯一源仓。正式对应 `openJiuwen-ai/sciencediscovery`，测试对应 `ScienceDiscovery/sciencediscovery`。未知目标仓、跨站源仓参数和非法请求编号会在申请凭据前被拒绝。
+正式仓和测试仓使用相同工作流及脚本，保留各自的站点快照与同步进度。每个仓的 `board-config.json` 只保存自己的单一源仓映射；同步共享代码时不能复制另一环境的部署映射。`collection_context.py` 从本仓 `board-config.json` 按当前 `GITHUB_REPOSITORY` 反查唯一源仓。正式对应 `openJiuwen-ai/sciencediscovery`，测试对应 `ScienceDiscovery/sciencediscovery`。未知目标仓、跨站源仓参数和非法请求编号会在申请凭据前被拒绝。
 
 ## 配置和运行
 
-在两个看板仓各自配置变量 `SDBOT_GITHUB_APP_ID`、Secret `SDBOT_GITHUB_APP_PRIVATE_KEY`。私钥保持多行 PEM，仅保存到 Secrets；不会作为 workflow_dispatch 参数传入，也不写站点或 artifact。App 必须安装到源仓和目标仓，跨组织分别取 installation。
+正式看板使用正式 App，测试看板使用独立测试 App；两套 App ID 和私钥不得复用。在两个看板仓各自配置变量 `SDBOT_GITHUB_APP_ID`、Secret `SDBOT_GITHUB_APP_PRIVATE_KEY`。私钥保持多行 PEM，仅保存到 Secrets；不会作为 workflow_dispatch 参数传入，也不写站点或 artifact。App 必须安装到源仓和目标仓，跨组织分别取 installation。
 
 源仓令牌仅申请 Contents／Issues／Pull requests／Actions／Checks／Commit statuses 读取权限；目标仓令牌仅申请 Contents 写权限。令牌由 `actions/create-github-app-token@v2` 申请，在任务结束时撤销。Worker 触发 collect.yml 的令牌另需目标仓 Actions 写权限。
 
-App 的 Actions 写权限在 App 注册页 **Permissions & events → Repository permissions → Actions → Read and write** 设置，并由目标组织在安装页批准更新；仅修改注册页不等于既有 installation 已获授权。两个看板仓同属一个组织时批准一次对应 installation 即可。仓库 Settings → Actions 的默认 `GITHUB_TOKEN` 权限继续保持只读；触发所需的 App Actions 写权限与此设置不同。
+App 的 Actions 写权限在 App 注册页 **Permissions & events → Repository permissions → Actions → Read and write** 设置，并由目标组织在安装页批准更新；仅修改注册页不等于既有 installation 已获授权。即使两个看板仓同属一个组织，也要分别批准正式与测试 App 各自的 installation；测试 App 只安装到实验源仓及测试看板仓。仓库 Settings → Actions 的默认 `GITHUB_TOKEN` 权限继续保持只读；触发所需的 App Actions 写权限与此设置不同。
 
 工作流接受 `workflow_dispatch`，并在每小时第 17、47 分钟定时续跑；固定 checkout main，禁止 checkout 输入指定的任意分支。输入 `source_repository` 可省略，填写时必须匹配本站源仓；`request_id` 为诊断用刷新编号，不包含原始 Webhook、私钥或安装令牌。可在 Actions 的 **Collect dashboard data** 手动执行，也可以由 Bot 调用 GitHub workflow dispatch API。
 
