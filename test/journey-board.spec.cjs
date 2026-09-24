@@ -185,16 +185,10 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await expect(page.locator('#tab-ci .ci-lane-notes')).toContainText('1 次由其他工作流调用的 CI 子 run 已并入调用方');
   await page.mouse.move(0, 0);
   await page.locator('#tab-ci .card:has(.ci-lanes)').screenshot({path:shot('ci-lanes-desktop')});
-  // "显示耗时" prints each run's time in its cell and is remembered.
-  const timeSwitch = page.locator('#tab-ci [data-lane-time]');
-  await expect(today.first()).toHaveText('');
-  await timeSwitch.click();
-  await expect(timeSwitch).toHaveAttribute('aria-pressed', 'true');
+  // Every finished run prints its time in its cell; a running one has none yet.
   await expect(today.first()).toHaveText('11m');
-  await expect(today.nth(4)).toHaveText('');  // still running
-  await page.locator('#tab-ci .card:has(.ci-lanes)').screenshot({path:shot('ci-lanes-time-desktop')});
-  await page.reload();
-  await expect(page.locator('#tab-ci .ci-lanes')).toHaveClass(/with-time/);
+  await expect(today.nth(4)).toHaveText('');
+  await expect(page.locator('#tab-ci [data-lane-time]')).toHaveCount(0);
   await page.setViewportSize({width:390,height:844});
   const scroller = page.locator('#tab-ci .ci-lanes-scroll');
   // The day axis scrolls inside the card and opens on the newest day.
@@ -206,8 +200,8 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.locator('#tab-ci .card:has(.ci-lanes)').screenshot({path:shot('ci-lanes-narrow')});
-  await page.locator('#tab-ci [data-lane-time]').click();
-  await expect(page.locator('#tab-ci .ci-lanes')).not.toHaveClass(/with-time/);
+  // At 390 px the printed time still fits its cell.
+  expect(await today.first().evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBeTruthy();
   await page.setViewportSize({width:1440,height:1000});
   await page.locator('[data-tab="tests"]').click();
   await expect(page.locator('#tab-tests')).toContainText('按包 / 目录分布');

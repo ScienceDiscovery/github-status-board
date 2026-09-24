@@ -48,12 +48,11 @@
   const CONCLUSION_TONE = { success: 'good', failure: 'bad', timed_out: 'bad', cancelled: '', skipped: '', in_progress: 'warn', queued: 'warn', pending: 'warn', neutral: '', action_required: 'warn', startup_failure: 'bad', error: 'bad', expected: 'warn' };
   const CONCLUSION_NAME = { success: '成功', failure: '失败', timed_out: '超时', cancelled: '取消', skipped: '跳过', in_progress: '运行中', queued: '排队', pending: '等待', neutral: '中性', action_required: '需处理', startup_failure: '启动失败', error: '错误', expected: '等待' };
 
-  const VIEW_KEY = 'gsb.list.view', LINE_KEY = 'gsb.line', COV_SORT_KEY = 'gsb.coverage.sort', LANE_TIME_KEY = 'gsb.lanes.time';
+  const VIEW_KEY = 'gsb.list.view', LINE_KEY = 'gsb.line', COV_SORT_KEY = 'gsb.coverage.sort';
   const loadViews = () => { try { return { issues: 'table', prs: 'table', ...JSON.parse(localStorage.getItem(VIEW_KEY) || '{}') }; } catch (e) { return { issues: 'table', prs: 'table' }; } };
   const loadLine = () => { try { return localStorage.getItem(LINE_KEY); } catch (e) { return null; } };
-  const loadLaneTime = () => { try { return localStorage.getItem(LANE_TIME_KEY) === '1'; } catch (e) { return false; } };
   const loadCovSort = () => { try { return localStorage.getItem(COV_SORT_KEY) === 'lines' ? 'lines' : 'name'; } catch (e) { return 'name'; } };
-  const STATE = { snap: null, status: null, tab: 'overview', views: loadViews(), line: loadLine(), covOpen: new Set(), covSort: loadCovSort(), laneTime: loadLaneTime(), sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, coverageWeekOffset: 0, pollTimer: null };
+  const STATE = { snap: null, status: null, tab: 'overview', views: loadViews(), line: loadLine(), covOpen: new Set(), covSort: loadCovSort(), sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, coverageWeekOffset: 0, pollTimer: null };
 
   // ------------------------------------------------------------ components
   const badge = (text, tone = '', extra = '') => `<span class="badge ${tone}"${extra}>${esc(text)}</span>`;
@@ -218,7 +217,7 @@
       r.title,
     ].filter(Boolean).join('\n');
     const href = /^https:\/\//.test(r.url || '') ? r.url : '#';
-    return `<a class="ci-run ${esc(r.outcome)}" href="${esc(href)}" target="_blank" rel="noopener" aria-label="${esc(text)}"${tip(text)}>${STATE.laneTime ? esc(laneTime(r.duration_s)) : ''}</a>`;
+    return `<a class="ci-run ${esc(r.outcome)}" href="${esc(href)}" target="_blank" rel="noopener" aria-label="${esc(text)}"${tip(text)}>${esc(laneTime(r.duration_s))}</a>`;
   };
   const ciLanes = (L, { notes: withNotes = true } = {}) => {
     if (!L) return empty('分层历史会在下一次采集后出现');
@@ -252,9 +251,8 @@
       ex.unknown ? `${ex.unknown} 次 run 缺少触发事件，无法分层。` : '',
       L.collected_since ? `${laneDay(L.collected_since)} 之前的日期尚未采集（斜纹），不代表没有运行。` : '',
     ].filter(Boolean);
-    const legendItems = LANE_OUTCOMES.map(([key, name]) => `<span><i class="ci-run ${key}"></i>${esc(name)}</span>`).join('') + (L.collected_since ? '<span><i class="ci-lane-day uncollected"></i>未采集</span>' : '')
-      + `<button type="button" class="btn small lane-time${STATE.laneTime ? ' on' : ''}" data-lane-time aria-pressed="${STATE.laneTime}">显示耗时</button>`;
-    return `<div class="ci-lanes-scroll"><div class="ci-lanes${STATE.laneTime ? ' with-time' : ''}" role="table" aria-label="CI 分层历史" style="--days:${L.days.length}">${rows}<div class="ci-lane-row ci-axis" role="row"><div class="ci-lane-head" role="rowheader"></div>${axis}</div></div></div>`
+    const legendItems = LANE_OUTCOMES.map(([key, name]) => `<span><i class="ci-run ${key}"></i>${esc(name)}</span>`).join('') + (L.collected_since ? '<span><i class="ci-lane-day uncollected"></i>未采集</span>' : '');
+    return `<div class="ci-lanes-scroll"><div class="ci-lanes" role="table" aria-label="CI 分层历史" style="--days:${L.days.length}">${rows}<div class="ci-lane-row ci-axis" role="row"><div class="ci-lane-head" role="rowheader"></div>${axis}</div></div></div>`
       + `<div class="legend ci-legend">${legendItems}</div>${withNotes ? `<ul class="notes ci-lane-notes">${notes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}`;
   };
   // Narrow screens scroll the day axis. Stay on the newest day unless the reader scrolled away.
@@ -1067,13 +1065,6 @@
       STATE.filters.runBranch = '';
       STATE.coverageWeekOffset = 0;
       try { localStorage.setItem(LINE_KEY, STATE.line); } catch (e) { /* private mode */ }
-      renderTabs();
-      return;
-    }
-    const laneTimeButton = ev.target.closest('[data-lane-time]');
-    if (laneTimeButton) {
-      STATE.laneTime = !STATE.laneTime;
-      try { localStorage.setItem(LANE_TIME_KEY, STATE.laneTime ? '1' : '0'); } catch (e) { /* private mode */ }
       renderTabs();
       return;
     }
