@@ -206,6 +206,7 @@ td .sub { color: var(--muted); font-size: 12px; }
 /* A full branch name wraps after its slashes, and anywhere if still too long. */
 .ci-lane-head b { font-size: 13px; color: var(--ink); overflow-wrap: anywhere; }
 .ci-lane-rate { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.ci-lane-time { color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ci-lane-sum span { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ci-lane-day { position: relative; min-width: 0; min-height: 30px; padding: 4px 2px; border-top: 1px solid var(--grid); border-left: 1px solid var(--grid); }
 .ci-lane-day.dense { padding-bottom: 15px; }
@@ -220,6 +221,14 @@ td .sub { color: var(--muted); font-size: 12px; }
 .ci-run.cancelled { background: var(--axis); }
 .ci-run.running { background: var(--warning); }
 a.ci-run:hover, a.ci-run:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+/* "显示耗时" prints each run's time inside its cell; colours still give the result. */
+.ci-lanes.with-time .ci-run { height: 14px; font-size: 9.5px; line-height: 14px; text-align: center; white-space: nowrap; overflow: hidden; color: #fff; text-decoration: none; font-variant-numeric: tabular-nums; }
+/* A fainter hatch keeps failures apart from successes without the text drowning in it. */
+.ci-lanes.with-time .ci-run.failure { background: repeating-linear-gradient(135deg, rgba(255, 255, 255, .3) 0 1.5px, transparent 1.5px 4px) var(--critical); text-shadow: 0 0 2px rgba(0, 0, 0, .8), 0 0 1px rgba(0, 0, 0, .8); }
+.ci-lanes.with-time .ci-run.cancelled, .ci-lanes.with-time .ci-run.running { color: var(--ink); }
+.ci-lanes.with-time .ci-day-stack { max-height: 158px; }
+.ci-legend .lane-time { margin-left: auto; }
+.ci-legend .lane-time.on { background: var(--s1); border-color: var(--s1); color: #fff; }
 .ci-axis .ci-lane-head, .ci-axis-day { border-top: 1px solid var(--axis); }
 .ci-axis-day { padding-top: 3px; text-align: center; white-space: nowrap; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ci-legend i.ci-run, .ci-legend i.ci-lane-day { display: inline-block; width: 14px; height: 10px; min-height: 0; padding: 0; margin-right: 5px; border: 0; vertical-align: -1px; }
@@ -230,6 +239,7 @@ a.ci-run:hover, a.ci-run:focus-visible { outline: 2px solid var(--ink); outline-
   .ci-lane-head { font-size: 11px; padding-right: 6px; }
   .ci-lane-head b { font-size: 12px; }
   .ci-lane-src { display: none; }
+  .ci-lanes.with-time .ci-run { font-size: 8.5px; letter-spacing: -.3px; }
 }
 .spark { width: 100%; height: 54px; display: block; }
 .spark path { fill: none; stroke: var(--s1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }

@@ -130,14 +130,14 @@ class LaneLayoutTests(unittest.TestCase):
         _, by_key = lanes([run(1)])
         release = by_key['release']
         self.assertEqual(release['days'], [[] for _ in range(30)])
-        self.assertEqual(release['summary'], dict(total=0, success=0, failure=0, cancelled=0, running=0, other=0, success_rate=None))
+        self.assertEqual(release['summary'], dict(total=0, success=0, failure=0, cancelled=0, running=0, other=0, success_rate=None, median_duration_s=None))
 
     def test_summary_counts_each_outcome_and_completed_success_rate(self):
         results = [('success', 'completed'), ('failure', 'completed'), ('timed_out', 'completed'), ('startup_failure', 'completed'),
                    ('cancelled', 'completed'), ('skipped', 'completed'), (None, 'in_progress'), (None, 'queued'),
                    ('action_required', 'completed')]
         _, by_key = lanes([run(i, conclusion=c, status=s) for i, (c, s) in enumerate(results, 1)])
-        self.assertEqual(by_key['pr']['summary'], dict(total=9, success=1, failure=3, cancelled=2, running=2, other=1, success_rate=25.0))
+        self.assertEqual(by_key['pr']['summary'], dict(total=9, success=1, failure=3, cancelled=2, running=2, other=1, success_rate=25.0, median_duration_s=None))
         self.assertEqual([c['outcome'] for c in by_key['pr']['days'][-1]][-3:], ['running', 'running', 'other'])
 
     def test_days_before_collected_history_are_marked(self):
@@ -145,6 +145,19 @@ class LaneLayoutTests(unittest.TestCase):
         self.assertEqual(doc['collected_since'], '2026-09-10')
         doc, _ = lanes([run(1)], collected_since='2026-01-01T00:00:00Z')
         self.assertIsNone(doc['collected_since'])
+
+
+class DurationTests(unittest.TestCase):
+    def test_each_run_carries_its_duration_and_each_lane_the_median(self):
+        runs = [run(1, duration_s=600), run(2, conclusion='failure', duration_s=300),
+                run(3, started_at='2026-09-22T03:00:00Z', updated_at='2026-09-22T03:20:30Z'),
+                run(4, conclusion='cancelled', duration_s=5), run(5, status='in_progress', conclusion=None, duration_s=99)]
+        _, by_key = lanes(runs)
+        cells = {cell['id']: cell['duration_s'] for column in by_key['pr']['days'] for cell in column}
+        # A recorded duration wins; otherwise start to last update; a running attempt has none yet.
+        self.assertEqual(cells, {1: 600, 2: 300, 3: 1230, 4: 5, 5: None})
+        # Cancelled runs stopped early and do not pull the median down.
+        self.assertEqual(by_key['pr']['summary']['median_duration_s'], 600)
 
 
 class PullRequestNumberTests(unittest.TestCase):

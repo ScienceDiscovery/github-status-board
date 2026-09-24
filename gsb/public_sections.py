@@ -24,7 +24,7 @@ def public_ops(ctx):
     notes = []
     out = {'notes': notes, 'security': None, 'traffic': None}
     # These are explicitly public repository maintenance views. Never call the private collectors.
-    keys = ('releases', 'branches', 'community', 'contributors', 'activity', 'commits', 'stale_automation')
+    keys = ('releases', 'branches', 'community', 'activity', 'commits', 'stale_automation')
     with ThreadPoolExecutor(max_workers=4) as pool:
         tasks = {k: pool.submit(OPS_BLOCKS[k][0], ctx, notes) for k in keys}
         for key, future in tasks.items():

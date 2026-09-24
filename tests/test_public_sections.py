@@ -38,7 +38,7 @@ class PublicSectionsTests(unittest.TestCase):
                 calls.append(name)
                 return result
             return (run, name)
-        blocks = {k: collector(k) for k in ('releases', 'branches', 'community', 'contributors', 'activity', 'commits', 'stale_automation', 'security', 'traffic')}
+        blocks = {k: collector(k) for k in ('releases', 'branches', 'community', 'activity', 'commits', 'stale_automation', 'security', 'traffic')}
         class GH:
             def get(self, path, *args):
                 self_path = '/repos/example/repo/security-advisories'
