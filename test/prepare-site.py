@@ -70,7 +70,7 @@ groups_of={'ut':[(280,'packages/core/src/unit.test.ts',['os:linux','os:macos','a
   'e2e':[(18,'test/journey-first-run.spec.ts',['os:linux','arch:amd64','model:mock','sandbox:bubblewrap']),(6,'test/legacy-console.spec.ts',['os:linux','arch:amd64','sandbox:bubblewrap','status:legacy']),(2,'test/journey-real-model.spec.ts',['os:linux','arch:amd64','model:real','sandbox:bubblewrap'])]}
 tag_store=TaggedStore()
 # The jiuwen line has only UT and ST cases, from a manual run on its branch.
-for label_prefix,created,event,branch in (('','2026-09-20T10:00:00Z','push','main'),('daily-','2026-09-19T18:00:00Z','schedule','main'),('','2026-09-19T08:00:00Z','workflow_dispatch','feat/jiuwenswarm')):
+for profile_name,created,event,branch in (('pr','2026-09-20T10:00:00Z','push','main'),('daily','2026-09-19T18:00:00Z','schedule','main'),('pr','2026-09-19T08:00:00Z','workflow_dispatch','feat/jiuwenswarm')):
     found=[]
     for part,groups in groups_of.items():
         if branch!='main' and part=='e2e': continue
@@ -78,11 +78,11 @@ for label_prefix,created,event,branch in (('','2026-09-20T10:00:00Z','push','mai
         planned=sum(count for count,_,tags in groups if not any(t in tags for t in ('status:external','status:legacy','model:real','npu:required')) and 'os:linux' in tags)
         blob=io.BytesIO()
         with zipfile.ZipFile(blob,'w') as archive:
-            archive.writestr(f'{label_prefix}{part}/tagged/catalog.json',json.dumps(catalog))
-            archive.writestr(f'{label_prefix}{part}/tagged/plan.json',json.dumps({'revision':'a'*40,'selector':f'{policy} and (category:{part})','targets':[{'os':'linux','arch':'amd64'}],'entries':[{}]*planned}))
-            archive.writestr(f'{label_prefix}{part}/tagged/summary.json',json.dumps({'status':'PASS','planned':planned,'executed':planned,'passed':planned,'failed':0,'skipped':0}))
+            archive.writestr(f'{part}/tagged/catalog.json',json.dumps(catalog))
+            archive.writestr(f'{part}/tagged/plan.json',json.dumps({'profile':profile_name,'revision':'a'*40,'selector':f'{policy} and (category:{part})','targets':[{'os':'linux','arch':'amd64'}],'entries':[{}]*planned}))
+            archive.writestr(f'{part}/tagged/summary.json',json.dumps({'status':'PASS','planned':planned,'executed':planned,'passed':planned,'failed':0,'skipped':0}))
         with zipfile.ZipFile(blob) as archive: found+=extract(archive)
-    tag_store.observe(dict(id=900+len(label_prefix)+(branch!='main'),attempt=1,url=base+'/actions/runs/900',created_at=created,branch=branch,event=event),found,'main',('main','feat/jiuwenswarm'))
+    tag_store.observe(dict(id=900+6*(profile_name=='daily')+(branch!='main'),attempt=1,url=base+'/actions/runs/900',created_at=created,branch=branch,event=event),found,'main',('main','feat/jiuwenswarm'))
 tag_store.refresh_schema(lambda *args: json.dumps(tag_schema),repo)
 tests['tagged']=tag_store.view('main')
 runs[0]['jobs'].append(dict(name='Coverage',status='completed',conclusion='success',url=runs[0]['url']+'/job/coverage',failed_steps=[],duration_s=385))

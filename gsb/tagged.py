@@ -1,10 +1,10 @@
 """Source-tagged tests: tag dimensions, CI profile combinations and coverage.
 
 Each layer's results artifact from the source CI holds the harness's frozen
-files under ``<label>/tagged/``: ``catalog.json`` lists every collected case
-with its tags, ``plan.json`` the selector and targets one profile slice ran,
-and ``summary.json`` how that plan executed. ``<label>`` is the slice for the
-merge gate (``ut``) and ``<profile>-<slice>`` for the others (``daily-ut``).
+files under ``<slice>/tagged/``: ``catalog.json`` lists every collected case
+with its tags, ``plan.json`` the selector, targets and profile one slice ran,
+and ``summary.json`` how that plan executed. Every profile uses the slice's
+own directory, so the profile is read from ``plan.json``.
 
 Selection mirrors the harness: absent groups take the schema default, platform
 tags expand into one instance per target, and the selector is evaluated on
@@ -21,7 +21,7 @@ SLICES = ("ut", "st", "e2e")
 PROFILES = ("pr", "daily", "release")
 PLATFORM = ("os", "arch")
 SCHEMA_PATH = "test/support/tagged/schema.json"
-PLAN_RE = re.compile(r"(?:^|/)([a-z0-9]+(?:-[a-z0-9]+)?)/tagged/plan\.json$")
+PLAN_RE = re.compile(r"(?:^|/)(ut|st|e2e)/tagged/plan\.json$")
 TAG_RE = re.compile(r"[a-z]+:[a-z0-9]+\Z")
 TOKEN_RE = re.compile(r"\s*(\(|\)|\band\b|\bor\b|\bnot\b|[a-z]+:[a-z0-9]+)")
 MAX_FILE = 32 * 1024 * 1024
@@ -60,19 +60,20 @@ def _result(summary):
 
 
 def extract(archive):
-    """Every profile slice frozen in one results archive; ad-hoc queries are skipped."""
+    """Every profile slice frozen in one results archive; plans without a CI
+    profile (ad-hoc tag queries) are skipped."""
     found = []
     for name in archive.namelist():
         match = PLAN_RE.search(name)
         if not match:
             continue
-        profile, _, part = match.group(1).rpartition("-")
-        profile = profile or "pr"
-        if part not in SLICES or profile not in PROFILES:
-            continue
+        part = match.group(1)
         base = name[: -len("plan.json")]
         plan, catalog = _read(archive, base + "plan.json"), _read(archive, base + "catalog.json")
         if not isinstance(plan, dict) or not isinstance(catalog, list):
+            continue
+        profile = plan.get("profile")
+        if profile not in PROFILES:
             continue
         signatures, sources, cases = {}, {}, []
         for case in catalog:
