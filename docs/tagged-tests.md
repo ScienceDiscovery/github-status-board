@@ -24,11 +24,11 @@
 
 ## 数据来源与计算
 
-源仓 CI 把每层的 `.ci-results/<标签>/tagged/` 上传到 `ut-results`、`st-results`、`e2e-results` 产物：
+源仓 CI 把每层的 `.ci-results/<层>/tagged/` 上传到 `ut-results`、`st-results`、`e2e-results` 产物：
 
-- 目录名：合并门禁（pr）为 `ut` / `st` / `e2e`，其他组合为 `<组合>-<层>`，如 `daily-ut`；临时查询 `query` 不计入。
+- 目录名：每个组合都用层名 `ut` / `st` / `e2e`；属于哪个组合（pr / daily / release）读 `plan.json` 的 `profile` 字段，没有该字段的计划（如临时查询 `query`）不计入。旧规则（`daily-ut` 等目录、计划中没有 `profile`）的产物不再读取；看板自己的记录（`.sync/tagged.json`）按组合与层保存、不含目录名，历史记录沿用，无需改写。
 - `catalog.json`：该层收集到的全部用例及其标签。
-- `plan.json`：该层实际使用的选择器、执行目标和冻结实例。
+- `plan.json`：该层实际使用的组合（`profile`）、选择器、执行目标和冻结实例。
 - `summary.json`：计划、执行、通过、失败、跳过数。
 
 采集时处理方式：

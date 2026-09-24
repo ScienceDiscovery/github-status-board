@@ -51,14 +51,15 @@ CATALOG = {
 PLANNED = {"ut": 2, "st": 1, "e2e": 1}
 
 
-def artifact(label, part, planned=None, extra=None):
-    """A results zip laid out like the source CI's ``.ci-results``."""
+def artifact(part, profile="pr", planned=None, extra=None):
+    """A results zip laid out like the source CI's ``.ci-results``: every
+    profile under the slice's own directory, the profile inside plan.json."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        base = f"{label}/tagged/"
+        base = f"{part}/tagged/"
         archive.writestr(base + "catalog.json", json.dumps(CATALOG[part]))
         archive.writestr(base + "plan.json", json.dumps({
-            "version": 1, "revision": "c" * 40, "selector": f"{POLICY} and (category:{part})", "targets": LINUX,
+            "version": 1, "revision": "c" * 40, "selector": f"{POLICY} and (category:{part})", "targets": LINUX, "profile": profile,
             "entries": [{"key": f"x{i}@linux/amd64"} for i in range(PLANNED[part] if planned is None else planned)]}))
         archive.writestr(base + "summary.json", json.dumps({"status": "PASS", "planned": PLANNED[part], "executed": PLANNED[part],
                                                             "passed": PLANNED[part], "failed": 0, "skipped": 0}))
@@ -68,10 +69,10 @@ def artifact(label, part, planned=None, extra=None):
     return buffer.getvalue()
 
 
-def slices(label_prefix="", planned=None):
+def slices(profile="pr", planned=None):
     out = []
     for part in ("ut", "st", "e2e"):
-        with zipfile.ZipFile(io.BytesIO(artifact(label_prefix + part, part, planned))) as archive:
+        with zipfile.ZipFile(io.BytesIO(artifact(part, profile, planned))) as archive:
             out.extend(extract(archive))
     return out
 
@@ -90,23 +91,32 @@ def meta(ident, branch="main", event="push", created="2026-09-22T10:00:00Z"):
 
 class ExtractTests(unittest.TestCase):
     def test_reads_each_profile_slice_and_skips_queries_and_subplans(self):
-        with zipfile.ZipFile(io.BytesIO(artifact("daily-e2e", "e2e", extra={"query/tagged/plan.json": "{}"}))) as archive:
+        with zipfile.ZipFile(io.BytesIO(artifact("e2e", "daily", extra={"query/tagged/plan.json": "{}"}))) as archive:
             found = extract(archive)
         self.assertEqual([(s["profile"], s["slice"], s["planned"]) for s in found], [("daily", "e2e", 1)])
+        # Only the current layout counts: the profile comes from the plan, not the directory.
+        with zipfile.ZipFile(io.BytesIO(artifact("ut", None))) as archive:
+            self.assertEqual(extract(archive), [])
+        old = io.BytesIO()
+        with zipfile.ZipFile(old, "w") as archive, zipfile.ZipFile(io.BytesIO(artifact("ut", None))) as source:
+            for name in source.namelist():
+                archive.writestr("daily-" + name, source.read(name))
+        with zipfile.ZipFile(old) as archive:
+            self.assertEqual(extract(archive), [])
         self.assertEqual(found[0]["result"]["passed"], 1)
         self.assertEqual(found[0]["targets"], LINUX)
         # Catalog rows are [id, signature, source]; equal tags share one signature.
         self.assertEqual(len(found[0]["cases"]), 2)
         self.assertNotIn("sourceHash", json.dumps(found[0]))
-        with zipfile.ZipFile(io.BytesIO(artifact("ut", "ut"))) as archive:
+        with zipfile.ZipFile(io.BytesIO(artifact("ut"))) as archive:
             self.assertEqual(extract(archive)[0]["profile"], "pr")
 
     def test_harness_summary_counts_tests_but_playwright_report_wins(self):
-        parsed = parse_report_zip(artifact("ut", "ut"))
+        parsed = parse_report_zip(artifact("ut"))
         self.assertEqual((parsed["format"], parsed["tests"], parsed["passed"], parsed["failed"]), ("tagged", 2, 2, 0))
         self.assertEqual(parsed["tagged"][0]["slice"], "ut")
         report = {"suites": [{"specs": [{"title": "t", "file": "j.spec.ts", "tests": [{"status": "expected", "results": [{"status": "passed"}]}]}]}]}
-        parsed = parse_report_zip(artifact("e2e", "e2e", extra={"e2e/test-results/results.json": json.dumps(report)}))
+        parsed = parse_report_zip(artifact("e2e", extra={"e2e/test-results/results.json": json.dumps(report)}))
         self.assertEqual(parsed["format"], "playwright")
         self.assertEqual(len(parsed["tagged"]), 1)
 
@@ -144,7 +154,7 @@ class SelectionTests(unittest.TestCase):
 
 class ViewTests(unittest.TestCase):
     def test_dimensions_profiles_and_never_covered_cases(self):
-        view = store((meta(1), slices()), (meta(2, created="2026-09-22T11:00:00Z", event="schedule"), slices("daily-"))).view("main")
+        view = store((meta(1), slices()), (meta(2, created="2026-09-22T11:00:00Z", event="schedule"), slices("daily"))).view("main")
         # command:real is collected by every slice but counted once.
         self.assertEqual(view["cases"], 7)
         profiles = {p["name"]: p for p in view["profiles"]}
@@ -181,7 +191,7 @@ class StoreTests(unittest.TestCase):
     def test_only_default_branch_runs_and_release_tags_define_profiles(self):
         tagged = store((meta(1, branch="feature", event="pull_request", created="2026-09-22T11:59:00Z"), slices()),
                        (meta(2, branch="main", event="push"), slices()),
-                       (meta(3, branch="0.3.0", event="push"), slices("release-")))
+                       (meta(3, branch="0.3.0", event="push"), slices("release")))
         self.assertEqual(tagged.state["lines"]["main"]["profiles"]["pr"]["run"]["id"], 2)
         self.assertEqual(tagged.state["lines"]["main"]["profiles"]["release"]["run"]["id"], 3)
         self.assertEqual(tagged.state["lines"]["main"]["catalog"]["run"]["id"], 2)
@@ -194,7 +204,7 @@ class StoreTests(unittest.TestCase):
         # A PR into the line may edit the policy it runs; an unlisted branch has no line.
         tagged.observe(meta(3, branch="swarm-fix", event="pull_request", created="2026-09-22T11:30:00Z"), slices(), "main", refs)
         tagged.observe(meta(4, branch="topic", created="2026-09-22T11:40:00Z"), slices(), "main", refs)
-        tagged.observe(meta(5, branch="0.3.0", created="2026-09-22T11:50:00Z"), slices("release-"), "main", refs)
+        tagged.observe(meta(5, branch="0.3.0", created="2026-09-22T11:50:00Z"), slices("release"), "main", refs)
         lines = tagged.state["lines"]
         self.assertEqual(sorted(lines), ["feat/swarm", "main"])
         self.assertEqual(lines["main"]["catalog"]["run"]["id"], 1)
@@ -206,7 +216,7 @@ class StoreTests(unittest.TestCase):
         self.assertIsNone(tagged.view("topic"))
 
     def test_single_branch_state_becomes_the_default_line(self):
-        legacy = store((meta(1), slices()), (meta(2, branch="0.3.0", created="2026-09-22T11:00:00Z"), slices("release-"))).state["lines"]["main"]
+        legacy = store((meta(1), slices()), (meta(2, branch="0.3.0", created="2026-09-22T11:00:00Z"), slices("release"))).state["lines"]["main"]
         tagged = TaggedStore({"version": 1, **legacy})
         self.assertTrue(tagged.changed)
         self.assertEqual(tagged.state, {"version": 2, "lines": {"main": legacy}})
@@ -242,7 +252,7 @@ class SyncTests(unittest.TestCase):
         self.root = Path(self.temp.name)
 
     def test_results_artifact_feeds_sync_state_and_snapshot(self):
-        blobs = {100 + i: artifact(part, part) for i, part in enumerate(("ut", "st", "e2e"))}
+        blobs = {100 + i: artifact(part) for i, part in enumerate(("ut", "st", "e2e"))}
 
         class Tagged(Source):
             def get(self, path, params=None):
