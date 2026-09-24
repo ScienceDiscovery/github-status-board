@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from .board import BoardStore
 from .ci_lanes import LANES, build_lanes, window_start
 from .collectors import Context, collect_ci, summarize_issues, summarize_prs, days_between
+from .coverage_store import CoverageStore
 from .history import read_json, encode
 from .lines import configured_lines, line_of, target_of
 from .public_sections import public_ops, public_tests, envelope
@@ -204,6 +205,10 @@ def build_snapshot(sync):
     day = stamp(midnight)[:10]
     day_changed = supplements.get("day") != day
     gh = _SharedListings(sync.gh.gh)
+    # Coverage summaries read by earlier builds are not downloaded again.
+    store = CoverageStore(read_json(history.root / ".sync/coverage.json", None),
+                          read_json(history.root / ".sync/coverage-sources.json", None))
+    lines_read = 0
     start = stamp(window_start(sync.now))
     lane_prs = [history.get("prs", str(row["number"])) for row in all_prs if not row.get("closed_at") or row["closed_at"] >= start]
     refreshed = day_changed or "ops" not in supplements
@@ -235,10 +240,15 @@ def build_snapshot(sync):
         if day_changed or cache_upgrade or cache.get("tests_revision") != tests_revision or "tests" not in cache:
             # Actions artifacts are live evidence: refresh when the line's run set
             # changes, while retaining the daily fallback for repository-tree data.
-            cache["tests"] = envelope(lambda: public_tests(Context(gh, cfg, midnight, line_meta), runs,
-                                                           owns=lambda artifact: artifact_line(artifact) == key))
-            cache["tests_revision"] = tests_revision
-            refreshed = True
+            fresh = envelope(lambda: public_tests(Context(gh, cfg, midnight, line_meta, coverage_store=store), runs,
+                                                  owns=lambda artifact: artifact_line(artifact) == key))
+            # A failed read (e.g. an exhausted API quota) keeps the last good
+            # evidence and is retried by the next build.
+            if fresh["status"] != "error" or (cache.get("tests") or {}).get("status") in (None, "error"):
+                cache["tests"] = fresh
+                cache["tests_revision"] = tests_revision if fresh["status"] != "error" else None
+                refreshed = True
+            lines_read += fresh["status"] != "error"
         tests = deepcopy(cache.get("tests", wrap({})))
         if isinstance(tests.get("data"), dict):
             tests["data"]["tagged"] = sync.tagged.view(line["ref"])
@@ -255,6 +265,12 @@ def build_snapshot(sync):
                 tests["data"]["coverage"].update(source=f"Actions run {row['id']} / attempt {row['attempt']}", value=row["coverage"][0])
                 break
         views[key] = {"ci": wrap(ci), "tests": tests, "runs": runs}
+    # Every line read its coverage in this build, so what none of them read can go.
+    store.finish(sync.now, complete=lines_read == len(lines))
+    if store.changed:
+        history.changed[".sync/coverage.json"] = encode(store.state)
+    if store.sources_changed:
+        history.changed[".sync/coverage-sources.json"] = encode(store.sources)
     if refreshed:
         supplements.update(day=day, tests_version=SUPPLEMENT_TESTS_VERSION)
         state["supplements_changed"] = True

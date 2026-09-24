@@ -29,6 +29,11 @@ def channel(run, rules):
     return "gate"
 
 
+COVERAGE_SUMMARY = re.compile(r"(node|python)-coverage-summary-")
+REPORT_NAME = re.compile(r"results|junit|playwright|test.report|dashboard", re.I)
+RAW_COVERAGE = re.compile(r"coverage|lcov|codecov", re.I)
+
+
 def slim_run(run, rules):
     return {"id": run["id"], "name": run.get("name"), "workflow_id": run.get("workflow_id"),
             "channel": channel(run, rules), "event": run.get("event"), "status": run.get("status"),
@@ -61,10 +66,17 @@ def run_details(gh, cfg, run, *, cache=None, parser_version=None):
         return run
     run["reports_status"] = "missing"
     cached = {str(t["artifact_id"]): t for t in (cache or {}).get("tests", [])}
+    # Artifacts already read that held no test counts; the same artifact is not downloaded again.
+    inspected = dict((cache or {}).get("inspected") or {})
     run["tests"] = []
+    # A run that publishes coverage summaries needs none of its raw coverage data.
+    summarized = any(COVERAGE_SUMMARY.match(artifact["name"]) for artifact in artifacts)
     for artifact in artifacts:
         name = artifact["name"]
-        if not re.search(r"results|junit|playwright|test.report|dashboard|coverage|lcov|codecov", name, re.I):
+        if not (REPORT_NAME.search(name) or RAW_COVERAGE.search(name)):
+            continue
+        # Coverage summaries hold no test reports; the coverage view reads them once through its store.
+        if COVERAGE_SUMMARY.match(name) or (summarized and not REPORT_NAME.search(name)):
             continue
         if run.get("next_started_at") and artifact.get("created_at", "") >= run["next_started_at"]:
             continue
@@ -79,6 +91,10 @@ def run_details(gh, cfg, run, *, cache=None, parser_version=None):
         if previous and previous.get("counts") is not None and (previous.get("cache_key") == identity or artifact.get("expired")):
             run["tests"].append(previous)
             continue
+        if inspected.get(str(artifact["id"])) == identity:
+            if previous:
+                run["tests"].append(previous)
+            continue
         entry = {"cache_key": identity, "name": name, "layer": artifact_layer(name), "artifact_id": artifact["id"],
                  "created_at": artifact.get("created_at"), "url": run["url"] + f"/artifacts/{artifact['id']}",
                  "status": "expired" if artifact.get("expired") else "unavailable", "counts": None, "cases": []}
@@ -90,9 +106,13 @@ def run_details(gh, cfg, run, *, cache=None, parser_version=None):
                 if parsed:
                     # Frozen test catalogs are large; callers move them out of the run record.
                     run.setdefault("tagged", []).extend(parsed.get("tagged") or [])
+                    if parsed.get("coverage"):
+                        # A new parser version reads the artifact again; replace, never duplicate.
+                        run["coverage"] = [c for c in run.get("coverage", []) if c.get("artifact") != name]
                     for coverage in parsed.get("coverage", []):
                         run.setdefault("coverage", []).append({**coverage, "artifact": name, "run_id": run["id"], "sha": run["sha"], "attempt": run["attempt"], "url": run["url"]})
                     if parsed.get("tests") is None:
+                        inspected[str(artifact["id"])] = identity
                         continue
                     entry.update(status="available", counts={k: parsed[k] for k in ("tests", "passed", "failed", "skipped", "flaky")},
                                  cases=parsed["cases"], format=parsed["format"])
@@ -101,13 +121,20 @@ def run_details(gh, cfg, run, *, cache=None, parser_version=None):
                             entry[key] = parsed[key]
                 else:
                     entry["status"] = "no_counts"
-            except (GitHubError, ValueError, OSError, zipfile.BadZipFile, RuntimeError) as error:
+                    inspected[str(artifact["id"])] = identity
+            except (ValueError, zipfile.BadZipFile) as error:
+                # Over budget or malformed: the same artifact fails the same way, so it is not read again.
+                entry.update(status="unreadable", error=type(error).__name__)
+                inspected[str(artifact["id"])] = identity
+            except (GitHubError, OSError, RuntimeError) as error:
                 entry["error"] = getattr(error, "kind", type(error).__name__)
         run["tests"].append(entry)
     # Deleting/expiring an artifact must not erase previously observed counts.
     for key, previous in cached.items():
         if previous.get("counts") is not None and not any(str(t["artifact_id"]) == key for t in run["tests"]):
             run["tests"].append(previous)
+    if inspected:
+        run["inspected"] = inspected
     if run["tests"]:
         run["reports_status"] = "available" if all(t["counts"] is not None for t in run["tests"]) else "partial"
     return run
