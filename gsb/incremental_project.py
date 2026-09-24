@@ -142,12 +142,13 @@ def build_snapshot(sync):
     # A successful poll with no changed records does not manufacture a Pages
     # deployment. Daily aging and health metadata still get a regular refresh.
     cache_upgrade = supplements.get("tests_version") != SUPPLEMENT_TESTS_VERSION
-    # Snapshots published before the CI lanes, tagged tests or the current
-    # branch lines are rebuilt once.
+    # Snapshots published before the CI lanes, tagged tests, the current
+    # branch lines or run times on the lanes are rebuilt once.
     old_ci = ((old.get("sections") or {}).get("ci") or {}).get("data") or {}
     old_tests = ((old.get("sections") or {}).get("tests") or {}).get("data")
     cache_upgrade = (cache_upgrade or "lanes" not in old_ci or (isinstance(old_tests, dict) and "tagged" not in old_tests)
-                     or old.get("lines") != lines)
+                     or old.get("lines") != lines
+                     or any("median_duration_s" not in lane.get("summary", {}) for lane in old_ci["lanes"].get("lanes", [])))
     if (not history.changed and not sync.tagged.changed and not cache_upgrade and old.get("sync") == progress
             and old.get("generated_at", "")[:10] == stamp(midnight)[:10]):
         return old

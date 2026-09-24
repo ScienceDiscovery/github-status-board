@@ -13,6 +13,7 @@ test('all existing pages render; only static requests and no promotional copy', 
   await expect(health.locator('.attention').first()).toContainText('主干 CI 连续失败 1 次');
   await expect(health).toContainText('1 个 PR 超过 3 天无人评审');
   await expect(page.locator('#tab-overview .tile').filter({hasText:'PR 门禁'})).toContainText('近 30 天成功率');
+  await expect(page.locator('#tab-overview .tile').filter({hasText:'PR 门禁'})).toContainText('耗时 18m 44s');
   await expect(page.locator('#tab-overview .tile').filter({hasText:'主干门禁用例'})).toContainText('324');
   await expect(page.locator('#tab-overview .tile').filter({hasText:'整仓行覆盖率'})).toContainText('80.7%');
   await expect(page.locator('#tab-overview .ci-lane-row:not(.ci-axis)')).toHaveCount(4);
@@ -172,6 +173,9 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await expect(lane('pr').locator('.ci-day-more')).toHaveText('13');
   await today.nth(1).hover();
   await expect(page.locator('#tooltip')).toContainText('CI · pull_request · PR #3');
+  // Each finished run says how long it took; each lane gives the median of finished runs.
+  await expect(page.locator('#tooltip')).toContainText('失败 · 耗时 11m 57s');
+  await expect(lane('pr').locator('.ci-lane-time')).toContainText('中位耗时');
   await expect(page.locator('#tooltip')).toContainText('分支 fix-timeout');
   await expect(lane('main').locator('.ci-run').last()).toHaveAttribute('aria-label', /workflow_dispatch · 手动/);
   await expect(lane('daily').locator('.ci-run')).toHaveCount(8);
@@ -181,6 +185,10 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await expect(page.locator('#tab-ci .ci-lane-notes')).toContainText('1 次由其他工作流调用的 CI 子 run 已并入调用方');
   await page.mouse.move(0, 0);
   await page.locator('#tab-ci .card:has(.ci-lanes)').screenshot({path:shot('ci-lanes-desktop')});
+  // Every finished run prints its time in its cell; a running one has none yet.
+  await expect(today.first()).toHaveText('11m');
+  await expect(today.nth(4)).toHaveText('');
+  await expect(page.locator('#tab-ci [data-lane-time]')).toHaveCount(0);
   await page.setViewportSize({width:390,height:844});
   const scroller = page.locator('#tab-ci .ci-lanes-scroll');
   // The day axis scrolls inside the card and opens on the newest day.
@@ -192,6 +200,8 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.locator('#tab-ci .card:has(.ci-lanes)').screenshot({path:shot('ci-lanes-narrow')});
+  // At 390 px the printed time still fits its cell.
+  expect(await today.first().evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBeTruthy();
   await page.setViewportSize({width:1440,height:1000});
   await page.locator('[data-tab="tests"]').click();
   await expect(page.locator('#tab-tests')).toContainText('按包 / 目录分布');
@@ -264,7 +274,9 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await page.locator('[data-cov-sort="name"]').first().click();
   await page.screenshot({path:shot('coverage-desktop'),fullPage:true});
   await page.locator('[data-tab="ops"]').click();
-  await expect(page.locator('#tab-ops')).toContainText('贡献者');
+  // Contributors are read on GitHub's own page.
+  await expect(page.locator('#tab-ops a[href$="/graphs/contributors"]')).toHaveCount(1);
+  await expect(page.locator('#tab-ops')).not.toContainText('前 50% 提交由');
   await expect(page.locator('#tab-ops')).toContainText('分支与保护');
   await expect(page.locator('#tab-ops a[href$="/graphs/traffic"]')).toHaveCount(1);
 });

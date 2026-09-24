@@ -7,6 +7,7 @@ creation order so the page can stack them earliest-first.
 from __future__ import annotations
 
 from collections import Counter
+import statistics
 from datetime import datetime, timedelta, timezone
 import re
 
@@ -54,6 +55,16 @@ def outcome(run):
     if conclusion in CANCELLED:
         return "cancelled"
     return "other"
+
+
+def duration(run):
+    """Seconds the run's latest attempt took, or None while it runs or when unknown."""
+    if outcome(run) == "running":
+        return None
+    if run.get("duration_s") is not None:
+        return run["duration_s"]
+    start, end = parse(run.get("started_at")), parse(run.get("updated_at"))
+    return max(0, int((end - start).total_seconds())) if start and end else None
 
 
 def lane_of(run, rules=None, default_branch="main"):
@@ -144,6 +155,7 @@ def build_lanes(runs, *, default_branch, now, rules=None, prs=(), days=WINDOW_DA
             "id": run.get("id"), "attempt": run.get("attempt") or 1, "url": run.get("url"), "workflow": name,
             "event": run.get("event"), "manual": run.get("event") == "workflow_dispatch",
             "status": run.get("status"), "conclusion": run.get("conclusion"), "outcome": outcome(run),
+            "duration_s": duration(run),
             "branch": run.get("branch"), "sha": (run.get("sha") or "")[:7],
             "pr": pr_number(run, prs), "pr_linked": bool(run.get("pull_requests")),
             "title": (run.get("title") or "")[:120], "created_at": run.get("created_at"),
@@ -153,9 +165,13 @@ def build_lanes(runs, *, default_branch, now, rules=None, prs=(), days=WINDOW_DA
         columns = [[cell for _, _, cell in sorted(column, key=lambda item: item[:2])] for column in cells[key]]
         counts = Counter(cell["outcome"] for column in columns for cell in column)
         decided = counts["success"] + counts["failure"]
+        # Cancelled runs stop early; the median is over runs that ran to a result.
+        durations = [cell["duration_s"] for column in columns for cell in column
+                     if cell["outcome"] in ("success", "failure") and cell["duration_s"] is not None]
         rows.append({"key": key, "label": label, "days": columns, "summary": {
             "total": sum(counts.values()), **{name: counts[name] for name in ("success", "failure", "cancelled", "running", "other")},
-            "success_rate": round(counts["success"] * 100 / decided, 1) if decided else None}})
+            "success_rate": round(counts["success"] * 100 / decided, 1) if decided else None,
+            "median_duration_s": int(statistics.median(durations)) if durations else None}})
     since = parse(collected_since)
     since = since.astimezone(zone).date() if since else None
     return {"days": [day.isoformat() for day in axis], "window_days": days, "zone": zone.tzname(None),

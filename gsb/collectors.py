@@ -1165,14 +1165,6 @@ def _ops_community(ctx: Context, notes: list) -> dict:
             "updated_at": profile.get("updated_at")}
 
 
-def _ops_contributors(ctx: Context, notes: list) -> dict:
-    contributors = ctx.gh.paginate(f"/repos/{ctx.repo}/contributors", {"per_page": 100}, max_pages=1)
-    total = sum(c.get("contributions", 0) for c in contributors)
-    top = [{"login": c.get("login"), "contributions": c.get("contributions"), "url": c.get("html_url"),
-            "share": round(c.get("contributions", 0) * 100 / total, 1) if total else None} for c in contributors[:15]]
-    return {"count": len(contributors), "total_commits": total, "top": top, "bus_factor_50": _bus_factor(contributors, total)}
-
-
 def _ops_activity(ctx: Context, notes: list) -> dict | None:
     gh = ctx.gh
     for _ in range(2):
@@ -1226,7 +1218,6 @@ OPS_BLOCKS = {
     "branches": (_ops_branches, "分支列表"),
     "security": (_ops_security, "安全告警"),
     "community": (_ops_community, "社区健康度"),
-    "contributors": (_ops_contributors, "贡献者"),
     "activity": (_ops_activity, "提交活跃度"),
     "commits": (_ops_commits, "最近提交"),
     "traffic": (_ops_traffic, "流量"),
@@ -1250,18 +1241,6 @@ def collect_ops(ctx: Context) -> dict:
             else:
                 out[key] = result
     return out
-
-
-def _bus_factor(contributors: list[dict], total: int) -> int | None:
-    if not total:
-        return None
-    acc, n = 0, 0
-    for c in sorted(contributors, key=lambda c: -c.get("contributions", 0)):
-        acc += c.get("contributions", 0)
-        n += 1
-        if acc * 2 >= total:
-            return n
-    return n
 
 
 SECTIONS = {
