@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -62,6 +63,9 @@ def publish(gh, site, repository, branch="main", *, source_token=None):
     return commit["sha"]
 
 
+INLINE_FILE, INLINE_TOTAL = 256 * 1024, 2 * 1024 * 1024
+
+
 def publish_batch(gh, repository, branch, base, files, *, source_token=None):
     """Commit checkpoints and public data on the exact checkout we collected."""
     import re
@@ -73,16 +77,23 @@ def publish_batch(gh, repository, branch, base, files, *, source_token=None):
     if gh.get(prefix + "/git/ref/heads/" + branch)["object"]["sha"] != base:
         raise ValueError("publication conflict; retry from latest checkout")
     for path, content in files.items():
-        allowed = path in {"site/" + x for x in (*STATIC_FILES, "data/snapshot.json", ".nojekyll")} or path in {".sync/state.json", ".sync/aggregate.json", ".sync/supplements.json", ".sync/tagged.json"} or re.fullmatch(r"site/data/history/(manifest\.json|(?:index|records|catalog)/(?:issues|prs|runs|releases)/[0-9]{12}\.json)", path)
+        allowed = path in {"site/" + x for x in (*STATIC_FILES, "data/snapshot.json", ".nojekyll")} or path in {".sync/state.json", ".sync/aggregate.json", ".sync/supplements.json", ".sync/tagged.json", ".sync/coverage.json", ".sync/coverage-sources.json"} or re.fullmatch(r"site/data/history/(manifest\.json|(?:index|records|catalog)/(?:issues|prs|runs|releases)/[0-9]{12}\.json)", path)
         if not allowed or any(t and t in content for t in (gh.token, source_token)):
             raise ValueError("unsafe public file")
     if not files:
         return None
     def write(method, path, body):
         return gh._request(method, gh._url(prefix + path, None), body=body)[0]
-    entries = []
+    # GitHub limits content-creating requests per hour, so small files travel
+    # inside the one tree request; only large ones get a blob request each,
+    # which keeps big issue bodies out of a single giant tree body.
+    entries, inline = [], 0
     for path, content in sorted(files.items()):
-        # Blob requests keep large issue bodies out of a single giant tree body.
+        size = len(content.encode("utf-8"))
+        if size <= INLINE_FILE and inline + size <= INLINE_TOTAL:
+            inline += size
+            entries.append({"path": path, "mode": "100644", "type": "blob", "content": content})
+            continue
         blob = write("POST", "/git/blobs", {"content": content, "encoding": "utf-8"})
         entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob["sha"]})
     tree = write("POST", "/git/trees", {"base_tree": gh.get(prefix + "/git/commits/" + base)["tree"]["sha"], "tree": entries})
@@ -104,6 +115,7 @@ def main():
     token, _ = discover_token()
     publish_token = os.environ.get("GSB_PUBLISH_TOKEN", "").strip() or token
     gh = GitHub(token, timeout=30)
+    phase = "collect"
     try:
         settings = json.loads(Path(args.settings).read_text())
         deployment = deployment_for(args.repo, settings, args.publish_repo)
@@ -112,6 +124,7 @@ def main():
             from gsb.sync import Sync
             from gsb.incremental_project import build_snapshot
             sync = Sync(gh, ROOT, args.repo, settings, requests=args.request_budget).collect()
+            phase = "snapshot"
             snapshot = build_snapshot(sync)
         else:
             snapshot = build_project(gh, args.repo, settings)
@@ -120,6 +133,7 @@ def main():
         export_site(args.output, snapshot)
         result = {"ok": True, "repo": args.repo, "generated_at": snapshot["generated_at"]}
         if args.publish_repo:
+            phase = "publish"
             if not publish_token:
                 raise ValueError("publishing requires a token")
             publisher = GitHub(publish_token, timeout=30)
@@ -135,10 +149,21 @@ def main():
                 result["changed_files"] = len(files)
             else:
                 result["commit"] = publish(publisher, args.output, args.publish_repo, args.branch, source_token=token)
+            result["requests"] = {"source": getattr(gh, "calls", None), "publish": getattr(publisher, "calls", None)}
+        else:
+            result["requests"] = {"source": getattr(gh, "calls", None)}
         print(json.dumps(result))
     except (GitHubError, OSError, ValueError) as err:
-        # API errors can include request context; expose only a stable category.
-        print(json.dumps({"ok": False, "error": getattr(err, "kind", type(err).__name__)}))
+        # API errors can include request context; expose only a stable category,
+        # the phase that failed, the HTTP status and when a rate limit resets.
+        failure = {"ok": False, "error": getattr(err, "kind", type(err).__name__), "phase": phase}
+        if isinstance(err, GitHubError):
+            failure["status"] = err.status
+            if err.kind == "rate_limited":
+                failure["limit"] = "secondary" if err.status == 429 or "secondary" in (err.message or "").lower() else "primary"
+                if err.reset_at:
+                    failure["reset_at"] = datetime.fromtimestamp(err.reset_at, timezone.utc).isoformat(timespec="seconds")
+        print(json.dumps(failure))
         return 1
     return 0
 
