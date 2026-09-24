@@ -205,17 +205,19 @@
   const LANE_EVENT = { schedule: 'schedule · 定时', workflow_dispatch: 'workflow_dispatch · 手动' };
   const LANE_STACK = 10; // runs visible per day before that column scrolls
   const laneDay = (iso) => { const [, m, d] = iso.split('-').map(Number); return `${m}/${d}`; };
+  // Run time short enough to print inside a day cell: 45s, 18m, 1h05.
+  const laneTime = (s) => (s == null ? '' : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}`);
   const laneRun = (lane, day, r, zone) => {
     const pr = r.pr ? ` · PR #${r.pr}${r.pr_linked ? '' : '（按分支推断）'}` : '';
     const text = [
       `${r.workflow} · ${LANE_EVENT[r.event] || r.event || '未知事件'}${pr}`,
-      `${CONCLUSION_NAME[r.conclusion] || CONCLUSION_NAME[r.status] || r.conclusion || r.status || '未知'}${r.attempt > 1 ? ` · 第 ${r.attempt} 次尝试` : ''}`,
+      `${CONCLUSION_NAME[r.conclusion] || CONCLUSION_NAME[r.status] || r.conclusion || r.status || '未知'}${r.duration_s != null ? ` · 耗时 ${dur(r.duration_s)}` : ''}${r.attempt > 1 ? ` · 第 ${r.attempt} 次尝试` : ''}`,
       `${laneDay(day)} ${r.time}（${zone}）`,
       `${lane === 'release' ? '标签' : '分支'} ${r.branch || '—'}${r.sha ? ` · ${r.sha}` : ''}`,
       r.title,
     ].filter(Boolean).join('\n');
     const href = /^https:\/\//.test(r.url || '') ? r.url : '#';
-    return `<a class="ci-run ${esc(r.outcome)}" href="${esc(href)}" target="_blank" rel="noopener" aria-label="${esc(text)}"${tip(text)}></a>`;
+    return `<a class="ci-run ${esc(r.outcome)}" href="${esc(href)}" target="_blank" rel="noopener" aria-label="${esc(text)}"${tip(text)}>${esc(laneTime(r.duration_s))}</a>`;
   };
   const ciLanes = (L, { notes: withNotes = true } = {}) => {
     if (!L) return empty('分层历史会在下一次采集后出现');
@@ -227,6 +229,7 @@
       const counts = [['成功', s.success], ['失败', s.failure], ['取消', s.cancelled], ['运行中', s.running], ...(s.other ? [['其他', s.other]] : [])];
       const head = `<div class="ci-lane-head" role="rowheader"><b>${esc(lane.label).replace(/\//g, '/<wbr>')}</b><span class="ci-lane-src">${esc(laneSource(L, lane.key))}</span>`
         + `<span class="ci-lane-rate">成功率 ${pct(s.success_rate)}</span>`
+        + (s.median_duration_s != null ? `<span class="ci-lane-time">中位耗时 ${dur(s.median_duration_s)}</span>` : '')
         + `<span class="ci-lane-sum">${s.total ? counts.map(([name, count]) => `<span>${name} ${count}</span>`).join(' · ') : '窗口内没有 run'}</span></div>`;
       const days = lane.days.map((runs, i) => {
         const day = L.days[i];
@@ -241,6 +244,7 @@
     const ex = L.excluded || {}, daily = L.lanes.some((lane) => lane.key === 'daily');
     const notes = [
       '成功率 = 成功 ÷（成功 + 失败/超时），取消、运行中与其他不计入；重跑按最后一次尝试着色，仍放在 run 创建的那天。',
+      '耗时为最后一次尝试从开始到结束的时间；中位耗时只统计成功与失败的运行，运行中的没有耗时。',
       daily ? 'Nightly / Release 通过 workflow_call 调用的 CI 不单独成点，只计入调用方所在的 Daily / 版本层。' : '',
       ex.other ? `另有 ${ex.other} 次 run 不属于这${'一两三四'[L.lanes.length - 1] || ` ${L.lanes.length} `}层（其他工作流或${L.branch ? ` ${L.branch} 以外分支的` : '非默认分支'} push），未画入。` : '',
       ex.called ? `${ex.called} 次由其他工作流调用的 CI 子 run 已并入调用方。` : '',
@@ -333,7 +337,9 @@
     excluded: {}, lanes: L.lanes.map((lane) => {
       const days = lane.days.slice(-count), runs = days.flat(), by = (o) => runs.filter((r) => r.outcome === o).length;
       const success = by('success'), failure = by('failure');
-      return { ...lane, days, summary: { total: runs.length, success, failure, cancelled: by('cancelled'), running: by('running'), other: by('other'), success_rate: success + failure ? Math.round((success * 1000) / (success + failure)) / 10 : null } };
+      const times = runs.filter((r) => (r.outcome === 'success' || r.outcome === 'failure') && r.duration_s != null).map((r) => r.duration_s).sort((a, b) => a - b);
+      const median = times.length ? Math.floor(times.length % 2 ? times[(times.length - 1) / 2] : (times[times.length / 2 - 1] + times[times.length / 2]) / 2) : null;
+      return { ...lane, days, summary: { total: runs.length, success, failure, cancelled: by('cancelled'), running: by('running'), other: by('other'), success_rate: success + failure ? Math.round((success * 1000) / (success + failure)) / 10 : null, median_duration_s: median } };
     }) });
 
   function renderOverview(snap) {
@@ -382,7 +388,7 @@
     const laneTile = (key, label, href) => {
       const lane = lanes[key], run = latestInLane(lane), [text, tone] = run ? OUTCOME_TEXT[run.outcome] || ['未知', ''] : ['暂无运行', ''];
       const rate = lane?.summary?.success_rate;
-      return { label, value: text, tone, href, sub: run ? `${shortDate(run.created_at)} ${esc(run.time)} · ${esc(run.workflow)}${run.pr ? ` · PR #${run.pr}` : ''}<br>近 ${L.window_days} 天成功率 ${pct(rate)}（${n(lane.summary.total)} 次）` : lane ? `近 ${L.window_days} 天没有运行` : '分层历史尚未生成' };
+      return { label, value: text, tone, href, sub: run ? `${shortDate(run.created_at)} ${esc(run.time)} · ${esc(run.workflow)}${run.pr ? ` · PR #${run.pr}` : ''}${run.duration_s != null ? ` · 耗时 ${dur(run.duration_s)}` : ''}<br>近 ${L.window_days} 天成功率 ${pct(rate)}（${n(lane.summary.total)} 次）` : lane ? `近 ${L.window_days} 天没有运行` : '分层历史尚未生成' };
     };
     html += sectionHead('流水线', L ? `最近一次运行的结论；成功率 = 成功 ÷（成功 + 失败）${(snap.lines || []).length > 1 ? `；此处为 ${esc(snap.lines[0].ref)} 分支线，其他分支线在 CI 页切换` : ''}` : '');
     html += tiles([laneTile('pr', 'PR 门禁', '#ci'), laneTile('main', '主干', '#ci'), laneTile('daily', '每日构建', '#ci'), laneTile('release', '版本构建', '#releases')]);
@@ -900,9 +906,8 @@
     // Community
     const c = d.community;
     cards.push(card('社区健康度', c ? `<div class="tile" style="display:inline-block;margin-bottom:8px"><div class="label">GitHub community profile</div><div class="value">${pct(c.health_percentage)}</div></div><ul class="checks" style="font-size:13px">${Object.entries(c.files).filter(([k]) => k !== 'code_of_conduct_file').map(([k, v]) => `<li>${badge(v ? '有' : '缺', v ? 'good' : 'bad')} ${esc(k)}</li>`).join('')}</ul>` : empty('不可用')));
-    // Contributors
-    const ct = d.contributors;
-    cards.push(card('贡献者', ct ? `${kv([['贡献者数', n(ct.count)], ['提交总数', n(ct.total_commits)], ['前 50% 提交由', `${ct.bus_factor_50} 人完成 ${ct.bus_factor_50 === 1 ? badge('集中度高', 'warn') : ''}`]])}<div style="margin-top:8px">${bars(ct.top.map((x) => ({ label: x.login, value: x.contributions, valueText: `${n(x.contributions)} (${x.share}%)` })))}</div>` : empty('不可用'), { sub: '按提交数' }));
+    // Contributors: GitHub's own page is complete and current.
+    cards.push(card('贡献者', link(`${STATE.snap.repo_url}/graphs/contributors`, '在 GitHub 查看贡献者 ↗') + '<p class="muted">贡献者名单与各自的提交统计以 GitHub 页面为准。</p>'));
     // Activity
     const a = d.activity;
     cards.push(card('提交活跃度', `${a ? `${sparkline(a.weeks.map((w) => w.total), a.weeks.map((w) => new Date(w.week * 1000).toLocaleDateString('zh-CN')))}${kv([['近 4 周', `${n(a.commits_4w)} 次提交`], ['近 52 周', `${n(a.commits_52w)} 次提交`], ['近 7 天（默认分支）', `${n(d.commits_7d)} 次`]])}` : '<div class="muted">周统计暂不可读取</div>'}<details style="margin-top:6px"><summary>最近提交（${d.recent_commits.length}）</summary><ul class="checks">${d.recent_commits.slice(0, 15).map((x) => `<li><code>${link(x.url, esc(x.sha))}</code> ${esc(x.message)} <span class="muted">${esc(x.author)} · ${ago(x.date)}</span></li>`).join('')}</ul></details>`, { sub: '近 26 周，每周提交数' }));
