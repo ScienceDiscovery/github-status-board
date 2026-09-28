@@ -54,6 +54,36 @@ def public_ops(ctx):
     return out
 
 
+def score_history(runs, limit=30):
+    """Bounded, public per-case score points from each run's latest attempt."""
+    latest = {}
+    for run in runs:
+        ident = run.get('id')
+        if ident is None:
+            continue
+        if run.get('attempt', 1) > latest.get(ident, {}).get('attempt', 0):
+            latest[ident] = run
+    points = defaultdict(list)
+    for run in sorted(latest.values(), key=lambda row: (row.get('created_at') or '', row.get('id') or 0), reverse=True):
+        seen = set()
+        for report in run.get('tests', []):
+            if not report.get('name', '').startswith('real-e2e-results'):
+                continue
+            for score in report.get('scores', []):
+                case = score.get('case')
+                if not isinstance(case, str) or not case or case in seen or len(points[case]) >= limit:
+                    continue
+                seen.add(case)
+                points[case].append({
+                    'run_id': run['id'], 'attempt': run.get('attempt', 1),
+                    'created_at': run.get('created_at') or report.get('created_at'),
+                    'url': report.get('url') or run.get('url'),
+                    'delivery': score.get('delivery'), 'quality_status': score.get('quality_status'),
+                    'metrics': score.get('metrics', []),
+                })
+    return {case: list(reversed(rows)) for case, rows in points.items()}
+
+
 def public_tests(ctx, runs, owns=None):
     """Test evidence of ``runs``; ``owns`` keeps the coverage artifacts of their branch line."""
     notes = []
@@ -95,7 +125,8 @@ def public_tests(ctx, runs, owns=None):
             executed.append({'artifact': report['name'], 'layer': 'ut' if report['layer'] == 'unit' else report['layer'],
                              'status': 'incomplete' if counts is None else 'failed' if counts['failed'] else 'unstable' if counts['flaky'] or counts['skipped'] else 'passed',
                              'run_id': run['id'], 'sha': run['sha'], 'attempt': run['attempt'], 'branch': run['branch'],
-                             'created_at': run['updated_at'], 'duration_ms': None, 'totals': counts,
+                             'created_at': run['updated_at'], 'url': report['url'], 'duration_ms': None, 'totals': counts,
+                             'scores': report.get('scores', []),
                              'detail': {'files': [{'file': k, **v} for k, v in by_file.items()],
                                         'failures': [{'file': c.get('file'), 'title': c['name'], 'status': c['status']} for c in report.get('cases', []) if c['status'] == 'failed'],
                                         'stats': {'expected': (counts or {}).get('passed'), 'unexpected': (counts or {}).get('failed'), 'flaky': (counts or {}).get('flaky')},
@@ -147,7 +178,8 @@ def public_tests(ctx, runs, owns=None):
             break
     return {'notes': notes, 'tree_source': source, 'tree': {k: v for k, v in tree.items() if k != 'inventory'} if tree else None,
             'inventory': [{**row, 'ci_cases': package_counts.get(row['package'], {}).get('tests'), 'ci_failed': package_counts.get(row['package'], {}).get('failed')} for row in (tree or {}).get('inventory', [])],
-            'test_scripts': scripts, 'artifacts_recent': artifacts[:30], 'executed': executed, 'coverage': coverage}
+            'test_scripts': scripts, 'artifacts_recent': artifacts[:30], 'executed': executed,
+            'score_history': score_history(runs), 'coverage': coverage}
 
 
 def extend_project(doc, ctx):

@@ -10,11 +10,11 @@ from .collectors import Context, collect_ci, summarize_issues, summarize_prs, da
 from .coverage_store import CoverageStore
 from .history import read_json, encode
 from .lines import configured_lines, line_of, target_of
-from .public_sections import public_ops, public_tests, envelope
+from .public_sections import public_ops, public_tests, score_history, envelope
 from .sync import stamp, date
 
 
-SUPPLEMENT_TESTS_VERSION = 3
+SUPPLEMENT_TESTS_VERSION = 4
 COVERAGE_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
@@ -127,6 +127,7 @@ def _executed(runs):
     return [{"artifact": t["name"], "layer": "ut" if t["layer"] == "unit" else t["layer"],
              "status": "incomplete" if t.get("counts") is None else "failed" if t["counts"]["failed"] else "unstable" if t["counts"]["flaky"] or t["counts"]["skipped"] else "passed",
              "run_id": r["id"], "sha": r["sha"], "attempt": r["attempt"], "branch": r["branch"], "created_at": r["updated_at"],
+             "url": t.get("url"), "scores": t.get("scores", []),
              "totals": t.get("counts"), "duration_ms": None, "detail": {"files": [], "failures": [], "projects": [], "stats": {}}}
             for r, t in latest_reports.values()]
 
@@ -261,6 +262,9 @@ def build_snapshot(sync):
         if tests.get("data"):
             # Refresh test metrics without re-fetching the repository tree/Codecov.
             tests["data"]["executed"] = _executed(runs)
+            daily = history.select("runs", lambda r, key=key: r.get("channel") == "daily"
+                                   and run_line.get(r["id"]) == key, limit=120)
+            tests["data"]["score_history"] = score_history(daily)
         for row in history.select("runs", lambda r, key=key: bool(r.get("channel")) and run_line.get(r["id"]) == key, limit=100):
             if row.get("coverage") and tests.get("data") and not tests["data"].get("coverage", {}).get("languages"):
                 tests["data"]["coverage"].update(source=f"Actions run {row['id']} / attempt {row['attempt']}", value=row["coverage"][0])

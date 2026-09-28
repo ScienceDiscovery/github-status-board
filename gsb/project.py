@@ -111,7 +111,12 @@ def run_details(gh, cfg, run, *, cache=None, parser_version=None):
                         run["coverage"] = [c for c in run.get("coverage", []) if c.get("artifact") != name]
                     for coverage in parsed.get("coverage", []):
                         run.setdefault("coverage", []).append({**coverage, "artifact": name, "run_id": run["id"], "sha": run["sha"], "attempt": run["attempt"], "url": run["url"]})
+                    if parsed.get("scores"):
+                        entry["scores"] = parsed["scores"]
                     if parsed.get("tests") is None:
+                        if parsed.get("scores"):
+                            entry.update(status="available", format="scores")
+                            run["tests"].append(entry)
                         inspected[str(artifact["id"])] = identity
                         continue
                     entry.update(status="available", counts={k: parsed[k] for k in ("tests", "passed", "failed", "skipped", "flaky")},

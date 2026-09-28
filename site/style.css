@@ -254,6 +254,24 @@ a.ci-run:hover, a.ci-run:focus-visible { outline: 2px solid var(--ink); outline-
 .coverage-week-toolbar .btn[disabled] { cursor: default; }
 .coverage-week-empty { min-height: 180px; display: grid; grid-template-columns: repeat(7, 1fr); align-items: end; gap: 4px; color: var(--muted); font-size: 12px; text-align: center; }
 .coverage-week-empty strong { grid-column: 1 / -1; align-self: center; font-weight: 500; }
+.score-trend-trigger { border: 0; background: transparent; color: var(--link); padding: 3px 0 0; font: inherit; font-size: 12px; cursor: pointer; }
+.score-trend-trigger:hover { text-decoration: underline; }
+.score-trend-trigger:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; border-radius: 2px; }
+#score-trend-dialog { width: min(740px, calc(100vw - 28px)); max-height: min(85vh, 900px); overflow: auto; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--ink); box-shadow: 0 18px 55px rgba(0,0,0,.28); }
+#score-trend-dialog::backdrop { background: rgba(0,0,0,.55); }
+.score-dialog-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.score-dialog-head h2 { margin: 0; font-size: 18px; }
+.score-dialog-head p { margin: 5px 0 0; font-size: 12px; }
+.score-dialog-head form { flex: none; }
+.score-series { margin-top: 18px; border-top: 1px solid var(--grid); padding-top: 12px; }
+.score-series h3 { margin: 0 0 4px; font-size: 13px; }
+.score-series h3 .muted { font-weight: 400; font-size: 12px; }
+.score-chart { width: 100%; height: auto; display: block; }
+.score-chart .score-grid { stroke: var(--grid); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.score-chart .score-line { fill: none; stroke: var(--s1); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.score-chart .score-dot { fill: var(--surface); stroke: var(--s1); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+.score-chart text { fill: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }
+.score-run-links { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--grid); font-size: 12px; color: var(--muted); }
 .ratio { display: inline-block; width: 60px; height: 8px; background: var(--surface-2); border-radius: 4px; vertical-align: middle; overflow: hidden; margin-right: 6px; }
 .ratio span { display: block; height: 100%; background: var(--s1); border-radius: 4px; }
 .ratio.bad span { background: var(--critical); }

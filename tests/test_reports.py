@@ -40,6 +40,20 @@ class ReportsTests(unittest.TestCase):
         self.assertIsNone(parse_report_zip(archive({'dashboard-summary.json':json.dumps({'tests':3,'passed':4,'failed':0,'skipped':0,'flaky':0})})))
         self.assertIsNone(parse_report_zip(archive({'trace.zip':'not a test summary'})))
 
+    def test_real_e2e_scores_keep_four_native_shapes_without_private_payloads(self):
+        files = {
+            'results.json': json.dumps({'suites': [], 'stats': {'expected': 4, 'unexpected': 0, 'skipped': 0, 'flaky': 0}}),
+            'drb/benchmark-metrics.json': json.dumps({'case_id': 59, 'integration_status': 'passed', 'prompt': 'PRIVATE', 'evaluation': {'status': 'passed', 'race': {'status': 'completed', 'overall_score': .54}, 'fact': {'status': 'completed', 'citation_accuracy': 80, 'verification_coverage': 90, 'effective_citations': 3}}}),
+            'biomni/benchmark-metrics.json': json.dumps({'case_id': 'da-13-3', 'integration_status': 'passed', 'evaluation': {'status': 'scored', 'score': 87}, 'raw_response': 'PRIVATE'}),
+            'team/team-metrics.json': json.dumps({'case': 'TC-E2E-01', 'integration': 'passed', 'generation_duration_ms': 1234, 'evaluation': {'status': 'scored', 'total_score': 86.25}, 'artifacts': {'PRIVATE': True}}),
+            'puct/evolve-metrics.json': json.dumps({'case': 'PUCT-COMPRESS', 'integration_status': 'passed', 'started_at': '2026-09-20T10:00:00Z', 'finished_at': '2026-09-20T10:01:00Z', 'evaluation': {'status': 'scored', 'score': .69, 'baseline_gate_score': .5, 'best_gate_score': .7}, 'llm_evaluation': {'status': 'error', 'total_score': None, 'error': 'PRIVATE'}}),
+        }
+        parsed = parse_report_zip(archive(files))
+        self.assertEqual(len(parsed['scores']), 4)
+        self.assertEqual({row['family'] for row in parsed['scores']}, {'deepresearchbench', 'biomnibench', 'research-team', 'evolve-compression'})
+        self.assertEqual(next(row for row in parsed['scores'] if row['case'] == 'PUCT-COMPRESS')['duration_ms'], 60000)
+        self.assertNotIn('PRIVATE', json.dumps(parsed))
+
     def test_archive_limit(self):
         with self.assertRaises(ValueError): parse_report_zip(archive({f'{i}.txt':'x' for i in range(3001)}))
 

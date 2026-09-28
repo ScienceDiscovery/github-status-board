@@ -323,6 +323,27 @@ test('tagged dimensions, profile combinations and never-covered cases', async ({
   await tab.locator('.card:has(.tag-matrix)').screenshot({ path: shot('tagged-matrix-narrow') });
 });
 
+test('real E2E scores open per-case trends without crowding the table', async ({ page }) => {
+  await page.goto('/github-status-board/#tests');
+  const tab = page.locator('#tab-tests');
+  await expect(tab.locator('[data-score-case]')).toHaveCount(9);
+  await expect(page.locator('#score-trend-dialog')).not.toBeVisible();
+  await tab.getByRole('button', { name: '查看 DRB-59 的分数趋势' }).click();
+  const dialog = page.locator('#score-trend-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('DRB-59 · 分数趋势');
+  await expect(dialog.locator('.score-chart')).toHaveCount(3);
+  await expect(dialog.locator('.score-series').first().locator('.score-dot')).toHaveCount(6);
+  await expect(dialog.locator('.score-run-links a')).toHaveCount(5);
+  await dialog.getByRole('button', { name: '关闭分数趋势' }).click();
+  await expect(dialog).not.toBeVisible();
+  await tab.getByRole('button', { name: '查看 PUCT-COMPRESS 的分数趋势' }).click();
+  await expect(dialog.locator('.score-chart')).toHaveCount(2);
+  await expect(dialog.locator('.score-series').last().locator('.score-dot')).toHaveCount(5);
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+});
+
 test('CI, tests and coverage switch between main and the jiuwen branch line without mixing', async ({ page }) => {
   await page.goto('/github-status-board/#ci');
   const ci = page.locator('#tab-ci'), rows = ci.locator('.ci-lanes .ci-lane-row:not(.ci-axis)');

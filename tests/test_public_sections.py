@@ -8,7 +8,7 @@ from unittest.mock import patch
 from gsb.board import BoardStore
 from gsb.collectors import Context, _ops_releases
 from gsb.config import Config
-from gsb.public_sections import public_ops, public_tests, extend_project
+from gsb.public_sections import public_ops, public_tests, score_history, extend_project
 from gsb.reports import parse_report_zip
 from test_reports import archive
 
@@ -98,3 +98,28 @@ class PublicSectionsTests(unittest.TestCase):
         self.assertEqual(report['tests'],2)
         self.assertEqual(report['commands'][0]['failed'],1)
         self.assertNotIn('DO-NOT-PUBLISH',json.dumps(report))
+
+    def test_real_e2e_scores_reach_public_executed_report(self):
+        class GH:
+            def get_text_file(self, *args): return '{}'
+        ctx = Context(GH(), Config(repo='example/repo'), datetime.now(timezone.utc))
+        score = dict(case='TC-E2E-01',family='research-team',delivery='passed',quality_status='scored',duration_ms=1000,metrics=[dict(label='Judge total',value=90,unit='score100')])
+        report = dict(artifact_id=1,name='real-e2e-results',url='https://github.com/example/repo/actions/runs/1',layer='e2e',counts=dict(tests=1,passed=1,failed=0,skipped=0,flaky=0),cases=[],scores=[score])
+        run = dict(id=1,sha='a'*40,attempt=1,branch='main',updated_at='2026-09-20',tests=[report])
+        with patch('gsb.public_sections._tree_paths', return_value=([], 'github:git-tree')):
+            doc = public_tests(ctx, [run])
+        self.assertEqual(doc['executed'][0]['scores'], [score])
+        self.assertEqual(doc['executed'][0]['url'], report['url'])
+        self.assertEqual(len(doc['score_history']['TC-E2E-01']), 1)
+
+    def test_score_history_uses_latest_attempt_and_keeps_native_metric_values(self):
+        def run(ident, attempt, day, value):
+            return dict(id=ident, attempt=attempt, created_at=f'2026-09-{day:02d}T12:00:00Z',
+                        url=f'https://github.com/example/repo/actions/runs/{ident}', tests=[dict(
+                            name='real-e2e-results', url=f'https://github.com/example/repo/actions/runs/{ident}/artifacts/{attempt}',
+                            scores=[dict(case='DRB-59', delivery='passed', quality_status='scored',
+                                         metrics=[dict(label='RACE', value=value, unit='ratio')])])])
+        points = score_history([run(1, 1, 18, .40), run(2, 1, 19, .52), run(1, 2, 18, .45)])['DRB-59']
+        self.assertEqual([p['run_id'] for p in points], [1, 2])
+        self.assertEqual([p['metrics'][0]['value'] for p in points], [.45, .52])
+        self.assertEqual(points[0]['attempt'], 2)

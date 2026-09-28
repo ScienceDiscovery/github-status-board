@@ -686,19 +686,112 @@
     return html;
   }
 
+  const REAL_FAMILY_NAME = {
+    deepresearchbench: 'DeepResearchBench', biomnibench: 'BiomniBench',
+    'research-team': 'Research Team', 'evolve-compression': 'PUCT Compression',
+  };
+  const scoreValue = (metric) => {
+    if (metric.value == null) return `<span class="muted">不可用${metric.status ? `（${esc(metric.status)}）` : ''}</span>`;
+    const value = Number(metric.value);
+    if (metric.unit === 'percent') return `${value.toFixed(1)}%`;
+    if (metric.unit === 'score100') return `${value.toFixed(2)} / 100`;
+    if (metric.unit === 'ratio') return value.toFixed(4);
+    return n(value);
+  };
+  const scoreTick = (value, unit) => unit === 'percent' ? `${value.toFixed(1)}%`
+    : unit === 'score100' ? value.toFixed(1) : unit === 'ratio' ? value.toFixed(3) : n(value);
+  function scoreTrendChart(points, metric) {
+    const w = 580, h = 152, left = 56, right = 16, top = 14, bottom = 28;
+    const key = `${metric.label}\u0000${metric.unit}`;
+    const values = points.map((point) => {
+      const found = (point.metrics || []).find((item) => `${item.label}\u0000${item.unit}` === key);
+      return found?.value != null && Number.isFinite(Number(found.value)) ? Number(found.value) : null;
+    });
+    const valid = values.filter((value) => value != null);
+    if (!valid.length) return `<div class="muted">历史运行没有可用的${esc(metric.label)}分数。</div>`;
+    const low = Math.min(...valid), high = Math.max(...valid);
+    const pad = Math.max((high - low) * .18, metric.unit === 'ratio' ? .005 : 1);
+    const floor = metric.unit === 'ratio' || metric.unit === 'percent' || metric.unit === 'score100' ? 0 : -Infinity;
+    const ceiling = metric.unit === 'ratio' ? 1 : metric.unit === 'percent' || metric.unit === 'score100' ? 100 : Infinity;
+    const yMin = Math.max(floor, low - pad), yMax = Math.min(ceiling, high + pad);
+    const range = yMax - yMin || 1;
+    const timestamps = points.map((point) => Date.parse(point.created_at));
+    const timed = timestamps.every(Number.isFinite) && Math.max(...timestamps) > Math.min(...timestamps);
+    const timeMin = timed ? Math.min(...timestamps) : 0, timeSpan = timed ? Math.max(...timestamps) - timeMin : 1;
+    const xAt = (index) => left + (timed ? (timestamps[index] - timeMin) / timeSpan : index / Math.max(points.length - 1, 1)) * (w - left - right);
+    const yAt = (value) => top + (yMax - value) / range * (h - top - bottom);
+    const grid = [yMax, (yMin + yMax) / 2, yMin].map((value) => {
+      const y = yAt(value).toFixed(1);
+      return `<line class="score-grid" x1="${left}" x2="${w - right}" y1="${y}" y2="${y}"></line><text x="${left - 8}" y="${(Number(y) + 4).toFixed(1)}" text-anchor="end">${esc(scoreTick(value, metric.unit))}</text>`;
+    }).join('');
+    const segments = [];
+    let current = [];
+    values.forEach((value, index) => {
+      if (value == null) { if (current.length) segments.push(current); current = []; }
+      else current.push([xAt(index), yAt(value)]);
+    });
+    if (current.length) segments.push(current);
+    const lines = segments.filter((part) => part.length > 1).map((part) => `<path class="score-line" d="${part.map(([x, y], index) => `${index ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ')}"></path>`).join('');
+    const dots = values.map((value, index) => {
+      if (value == null) return '';
+      const point = points[index];
+      const label = `${date(point.created_at)} · ${metric.label} ${scoreTick(value, metric.unit)}\nrun ${point.run_id} · 第 ${point.attempt} 次 · 交付 ${point.delivery || '未知'} · 评分 ${point.quality_status || '未知'}`;
+      return `<circle class="score-dot" cx="${xAt(index).toFixed(1)}" cy="${yAt(value).toFixed(1)}" r="4"${tip(label)}><title>${esc(label)}</title></circle>`;
+    }).join('');
+    const first = points[0], last = points[points.length - 1];
+    return `<svg class="score-chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(metric.label)}分数变化趋势">${grid}${lines}${dots}<text x="${left}" y="${h - 6}">${esc(shortDate(first.created_at))}</text><text x="${w - right}" y="${h - 6}" text-anchor="end">${esc(shortDate(last.created_at))}</text></svg>`;
+  }
+  function openScoreTrend(caseName) {
+    const data = lineSection(STATE.snap, 'tests')?.data || {};
+    const latest = data.executed?.find((entry) => entry.artifact.startsWith('real-e2e-results') && entry.scores?.some((row) => row.case === caseName));
+    const points = data.score_history?.[caseName] || (latest ? [{ run_id: latest.run_id, attempt: latest.attempt,
+      created_at: latest.created_at, url: latest.url, ...latest.scores.find((row) => row.case === caseName) }] : []);
+    const metrics = new Map();
+    for (const point of points) for (const metric of point.metrics || []) metrics.set(`${metric.label}\u0000${metric.unit}`, metric);
+    const dialog = $('#score-trend-dialog');
+    const charts = [...metrics.values()].map((metric) => `<section class="score-series"><h3>${esc(metric.label)} <span class="muted">${esc(metric.unit === 'score100' ? '/ 100' : metric.unit === 'percent' ? '%' : metric.unit === 'ratio' ? '比值' : '')}</span></h3>${scoreTrendChart(points, metric)}</section>`).join('');
+    dialog.innerHTML = `<div class="score-dialog-head"><div><h2 id="score-trend-title">${esc(caseName)} · 分数趋势</h2><p class="muted">最近 ${points.length} 次有该用例评分记录的运行；各指标使用自己的纵轴。分数仅供观察，不改变 CI 结论。</p></div><form method="dialog"><button class="btn small" aria-label="关闭分数趋势">关闭</button></form></div>${points.length < 2 ? '<p class="muted">目前只有一次记录，后续运行后会形成曲线。</p>' : ''}${charts || empty('暂无可绘制的分数')}${points.length ? `<div class="score-run-links">来源：${points.slice(-5).reverse().map((point) => link(point.url, `run ${esc(point.run_id)}${point.attempt > 1 ? ` · 第 ${point.attempt} 次` : ''}`)).join(' · ')}</div>` : ''}`;
+    dialog.showModal();
+  }
+  const deliveryBadge = (value) => badge(value === 'passed' ? '通过' : value === 'failed' ? '失败' : value || '未知', value === 'passed' ? 'good' : value === 'failed' ? 'bad' : 'warn');
+  function realScoresSection(executed) {
+    const report = executed.find((entry) => entry.artifact.startsWith('real-e2e-results') && entry.scores?.length);
+    let html = sectionHead('Real E2E 质量评分', '质量分数仅作观察，不设置通过门槛；交付结果单独显示');
+    if (!report) return html + `<div class="banner warn"><span class="icon">▲</span><div><div class="title">尚未读取到 Real E2E 评分</div><div>Nightly 需要上传 <code>real-e2e-results</code>，其中保留四类用例现有的 metrics JSON；看板只公开分数、状态和耗时，不公开 prompt、模型响应或凭据。</div></div></div>`;
+    const scores = report.scores;
+    const passed = scores.filter((row) => row.delivery === 'passed').length;
+    const scored = scores.filter((row) => row.metrics.some((metric) => metric.value != null)).length;
+    html += `<div class="muted" style="margin:-4px 0 8px">来源 ${link(report.url, `run ${esc(report.run_id)}`)} · <code>${esc(report.branch)}</code> · ${ago(report.created_at)} · 此处保留各评分器的原始量纲。</div>`;
+    html += tiles([
+      { label: 'Real E2E 用例', value: n(scores.length), sub: `${new Set(scores.map((row) => row.family)).size} 类评分` },
+      { label: '交付通过', value: `${n(passed)}<small>/ ${n(scores.length)}</small>`, sub: '仅表示测试流程与最终交付成功', tone: passed === scores.length ? 'good' : 'warn' },
+      { label: '有质量分数', value: `${n(scored)}<small>/ ${n(scores.length)}</small>`, sub: '未评分或 Judge 错误会明确显示', tone: scored === scores.length ? 'good' : 'warn' },
+      { label: '质量门槛', value: '无', sub: '不根据分数改变 CI 结论' },
+    ]);
+    html += `<div class="card" style="margin-top:12px">${table('real-e2e-scores', [
+      { key: 'case', label: '用例', render: (row) => `<code>${esc(row.case)}</code>` },
+      { key: 'family', label: '评分体系', render: (row) => esc(REAL_FAMILY_NAME[row.family] || row.family) },
+      { key: 'delivery', label: '交付', render: (row) => deliveryBadge(row.delivery), sort: (row) => row.delivery },
+      { key: 'metrics', label: '质量结果', sortable: false, render: (row) => `${row.metrics.length ? row.metrics.map((metric) => `<div><span class="muted">${esc(metric.label)}</span> <span class="num">${scoreValue(metric)}</span></div>`).join('') : '<span class="muted">不可用</span>'}<button type="button" class="score-trend-trigger" data-score-case="${esc(row.case)}" aria-label="查看 ${esc(row.case)} 的分数趋势">查看趋势 ↗</button>` },
+      { key: 'duration_ms', label: '耗时', num: true, render: (row) => dur(row.duration_ms == null ? null : row.duration_ms / 1000) },
+    ], scores, { defaultSort: { key: 'case', dir: 'asc' } })}</div>`;
+    return html;
+  }
+
   function renderTests(sec, line) {
     const d = sec?.data;
     let html = sectionState(sec, '测试');
     if (!d) return html;
     const tree = d.tree;
     const ut = d.executed.find((e) => e.artifact.startsWith('ut'));
-    const e2e = d.executed.find((e) => e.layer === 'e2e');
+    const e2e = d.executed.find((e) => e.layer === 'e2e' && !e.artifact.startsWith('real-e2e-results'));
     html += tiles([
       { label: '测试文件（仓库树）', value: n(tree?.total), sub: tree ? `来源 ${esc(d.tree_source)}` : '文件树不可用' },
       { label: '有测试的包', value: tree ? `${d.inventory.filter((p) => p.tested).length}<small>/ ${d.inventory.length}</small>` : '—', tone: d.inventory.some((p) => !p.tested) ? 'warn' : 'good' },
       { label: 'CI 最近 UT 用例', value: n(ut?.totals?.tests), sub: ut?.totals ? `${ut.totals.passed} 通过 · ${ut.totals.failed} 失败 · ${ut.totals.skipped} 跳过` : ut ? '产物存在但没有解析出用例数' : '无产物', tone: ut?.totals?.failed ? 'bad' : ut?.totals ? 'good' : '' },
       { label: 'CI 最近 E2E 用例', value: n(e2e?.totals?.tests), sub: e2e?.totals ? `${e2e.totals.passed} 通过 · ${e2e.totals.failed} 失败/超时 · ${e2e.totals.skipped} 跳过 · ${e2e.totals.flaky} 重试通过` : e2e ? '产物存在但没有解析出用例数' : '无产物', tone: e2e?.totals?.failed ? 'bad' : e2e?.totals ? 'good' : '' },
     ]);
+    html += realScoresSection(d.executed);
     html += taggedSection(d.tagged, line);
 
     // Distribution ----------------------------------------------------------
@@ -1033,6 +1126,8 @@
   }
   // ------------------------------------------------------------ events
   document.addEventListener('click', (ev) => {
+    const scoreButton = ev.target.closest('[data-score-case]');
+    if (scoreButton) { openScoreTrend(scoreButton.dataset.scoreCase); return; }
     const coverageWeekButton = ev.target.closest('[data-coverage-week]');
     if (coverageWeekButton && !coverageWeekButton.disabled) {
       const direction = coverageWeekButton.dataset.coverageWeek;

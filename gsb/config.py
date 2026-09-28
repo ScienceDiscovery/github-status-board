@@ -26,7 +26,7 @@ class Config:
     data_dir: Path = ROOT / ".data"        # board fields, rules, aliases (user data, kept across restarts)
     static_dir: Path = ROOT / "static"
     # Actions artifacts that carry test results; parsed for the test tab.
-    artifact_names: list[str] = field(default_factory=lambda: ["ut-results", "st-results", "e2e-results"])
+    artifact_names: list[str] = field(default_factory=lambda: ["ut-results", "st-results", "e2e-results", "real-e2e-results"])
     artifact_max_bytes: int = 80 * 1024 * 1024
     review_sla_days: int = 3              # open PR without review after this many days is "waiting too long"
     stale_days: int = 30                  # issue with no update for this long counts as stale

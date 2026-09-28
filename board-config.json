@@ -20,7 +20,7 @@
   },
   "branch_lines": [
     { "key": "main", "ref": "main" },
-    { "key": "jiuwen", "ref": "feat/jiuwenswarm" }
+    { "key": "release", "ref": "releases/v0.3.0.beta" }
   ],
   "deployments": {
     "openJiuwen-ai/sciencediscovery": {

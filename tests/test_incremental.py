@@ -11,7 +11,7 @@ from gsb.sync import Sync, BudgetExhausted, stamp, date
 from gsb.project import run_details, slim_run
 from gsb.config import Config
 from gsb.github import GitHubError
-from gsb.incremental_project import build_snapshot, _persist_coverage_summaries, _daily_coverage_history
+from gsb.incremental_project import build_snapshot, _executed, _persist_coverage_summaries, _daily_coverage_history
 from publish import publish_batch
 from test_reports import archive
 
@@ -216,6 +216,15 @@ class SyncTests(unittest.TestCase):
 
 
 class MetricTests(unittest.TestCase):
+    def test_latest_real_e2e_report_keeps_scores_for_test_page(self):
+        score = dict(case='TC-E2E-01', metrics=[dict(label='Judge total', value=86.25, unit='score100')])
+        row = dict(id=1, sha='a'*40, attempt=1, branch='main', updated_at='2026-09-20T12:00:00Z',
+                   tests=[dict(name='real-e2e-results', layer='e2e', counts=None,
+                               url='https://github.com/example/source/actions/runs/1/artifacts/7', scores=[score])])
+        report = _executed([row])[0]
+        self.assertEqual(report['scores'], [score])
+        self.assertEqual(report['url'], row['tests'][0]['url'])
+
     def test_parsed_artifact_not_downloaded_again_and_expiration_preserves_counts(self):
         artifact=dict(id=9,name='e2e-results',created_at='2026-09-22T12:00:00Z',expired=False,digest='sha256:abc')
         class GH:

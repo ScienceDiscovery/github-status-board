@@ -3,14 +3,94 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import re
 import zipfile
+from datetime import datetime
 from xml.etree import ElementTree as ET
 
 from .tagged import extract as extract_tagged
 from .testparse import parse_run_log, COVERAGE_FILE_RE, parse_coverage_file
 
 FIELDS = ("passed", "failed", "skipped", "flaky")
+SCORE_FILE_RE = re.compile(r"(?:^|/)(benchmark-metrics|team-metrics|evolve-metrics)\.json$", re.I)
+
+
+def _number(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else None
+
+
+def _status(value, fallback="unknown"):
+    value = str(value or fallback).strip().lower()
+    return value[:40] if re.fullmatch(r"[a-z0-9_-]+", value) else fallback
+
+
+def _duration_ms(doc):
+    duration = _number(doc.get("generation_duration_ms"))
+    if duration is not None and duration >= 0:
+        return duration
+    try:
+        start = datetime.fromisoformat(str(doc["started_at"]).replace("Z", "+00:00"))
+        finish = datetime.fromisoformat(str(doc["finished_at"]).replace("Z", "+00:00"))
+        return max(0, (finish - start).total_seconds() * 1000)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _metric(label, value, unit, status=None):
+    value = _number(value)
+    if value is None and status is None:
+        return None
+    row = {"label": label[:60], "value": value, "unit": unit}
+    if status is not None:
+        row["status"] = _status(status, "unavailable")
+    return row
+
+
+def research_score(doc):
+    """Return only public, bounded score fields from one real-E2E metrics document."""
+    if not isinstance(doc, dict):
+        return None
+    evaluation = doc.get("evaluation") if isinstance(doc.get("evaluation"), dict) else {}
+    metrics = []
+    case = doc.get("case")
+    family = None
+    delivery = doc.get("integration_status") or doc.get("integration")
+
+    if case == "TC-E2E-01":
+        family = "research-team"
+        metrics.append(_metric("Judge total", evaluation.get("total_score"), "score100", evaluation.get("status")))
+    elif case == "PUCT-COMPRESS":
+        family = "evolve-compression"
+        metrics.extend([
+            _metric("Held-out test", evaluation.get("score"), "ratio", evaluation.get("status")),
+            _metric("Baseline gate", evaluation.get("baseline_gate_score"), "ratio"),
+            _metric("Best gate", evaluation.get("best_gate_score"), "ratio"),
+        ])
+        llm = doc.get("llm_evaluation")
+        if isinstance(llm, dict):
+            metrics.append(_metric("LLM judge", llm.get("total_score"), "score100", llm.get("status")))
+    elif "case_id" in doc and ("race" in evaluation or "fact" in evaluation):
+        family = "deepresearchbench"
+        case = f"DRB-{str(doc.get('case_id'))[:80]}"
+        race = evaluation.get("race") if isinstance(evaluation.get("race"), dict) else {}
+        fact = evaluation.get("fact") if isinstance(evaluation.get("fact"), dict) else {}
+        metrics.extend([
+            _metric("RACE", race.get("overall_score"), "ratio", race.get("status")),
+            _metric("Citation accuracy", fact.get("citation_accuracy"), "percent", fact.get("status")),
+            _metric("Verification coverage", fact.get("verification_coverage"), "percent", fact.get("status")),
+            _metric("Effective citations", fact.get("effective_citations"), "count"),
+        ])
+    elif "case_id" in doc and "score" in evaluation:
+        family = "biomnibench"
+        case = f"BiomniBench-{str(doc.get('case_id'))[:80]}"
+        metrics.append(_metric("Rubric", evaluation.get("score"), "score100", evaluation.get("status")))
+    if not family or not isinstance(case, str) or not case.strip():
+        return None
+    metrics = [metric for metric in metrics if metric is not None]
+    return {"case": case.strip()[:100], "family": family, "delivery": _status(delivery),
+            "quality_status": _status(evaluation.get("status"), "not_scored"),
+            "duration_ms": _duration_ms(doc), "metrics": metrics}
 
 
 def totals(cases):
@@ -95,15 +175,20 @@ def parse_report_zip(blob):
         if len(entries) > 3000 or sum(e.file_size for e in entries) > 160 * 1024 * 1024:
             raise ValueError("report archive exceeds extraction budget")
         reports = {"playwright": [], "tagged": [], "junit": [], "summary": [], "log": []}
-        coverage = []
+        coverage, scores = [], []
         for item in entries:
             name = item.filename.lower()
             if item.is_dir() or item.file_size > 20 * 1024 * 1024:
                 continue
-            if not (name.endswith(("results.json", "report.json", ".xml", "run.log", "dashboard-summary.json")) or COVERAGE_FILE_RE.search(name)):
+            if not (name.endswith(("results.json", "report.json", ".xml", "run.log", "dashboard-summary.json")) or COVERAGE_FILE_RE.search(name) or SCORE_FILE_RE.search(name)):
                 continue
             text = archive.read(item).decode("utf-8", "replace")
             try:
+                if SCORE_FILE_RE.search(name):
+                    score = research_score(json.loads(text))
+                    if score:
+                        scores.append(score)
+                    continue
                 if COVERAGE_FILE_RE.search(name):
                     cov = parse_coverage_file(name, text.encode())
                     if cov and isinstance(cov.get("lines_pct"), (int, float)) and 0 <= cov["lines_pct"] <= 100:
@@ -148,7 +233,7 @@ def parse_report_zip(blob):
         for family in ("summary", "playwright", "tagged", "junit", "log"):
             if reports[family]:
                 counts = {k: sum(r.get(k, 0) for r in reports[family]) for k in ("tests", *FIELDS)}
-                return {**counts, "format": family, "cases": [c for r in reports[family] for c in r["cases"]][:500], "coverage": coverage, "tagged": tagged, **({k: [v for r in reports[family] for v in r[k]] for k in ("commands", "packages")} if family == "log" else {})}
-        if coverage or tagged:
-            return {"tests": None, "coverage": coverage, "tagged": tagged}
+                return {**counts, "format": family, "cases": [c for r in reports[family] for c in r["cases"]][:500], "coverage": coverage, "tagged": tagged, "scores": scores[:100], **({k: [v for r in reports[family] for v in r[k]] for k in ("commands", "packages")} if family == "log" else {})}
+        if coverage or tagged or scores:
+            return {"tests": None, "coverage": coverage, "tagged": tagged, "scores": scores[:100]}
     return None
