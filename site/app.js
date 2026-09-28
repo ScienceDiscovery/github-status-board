@@ -725,7 +725,7 @@
     const pad = Math.max((high - low) * .18, metric.unit === 'ratio' ? .005 : metric.unit === 'duration_ms' ? 60000 : 1);
     const floor = metric.unit === 'ratio' || metric.unit === 'percent' || metric.unit === 'score100' || metric.unit === 'duration_ms' ? 0 : -Infinity;
     const ceiling = metric.unit === 'ratio' ? 1 : metric.unit === 'percent' || metric.unit === 'score100' ? 100 : Infinity;
-    const yMin = Math.max(floor, low - pad), yMax = Math.min(ceiling, high + pad);
+    const yMin = Math.min(low, Math.max(floor, low - pad)), yMax = Math.max(high, Math.min(ceiling, high + pad));
     const range = yMax - yMin || 1;
     const timeMin = Date.parse(`${selectedRange.start}T00:00:00+08:00`);
     const xAt = (index) => left + ((Date.parse(points[index].created_at) - timeMin) / (7 * 86400000)) * (w - left - right);
@@ -770,18 +770,18 @@
     const toolbar = selectedRange ? `<div class="score-week-toolbar"><button class="btn small" data-score-week="older"${STATE.scoreWeekOffset >= selectedRange.maxOffset ? ' disabled' : ''}>‹ 上一周</button><strong>${selectedRange.recent ? '最新 · ' : ''}${dayLabel(selectedRange.start)}–${dayLabel(selectedRange.end)}</strong><button class="btn small" data-score-week="newer"${STATE.scoreWeekOffset === 0 ? ' disabled' : ''}>下一周 ›</button><button class="btn small" data-score-week="latest"${STATE.scoreWeekOffset === 0 ? ' disabled' : ''}>最新</button></div>` : '';
     const charts = visible.length ? [...metrics.values()].map((metric) => `<section class="score-series"><h3>${esc(metric.label)} <span class="muted">${esc(metric.unit === 'score100' ? '/ 100' : metric.unit === 'percent' ? '%' : metric.unit === 'ratio' ? '比值' : '')}</span></h3>${scoreTrendChart(visible, metric, selectedRange)}</section>`).join('') : '';
     const durationChart = visible.length ? `<section class="score-series duration"><h3>运行耗时 <span class="muted">每次运行</span></h3>${scoreTrendChart(visible, { label: '运行耗时', unit: 'duration_ms' }, selectedRange)}</section>` : '';
-    dialog.innerHTML = `<div class="score-dialog-head"><div><h2 id="score-trend-title">${esc(caseName)} · 分数与耗时趋势</h2><p class="muted">按北京时间展示最近 7 天，历史按自然周查看；共保留 ${points.length} 次记录。各指标使用自己的纵轴，分数仅供观察，不改变 CI 结论。</p></div><form method="dialog"><button class="btn small" aria-label="关闭分数趋势">关闭</button></form></div>${toolbar}${!visible.length && selectedRange ? empty('该周没有此用例的运行记录') : ''}${visible.length === 1 ? '<p class="muted">该范围目前只有一次记录，后续运行后会形成曲线。</p>' : ''}${charts}${durationChart}${visible.length ? `<div class="score-run-links">来源：${visible.slice(-5).reverse().map((point) => link(point.url, `run ${esc(point.run_id)}${point.attempt > 1 ? ` · 第 ${point.attempt} 次` : ''}`)).join(' · ')}</div>` : ''}`;
+    dialog.innerHTML = `<div class="score-dialog-head"><div><h2 id="score-trend-title">${esc(caseName)} · 分数与耗时趋势</h2><p class="muted">按北京时间展示最近 7 天，历史按自然周查看；共保留 ${points.length} 次记录。${data.mock_real_e2e ? '当前为本地模拟记录。' : ''}各指标使用自己的纵轴，分数仅供观察，不改变 CI 结论。</p></div><form method="dialog"><button class="btn small" aria-label="关闭分数趋势">关闭</button></form></div>${toolbar}${!visible.length && selectedRange ? empty('该周没有此用例的运行记录') : ''}${visible.length === 1 ? '<p class="muted">该范围目前只有一次记录，后续运行后会形成曲线。</p>' : ''}${charts}${durationChart}${visible.length ? `<div class="score-run-links">${data.mock_real_e2e ? '本地模拟历史数据，仅用于预览。' : `来源：${visible.slice(-5).reverse().map((point) => link(point.url, `run ${esc(point.run_id)}${point.attempt > 1 ? ` · 第 ${point.attempt} 次` : ''}`)).join(' · ')}`}</div>` : ''}`;
     if (!dialog.open) dialog.showModal();
   }
   const deliveryBadge = (value) => badge(value === 'passed' ? '通过' : value === 'failed' ? '失败' : value || '未知', value === 'passed' ? 'good' : value === 'failed' ? 'bad' : 'warn');
-  function realScoresSection(executed) {
+  function realScoresSection(executed, mockPreview = false) {
     const report = executed.find((entry) => entry.artifact.startsWith('real-e2e-results') && entry.scores?.length);
-    let html = sectionHead('Real E2E 质量评分', '质量分数仅作观察，不设置通过门槛；交付结果单独显示');
+    let html = sectionHead('Real E2E 质量评分', mockPreview ? '本地模拟评分与耗时，仅用于预览；不代表 CI 实测结果' : '质量分数仅作观察，不设置通过门槛；交付结果单独显示');
     if (!report) return html + `<div class="banner warn"><span class="icon">▲</span><div><div class="title">尚未读取到 Real E2E 评分</div><div>Nightly 需要上传 <code>real-e2e-results</code>，其中保留四类用例现有的 metrics JSON；看板只公开分数、状态和耗时，不公开 prompt、模型响应或凭据。</div></div></div>`;
     const scores = report.scores;
     const passed = scores.filter((row) => row.delivery === 'passed').length;
     const scored = scores.filter((row) => row.metrics.some((metric) => metric.value != null)).length;
-    html += `<div class="muted" style="margin:-4px 0 8px">来源 ${link(report.url, `run ${esc(report.run_id)}`)} · <code>${esc(report.branch)}</code> · ${ago(report.created_at)} · 此处保留各评分器的原始量纲。</div>`;
+    html += `<div class="muted" style="margin:-4px 0 8px">${mockPreview ? `本地模拟运行 · ${date(report.created_at)}` : `来源 ${link(report.url, `run ${esc(report.run_id)}`)} · <code>${esc(report.branch)}</code> · ${ago(report.created_at)}`} · 此处保留各评分器的原始量纲。</div>`;
     html += tiles([
       { label: 'Real E2E 用例', value: n(scores.length), sub: `${new Set(scores.map((row) => row.family)).size} 类评分` },
       { label: '交付通过', value: `${n(passed)}<small>/ ${n(scores.length)}</small>`, sub: '仅表示测试流程与最终交付成功', tone: passed === scores.length ? 'good' : 'warn' },
@@ -811,7 +811,7 @@
       { label: 'CI 最近 UT 用例', value: n(ut?.totals?.tests), sub: ut?.totals ? `${ut.totals.passed} 通过 · ${ut.totals.failed} 失败 · ${ut.totals.skipped} 跳过` : ut ? '产物存在但没有解析出用例数' : '无产物', tone: ut?.totals?.failed ? 'bad' : ut?.totals ? 'good' : '' },
       { label: 'CI 最近 E2E 用例', value: n(e2e?.totals?.tests), sub: e2e?.totals ? `${e2e.totals.passed} 通过 · ${e2e.totals.failed} 失败/超时 · ${e2e.totals.skipped} 跳过 · ${e2e.totals.flaky} 重试通过` : e2e ? '产物存在但没有解析出用例数' : '无产物', tone: e2e?.totals?.failed ? 'bad' : e2e?.totals ? 'good' : '' },
     ]);
-    html += realScoresSection(d.executed);
+    html += realScoresSection(d.executed, d.mock_real_e2e);
     html += taggedSection(d.tagged, line);
 
     // Distribution ----------------------------------------------------------
@@ -819,8 +819,8 @@
       const layerSegs = Object.entries(tree.by_layer).map(([k, v]) => ({ name: LAYER_NAME[k] || k, value: v, color: LAYER_COLOR[k] || 'var(--muted)' }));
       const pkgs = tree.by_package.slice(0, 20).map((p) => ({ label: p.package, value: p.files, segments: Object.entries(p.layers).map(([k, v]) => ({ name: LAYER_NAME[k] || k, value: v, color: LAYER_COLOR[k] })) }));
       html += `<div class="grid wide" style="margin-top:12px">
-        ${card('按层分布', stack(layerSegs) + legend(layerSegs) + `<div style="margin-top:10px">${bars(Object.entries(tree.by_language).map(([k, v]) => ({ label: k, value: v })))}</div>`, { sub: '测试文件数；下方按语言' })}
-        ${card('按包 / 目录分布', bars(pkgs) + legend(layerSegs.map((s) => ({ name: s.name, color: s.color }))), { sub: `前 ${pkgs.length} 个，颜色为层` })}
+        ${card('按层分布', stack(layerSegs) + legend(layerSegs) + `<div class="muted" style="margin-top:12px">按语言 / 文件类型分布（同一批 ${n(tree.total)} 个文件，包含所有测试层）</div><div style="margin-top:6px">${bars(Object.entries(tree.by_language).map(([k, v]) => ({ label: k, value: v })))}</div>`, { sub: `测试相关文件共 ${n(tree.total)} 个；上方按层统计` })}
+        ${card('按包 / 目录分布', bars(pkgs) + legend(layerSegs.map((s) => ({ name: s.name, color: s.color }))), { sub: '每行数字是该包 / 目录中的测试相关文件数' })}
       </div>`;
     }
 
@@ -1145,6 +1145,12 @@
     console.error(err);
   }
   // ------------------------------------------------------------ events
+  $('#score-trend-dialog').addEventListener('click', (ev) => {
+    const dialog = ev.currentTarget;
+    if (ev.target !== dialog) return;
+    const rect = dialog.getBoundingClientRect();
+    if (ev.clientX < rect.left || ev.clientX >= rect.right || ev.clientY < rect.top || ev.clientY >= rect.bottom) dialog.close();
+  });
   document.addEventListener('click', (ev) => {
     const scoreButton = ev.target.closest('[data-score-case]');
     if (scoreButton) { openScoreTrend(scoreButton.dataset.scoreCase); return; }

@@ -348,12 +348,30 @@ test('real E2E scores open per-case trends without crowding the table', async ({
   await expect(dialog.locator('.score-series.duration .score-dot')).toHaveCount(7);
   await dialog.getByRole('button', { name: '关闭分数趋势' }).click();
   await expect(dialog).not.toBeVisible();
+  await tab.getByRole('button', { name: '查看 DRB-59 的分数趋势' }).click();
+  await dialog.getByRole('heading', { name: 'DRB-59 · 分数与耗时趋势' }).click();
+  await expect(dialog).toBeVisible();
+  await page.mouse.click(2, 2);
+  await expect(dialog).not.toBeVisible();
+  await expect(tab).toBeVisible();
   await tab.getByRole('button', { name: '查看 PUCT-COMPRESS 的分数趋势' }).click();
   await expect(dialog.locator('.score-chart')).toHaveCount(3);
   await expect(dialog.locator('.score-series:not(.duration)').last().locator('.score-dot')).toHaveCount(6);
   await expect(dialog.locator('.score-series.duration .score-dot')).toHaveCount(7);
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
+  await tab.getByRole('button', { name: '查看 BiomniBench-da-14-1 的分数趋势' }).click();
+  const rubric = dialog.locator('.score-series').first().locator('svg');
+  const plotted = await rubric.evaluate((svg) => ({
+    height: svg.viewBox.baseVal.height,
+    dots: [...svg.querySelectorAll('circle')].map((dot) => ({
+      y: Number(dot.getAttribute('cy')),
+      score: Number(dot.querySelector('title').textContent.match(/Rubric ([\d.]+)/)[1]),
+    })),
+  }));
+  expect(plotted.dots).toHaveLength(7);
+  expect(plotted.dots.every((dot) => Number.isFinite(dot.score) && dot.score >= 0 && dot.score <= 100 && dot.y >= 0 && dot.y <= plotted.height)).toBeTruthy();
+  await page.keyboard.press('Escape');
 });
 
 test('CI, tests and coverage switch between main, legacy and release without mixing', async ({ page }) => {

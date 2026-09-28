@@ -63,7 +63,12 @@ for day,shift in ((4,-0.03),(6,-0.024),(8,-0.021),(10,-0.012),(12,-0.015),(14,-0
         score['duration_ms'] = max(60000, score['duration_ms'] + (day - 15) * 47000 + (day % 3) * 81000)
         for metric in score['metrics']:
             if metric['value'] is not None:
-                metric['value']=round(metric['value']+shift*(100 if metric['unit'] in ('percent','score100') else 1),4)
+                value=metric['value']+shift*(100 if metric['unit'] in ('percent','score100') else 1)
+                if metric['unit'] in ('percent','score100'):
+                    value=max(0,min(100,value))
+                elif metric['unit']=='ratio':
+                    value=max(0,min(1,value))
+                metric['value']=round(value,4)
     if day==17:
         scores[-1]['metrics'][-1].update(value=None,status='error')
     historical.append(dict(id=800+day,attempt=1,created_at=when,url=base+f'/actions/runs/{800+day}',tests=[
