@@ -19,7 +19,12 @@
     ]
   },
   "branch_lines": [
-    { "key": "main", "ref": "main" },
+    { "key": "main", "ref": "main", "historical_refs": [
+      { "ref": "feat/jiuwenswarm", "before": "2026-09-27T00:00:00Z" }
+    ] },
+    { "key": "legacy", "ref": "legacy", "historical_refs": [
+      { "ref": "main", "before": "2026-09-27T00:00:00Z" }
+    ] },
     { "key": "release", "ref": "releases/v0.3.0.beta" }
   ],
   "deployments": {

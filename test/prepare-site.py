@@ -25,6 +25,7 @@ from gsb.board import BoardStore
 from gsb.config import Config
 from gsb.collectors import Context
 from gsb.public_sections import public_tests, score_history
+from gsb.lines import configured_lines
 
 item.update(state='open',created_at=time,comments=0,idle_days=4,body='## Reproduction\nDetails for #1. <script>alert(2)</script>')
 pr.update(state='open',created_at=time,comments=1,idle_days=4,body='Fixes #1',head='fix-timeout',base='releases/v0.3.0.beta',requested_reviewers=['reviewer'],reviews=[],waiting_review=True,mergeable='CONFLICTING',linked_issues=[1])
@@ -144,11 +145,24 @@ for dataset in swarm_cov['languages'].values():
 web=dict(lines=dict(covered=50,total=100,percentage=50.0),branches=dict(covered=10,total=40,percentage=25.0),functions=dict(covered=5,total=10,percentage=50.0))
 swarm_cov['languages']['node']['current']['groups'].append(dict(name='apps/web',files=12,totals=web,source_sha='c'*40,updated_at='2026-09-20T13:00:00Z',update_kind='full baseline'))
 swarm_tests=dict(json.loads(json.dumps(tests)),tagged=tag_store.view('releases/v0.3.0.beta'),executed=[],coverage=swarm_cov)
+legacy_run=lane_run(610,'CI','push','2026-09-18T06:00:00Z','legacy')
+legacy_recent=dict(legacy_run,title=legacy_run['title'],created_at=legacy_run['created_at'],duration_s=300,actor='maintainer')
+legacy_rate=dict(success_rate=100,total=1,success=1,failure=0,cancelled=0,median_duration_s=300)
+legacy_ci=dict(default_branch='legacy',main=legacy_rate,pull_request=dict(legacy_rate,total=0,success=0,success_rate=None),
+               red_streak_main=0,failures_7d=0,runs_sampled=1,job_history_runs=0,main_timeline=[legacy_recent],
+               latest_main=dict(run=legacy_recent,jobs=[]),
+               workflows=[dict(name='CI',url=base+'/actions/workflows/ci.yml',path='.github/workflows/ci.yml',state='active',
+                               all=legacy_rate,main=legacy_rate,pull_request=legacy_rate,failures_7d=0,last_run=legacy_recent)],
+               job_health=[],recent_runs=[legacy_recent],
+               lanes=build_lanes([legacy_run],default_branch='legacy',now=datetime(2026,9,20,12,tzinfo=timezone.utc),
+                                 rules=json.loads((root/'board-config.json').read_text())['workflows'],lanes=(('pr','PR'),('main','legacy'))))
+legacy_tests=dict(json.loads(json.dumps(tests)),tagged=None,executed=[],coverage=dict(source=None,value=None,languages={},attempts=[]))
 ops=dict(releases=dict(latest=None,count=0,items=[],tags=[],total_downloads=0,cadence_days=None,unreleased=None),branches=dict(default='main',protection=dict(enabled=True,required_reviews=1,required_checks=['E2E']),rulesets=[],items=[],count=1,stale=[]),public_advisories=[],community=dict(health_percentage=75,missing=['contributing'],files=dict(readme=True,contributing=False)),activity=dict(weeks=[dict(week=1789819200,total=10)],commits_4w=10,commits_52w=10),recent_commits=[],commits_7d=3,stale_automation=dict(workflow=None))
 wrap=lambda value:dict(status='ok',data=value,notes=[],error=None)
 doc.update(repo=repo,repo_url=base,config=dict(artifact_names=['ut-results','e2e-results','real-e2e-results'],pr_idle_days=14),sections={k:wrap(v) for k,v in dict(repo=dict(description='浏览器验收数据',stars=10,forks=2,language='Python',license='MIT',default_branch='main',pushed_at=time),issues=issues,prs=prs,ci=ci,tests=tests,ops=ops).items()})
-doc['lines']=[dict(key='main',ref='main',default=True),dict(key='release',ref='releases/v0.3.0.beta',default=False)]
-doc['line_sections']={'release':dict(ci=wrap(swarm_ci),tests=wrap(swarm_tests))}
+doc['lines']=configured_lines(json.loads((root/'board-config.json').read_text()),'main')
+doc['line_sections']={'legacy':dict(ci=wrap(legacy_ci),tests=wrap(legacy_tests)),
+                      'release':dict(ci=wrap(swarm_ci),tests=wrap(swarm_tests))}
 doc['board']=BoardStore(cfg,persist=False).payload(doc)
 doc['details']={'issue:1':dict(body=item['body'],cross_references=[]),'pr:3':dict(body=pr['body'],cross_references=[])}
 export_site(root/'.e2e/site/github-status-board',doc)

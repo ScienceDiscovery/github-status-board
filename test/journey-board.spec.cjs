@@ -225,7 +225,7 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await expect(nodePrCoverage).toContainText('来源分支');
   await expect(nodePrCoverage).toContainText('目标分支');
   await expect(nodePrCoverage.getByRole('row').filter({ hasText: '#3' })).toContainText('fix-timeout');
-  await expect(nodePrCoverage.getByRole('row').filter({ hasText: '#3' })).toContainText('feat/jiuwenswarm');
+  await expect(nodePrCoverage.getByRole('row').filter({ hasText: '#3' })).toContainText('releases/v0.3.0.beta');
   await expect(page.locator('#tab-coverage .coverage-trend')).toHaveCount(2);
   await expect(page.locator('#tab-coverage .coverage-trend').first().locator('.coverage-dot')).toHaveCount(5);
   await expect(page.locator('#tab-coverage .coverage-trend').first().locator('.coverage-x-label')).toHaveCount(7);
@@ -344,35 +344,44 @@ test('real E2E scores open per-case trends without crowding the table', async ({
   await expect(dialog).not.toBeVisible();
 });
 
-test('CI, tests and coverage switch between main and the jiuwen branch line without mixing', async ({ page }) => {
+test('CI, tests and coverage switch between main, legacy and release without mixing', async ({ page }) => {
   await page.goto('/github-status-board/#ci');
   const ci = page.locator('#tab-ci'), rows = ci.locator('.ci-lanes .ci-lane-row:not(.ci-axis)');
   const switchOf = (tab) => page.locator(`#tab-${tab} .line-switch`);
-  await expect(switchOf('ci').locator('button')).toHaveText(['main', 'feat/jiuwenswarm']);
+  await expect(switchOf('ci').locator('button')).toHaveText(['main', 'legacy', 'releases/v0.3.0.beta']);
   await expect(switchOf('ci').locator('button.on')).toHaveText('main');
   await expect(rows).toHaveCount(4);
-  await expect(ci.locator('.ci-lanes')).not.toContainText('feat/jiuwenswarm');
+  await expect(ci.locator('.ci-lanes')).not.toContainText('legacy');
   await expect(ci.locator('.ci-lanes .ci-run[href$="/runs/602"]')).toHaveCount(0);
-  await switchOf('ci').getByRole('button', { name: 'feat/jiuwenswarm' }).click();
-  // The jiuwen line has PR and branch lanes only: no Nightly or Release runs there.
+  await switchOf('ci').getByRole('button', { name: 'legacy' }).click();
   await expect(rows).toHaveCount(2);
-  await expect(rows.nth(1).locator('.ci-lane-head b')).toHaveText('feat/jiuwenswarm');
-  await expect(rows.nth(1).locator('.ci-lane-head')).toContainText('CI · feat/jiuwenswarm push / 手动');
+  await expect(rows.nth(1).locator('.ci-lane-head b')).toHaveText('legacy');
+  await expect(rows.nth(1).locator('.ci-run')).toHaveAttribute('href', /\/runs\/610$/);
+  await expect(ci.locator('.ci-lanes .ci-run[href$="/runs/602"]')).toHaveCount(0);
+  await page.locator('[data-tab="tests"]').click();
+  await expect(switchOf('tests').locator('button.on')).toHaveText('legacy');
+  await expect(page.locator('#tab-tests')).not.toContainText('323 个用例');
+  await page.locator('[data-tab="ci"]').click();
+  await switchOf('ci').getByRole('button', { name: 'releases/v0.3.0.beta' }).click();
+  // The release line has PR and branch lanes only: no Nightly or Release runs there.
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(1).locator('.ci-lane-head b')).toHaveText('releases/v0.3.0.beta');
+  await expect(rows.nth(1).locator('.ci-lane-head')).toContainText('CI · releases/v0.3.0.beta push / 手动');
   await expect(rows.first().locator('.ci-run')).toHaveCount(2);
   await expect(rows.nth(1).locator('.ci-run.failure')).toHaveAttribute('href', /\/runs\/602$/);
   await expect(ci.locator('.ci-lanes .ci-run[href$="/runs/500"]')).toHaveCount(0);
-  await expect(ci.locator('.tile').first()).toContainText('feat/jiuwenswarm 分支成功率');
+  await expect(ci.locator('.tile').first()).toContainText('releases/v0.3.0.beta 分支成功率');
   await expect(ci).toContainText('Run unit tests');
   await expect(ci.locator('.ci-lane-notes')).not.toContainText('Nightly');
   const recent = ci.locator('th[data-table="ci-runs"]').first().locator('xpath=ancestor::table').locator('tbody tr');
   await expect(recent).toHaveCount(3);
   await page.mouse.move(0, 0);
-  await page.screenshot({ path: shot('line-ci-jiuwen-desktop') });
+  await page.screenshot({ path: shot('line-ci-release-desktop') });
   // The choice holds on the test and coverage pages and across a reload.
   await page.locator('[data-tab="tests"]').click();
   const tests = page.locator('#tab-tests');
-  await expect(switchOf('tests').locator('button.on')).toHaveText('feat/jiuwenswarm');
-  await expect(tests).toContainText('feat/jiuwenswarm 最新 CI 冻结的用例目录 · 323 个用例');
+  await expect(switchOf('tests').locator('button.on')).toHaveText('releases/v0.3.0.beta');
+  await expect(tests).toContainText('releases/v0.3.0.beta 最新 CI 冻结的用例目录 · 323 个用例');
   await expect(tests.locator('.tile', { hasText: 'Daily 选中' })).toHaveCount(0);
   await expect(tests.locator('.tag-matrix thead th.take-col')).toHaveCount(1);
   await page.locator('[data-tab="coverage"]').click();
@@ -387,9 +396,9 @@ test('CI, tests and coverage switch between main and the jiuwen branch line with
   await expect(groupRows.filter({ hasText: 'web/' })).toContainText('50.0%');
   await expect(swarmCov.locator('.cov-file:not(.cov-group)')).toHaveCount(0);
   await page.mouse.move(0, 0);
-  await swarmCov.locator('.card:has(.cov-tree[data-language="node"])').screenshot({ path: shot('coverage-groups-jiuwen-desktop') });
+  await swarmCov.locator('.card:has(.cov-tree[data-language="node"])').screenshot({ path: shot('coverage-groups-release-desktop') });
   await page.reload();
-  await expect(switchOf('coverage').locator('button.on')).toHaveText('feat/jiuwenswarm');
+  await expect(switchOf('coverage').locator('button.on')).toHaveText('releases/v0.3.0.beta');
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.locator('[data-tab="ci"]').click();
@@ -397,16 +406,16 @@ test('CI, tests and coverage switch between main and the jiuwen branch line with
   await page.locator('#tab-ci .line-bar').screenshot({ path: shot('line-switch-narrow') });
   // The full branch name fits the narrow lane header instead of being clipped.
   const branchHead = rows.nth(1).locator('.ci-lane-head b');
-  await expect(branchHead).toHaveText('feat/jiuwenswarm');
+  await expect(branchHead).toHaveText('releases/v0.3.0.beta');
   expect(await branchHead.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && el.getBoundingClientRect().right <= el.closest('.ci-lane-head').getBoundingClientRect().right + 1)).toBeTruthy();
-  await page.locator('#tab-ci .card:has(.ci-lanes)').screenshot({ path: shot('line-ci-jiuwen-narrow') });
+  await page.locator('#tab-ci .card:has(.ci-lanes)').screenshot({ path: shot('line-ci-release-narrow') });
   await switchOf('ci').getByRole('button', { name: 'main' }).click();
   await expect(rows).toHaveCount(4);
   await page.locator('[data-tab="tests"]').click();
   await expect(page.locator('#tab-tests')).toContainText('349 个用例');
-  // The overview stays on main and still surfaces the failing jiuwen run.
+  // The overview stays on main and still surfaces the failing release run.
   await page.locator('[data-tab="overview"]').click();
-  await expect(page.locator('#tab-overview .health')).toContainText('feat/jiuwenswarm 分支最近一次运行失败');
+  await expect(page.locator('#tab-overview .health')).toContainText('releases/v0.3.0.beta 分支最近一次运行失败');
   await expect(page.locator('#tab-overview .ci-lane-row:not(.ci-axis)')).toHaveCount(4);
 });
 

@@ -5,11 +5,11 @@ import hashlib
 from zoneinfo import ZoneInfo
 
 from .board import BoardStore
-from .ci_lanes import LANES, build_lanes, window_start
+from .ci_lanes import LANES, PR_EVENTS, build_lanes, window_start
 from .collectors import Context, collect_ci, summarize_issues, summarize_prs, days_between
 from .coverage_store import CoverageStore
 from .history import read_json, encode
-from .lines import configured_lines, line_of, target_of
+from .lines import canonical_branch, configured_lines, line_of, target_of
 from .public_sections import public_ops, public_tests, score_history, envelope
 from .sync import stamp, date
 
@@ -41,7 +41,7 @@ def _coverage_run(history, run_id, created_at):
     return key, row
 
 
-def _persist_coverage_summaries(history, coverage, default_branch):
+def _persist_coverage_summaries(history, coverage, line, lines):
     """Attach compact, complete coverage evidence to its canonical run record."""
     for language, dataset in (coverage.get("languages") or {}).items():
         for item in dataset.get("history", []):
@@ -49,7 +49,8 @@ def _persist_coverage_summaries(history, coverage, default_branch):
             if not matched:
                 continue
             key, index = matched
-            if index.get("branch") != default_branch or index.get("conclusion") != "success":
+            if (index.get("event") in PR_EVENTS or index.get("conclusion") != "success"
+                    or line_of(index.get("branch"), lines, index.get("created_at")) != line["key"]):
                 continue
             record = history.get("runs", key)
             if not record:
@@ -64,11 +65,12 @@ def _persist_coverage_summaries(history, coverage, default_branch):
                 history.put("runs", record)
 
 
-def _daily_coverage_history(history, default_branch):
+def _daily_coverage_history(history, line, lines):
     """Latest successful complete result per Beijing calendar day and language."""
     daily = {}
     for key, index in history.rows("runs"):
-        if index.get("branch") != default_branch or index.get("conclusion") != "success":
+        if (index.get("event") in PR_EVENTS or index.get("conclusion") != "success"
+                or line_of(index.get("branch"), lines, index.get("created_at")) != line["key"]):
             continue
         record = history.get("runs", key)
         for item in (record or {}).get("coverage_summaries", []):
@@ -197,11 +199,22 @@ def build_snapshot(sync):
             index[row["id"]] = row
     all_prs = [row for _, row in history.rows("prs")]
     by_number = {row.get("number"): row for row in all_prs}
-    run_line = {ident: line_of(target_of(row, all_prs, by_number), lines) for ident, row in index.items()}
-    others = {line["ref"]: line["key"] for line in lines[1:]}
+    run_line = {ident: line_of(target_of(row, all_prs, by_number), lines, row.get("created_at")) for ident, row in index.items()}
+    def project_run(row):
+        if row.get("event") in PR_EVENTS:
+            return row
+        branch = canonical_branch(row.get("branch"), lines, row.get("created_at"))
+        return {**row, "branch": branch} if branch != row.get("branch") else row
+
     def artifact_line(artifact):
+        owner = index.get(artifact.get("run_id"))
+        destination = run_line.get(artifact.get("run_id")) or line_of(artifact.get("branch"), lines, artifact.get("created_at"))
+        if owner and owner.get("event") not in PR_EVENTS:
+            artifact["branch"] = canonical_branch(owner.get("branch"), lines, owner.get("created_at"))
+        elif not owner:
+            artifact["branch"] = canonical_branch(artifact.get("branch"), lines, artifact.get("created_at"))
         # Artifacts of runs older than the history fall back to their branch.
-        return run_line.get(artifact.get("run_id")) or others.get(artifact.get("branch")) or lines[0]["key"]
+        return destination
 
     wrap = lambda data: {"status": "ok", "data": data, "notes": [], "error": None}
     day = stamp(midnight)[:10]
@@ -221,18 +234,18 @@ def build_snapshot(sync):
     for line in lines:
         key = line["key"]
         line_meta = {**meta, "default_branch": line["ref"]}
-        line_index = {ident: row for ident, row in index.items() if run_line[ident] == key}
+        line_index = {ident: project_run(row) for ident, row in index.items() if run_line[ident] == key}
         ci = collect_ci(Context(_stored_ci(history, line_index), cfg, midnight, line_meta))
         # Lanes read complete records (event, linked PRs, head repository) for the
         # displayed window only, plus the PRs that were open during it. Nightly
         # and releases run on the default branch only.
-        lane_runs = [history.get("runs", history_key(row)) or row for row in line_index.values() if (row.get("created_at") or "") >= start]
+        lane_runs = [project_run(history.get("runs", history_key(row)) or index[row["id"]]) for row in line_index.values() if (row.get("created_at") or "") >= start]
         ci["lanes"] = build_lanes(lane_runs, default_branch=line["ref"], now=sync.now,
                                   rules=sync.settings.get("workflows"), prs=[pr for pr in lane_prs if pr],
                                   lanes=LANES if line["default"] else (LANES[0], ("main", line["ref"])),
                                   collected_since=None if progress["backfill"].get("runs", {}).get("complete")
                                   else min((row["created_at"] for row in index.values()), default=None))
-        runs = history.select("runs", lambda r, key=key: run_line.get(r["id"]) == key and r["attempt"] == index[r["id"]]["attempt"], limit=100)
+        runs = [project_run(row) for row in history.select("runs", lambda r, key=key: run_line.get(r["id"]) == key and r["attempt"] == index[r["id"]]["attempt"], limit=100)]
         for run in runs:
             for report in run.get("tests", []):
                 report["cases"] = []  # old renderer contract; no testcase records
@@ -243,7 +256,7 @@ def build_snapshot(sync):
             # Actions artifacts are live evidence: refresh when the line's run set
             # changes, while retaining the daily fallback for repository-tree data.
             fresh = envelope(lambda: public_tests(Context(gh, cfg, midnight, line_meta, coverage_store=store), runs,
-                                                  owns=lambda artifact: artifact_line(artifact) == key))
+                                                  owns=lambda artifact, key=key: artifact_line(artifact) == key))
             # A failed read (e.g. an exhausted API quota) keeps the last good
             # evidence and is retried by the next build.
             if fresh["status"] != "error" or (cache.get("tests") or {}).get("status") in (None, "error"):
@@ -255,8 +268,8 @@ def build_snapshot(sync):
         if isinstance(tests.get("data"), dict):
             tests["data"]["tagged"] = sync.tagged.view(line["ref"])
         coverage = (tests.get("data") or {}).get("coverage") or {}
-        _persist_coverage_summaries(history, coverage, line["ref"])
-        daily_coverage = _daily_coverage_history(history, line["ref"])
+        _persist_coverage_summaries(history, coverage, line, lines)
+        daily_coverage = _daily_coverage_history(history, line, lines)
         for language, dataset in (coverage.get("languages") or {}).items():
             dataset["history"] = daily_coverage.get(language, [])
         if tests.get("data"):

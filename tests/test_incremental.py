@@ -174,8 +174,9 @@ class SyncTests(unittest.TestCase):
         ]
         coverage={'languages':{'node':{'history':entries}}}
 
-        _persist_coverage_summaries(history,coverage,'main')
-        daily=_daily_coverage_history(history,'main')['node']
+        lines=[{'key':'main','ref':'main','default':True}]
+        _persist_coverage_summaries(history,coverage,lines[0],lines)
+        daily=_daily_coverage_history(history,lines[0],lines)['node']
 
         self.assertEqual(len(daily),2)
         self.assertEqual(daily[0]['day'],'2026-09-22')

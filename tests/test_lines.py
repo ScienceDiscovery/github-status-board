@@ -7,13 +7,18 @@ from unittest.mock import patch
 
 from gsb.collectors import collect_ci
 from gsb.incremental_project import build_snapshot
-from gsb.lines import configured_lines, line_of, target_of
+from gsb.lines import canonical_branch, configured_lines, line_of, target_of
 from gsb.sync import Sync
 from test_ci_lanes import NOW, RULES, SnapshotLaneTests, points
 from test_incremental import REPO
 
 ROOT = Path(__file__).resolve().parents[1]
 LINES = [{"key": "jiuwen", "ref": "feat/jiuwenswarm"}]
+RENAMED_LINES = [
+    {"key": "main", "ref": "main", "historical_refs": [{"ref": "feat/jiuwenswarm", "before": "2026-09-22T11:56:00Z"}]},
+    {"key": "legacy", "ref": "legacy", "historical_refs": [{"ref": "main", "before": "2026-09-22T11:56:00Z"}]},
+    {"key": "release", "ref": "releases/v0.3.0.beta"},
+]
 
 
 class ConfigTests(unittest.TestCase):
@@ -42,6 +47,17 @@ class ConfigTests(unittest.TestCase):
         ]
         for run, expected in cases:
             self.assertEqual(line_of(target_of(run, prs, by_number), lines), expected, run)
+
+    def test_historical_refs_split_old_main_from_new_main(self):
+        lines = configured_lines({"branch_lines": RENAMED_LINES}, "main")
+        self.assertEqual([line["key"] for line in lines], ["main", "legacy", "release"])
+        old, new = "2026-09-22T11:55:00Z", "2026-09-22T11:57:00Z"
+        self.assertEqual(line_of("main", lines, old), "legacy")
+        self.assertEqual(canonical_branch("main", lines, old), "legacy")
+        self.assertEqual(line_of("main", lines, new), "main")
+        self.assertEqual(line_of("feat/jiuwenswarm", lines, old), "main")
+        self.assertEqual(canonical_branch("feat/jiuwenswarm", lines, old), "main")
+        self.assertEqual(line_of("releases/v0.3.0.beta", lines, old), "release")
 
 
 class SnapshotTests(unittest.TestCase):
@@ -111,3 +127,31 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual((len(doc["lines"]), built), (1, 0))
         doc, built = build({"branch_lines": LINES}, False)
         self.assertEqual((sorted(doc["line_sections"]), built), (["jiuwen"], 2))
+
+    def test_renamed_branches_project_historical_runs_into_their_current_lines(self):
+        source = self.source()
+        created = (NOW - timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+        source.runs.append({**source.runs[1], "id": 10, "head_branch": "main", "created_at": created,
+                            "updated_at": created, "run_started_at": created,
+                            "html_url": f"https://github.com/{REPO}/actions/runs/10"})
+        sync = Sync(source, self.root, REPO, settings={"workflows": RULES, "branch_lines": RENAMED_LINES}, now=NOW).collect()
+        calls = {}
+        def tests(ctx, runs, owns=None):
+            calls[ctx.default_branch] = ([row["id"] for row in runs], owns)
+            return {"executed": [], "coverage": {}}
+        with patch("gsb.incremental_project.public_ops", return_value={}), patch("gsb.incremental_project.public_tests", side_effect=tests):
+            doc = build_snapshot(sync)
+        self.assertEqual([line["ref"] for line in doc["lines"]], ["main", "legacy", "releases/v0.3.0.beta"])
+        self.assertEqual({lane["key"]: points(lane) for lane in doc["sections"]["ci"]["data"]["lanes"]["lanes"] if points(lane)},
+                         {"pr": [6, 7], "main": [8, 9, 10], "release": [4]})
+        legacy = doc["line_sections"]["legacy"]["ci"]["data"]
+        self.assertEqual({lane["key"]: points(lane) for lane in legacy["lanes"]["lanes"]},
+                         {"pr": [1], "main": [2, 5]})
+        self.assertEqual(sorted(calls["legacy"][0]), [1, 2, 3, 5])
+        self.assertEqual(sorted(calls["main"][0]), [4, 6, 7, 8, 9, 10])
+        old_main = {"run_id": 2, "branch": "main", "created_at": "2026-09-22T11:20:00Z"}
+        old_swarm = {"run_id": 8, "branch": "feat/jiuwenswarm", "created_at": "2026-09-22T11:54:00Z"}
+        self.assertTrue(calls["legacy"][1](old_main))
+        self.assertEqual(old_main["branch"], "legacy")
+        self.assertTrue(calls["main"][1](old_swarm))
+        self.assertEqual(old_swarm["branch"], "main")

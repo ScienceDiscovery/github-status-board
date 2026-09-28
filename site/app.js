@@ -618,7 +618,7 @@
     const where = line.default ? '默认分支' : ` ${line.ref} `;
     if (t && !line.default) t = { ...t, profiles: t.profiles.filter((p) => p.run) };
     let html = sectionHead('标签化测试', t ? `${where}最新 CI 冻结的用例目录 · ${n(t.cases)} 个用例 · ${t.dimensions.length} 个标签维度 · ${n(t.signatures)} 种标签组合` : '');
-    if (!t) return html + `<div class="banner warn"><span class="icon">▲</span><div><div class="title">尚未读取到标签化测试目录</div><div>需要源仓 CI 在 ut / st / e2e-results 产物中上传各层的 <code>tagged/catalog.json</code> 与 <code>plan.json</code>；读取到${esc(where)}的一次运行后，这里显示各维度标签、PR / Daily / Release 的组合与覆盖情况。${line.default ? '' : `该分支没有 push 触发的 CI，需要在 <code>${esc(line.ref)}</code> 上手动运行一次 CI；目标为它的 PR 可能修改规则，不作为依据。`}</div></div></div>`;
+    if (!t) return html + `<div class="banner warn"><span class="icon">▲</span><div><div class="title">尚未读取到标签化测试目录</div><div>需要源仓 CI 在 ut / st / e2e-results 产物中上传各层的 <code>tagged/catalog.json</code> 与 <code>plan.json</code>；读取到${esc(where)}的一次运行后，这里显示各维度标签、组合与覆盖情况。${line.default ? '' : `请在 <code>${esc(line.ref)}</code> 上通过 push 或手动运行一次上传上述产物的 CI；目标为它的 PR 可能修改规则，不作为依据。`}</div></div></div>`;
     const share = (x) => (t.cases ? `${((x / t.cases) * 100).toFixed(1)}%` : '—');
     const runText = (p) => {
       if (!p.run) return '暂无该组合的运行';
