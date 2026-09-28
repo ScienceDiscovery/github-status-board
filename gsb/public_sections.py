@@ -79,6 +79,7 @@ def score_history(runs, limit=30):
                     'created_at': run.get('created_at') or report.get('created_at'),
                     'url': report.get('url') or run.get('url'),
                     'delivery': score.get('delivery'), 'quality_status': score.get('quality_status'),
+                    'duration_ms': score.get('duration_ms'),
                     'metrics': score.get('metrics', []),
                 })
     return {case: list(reversed(rows)) for case, rows in points.items()}

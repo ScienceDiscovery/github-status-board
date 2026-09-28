@@ -56,10 +56,11 @@ with patch('gsb.public_sections._tree_paths',return_value=(['services/core/src/i
 # Synthetic history exists only in the browser acceptance fixture. Real history
 # comes from recorded Actions attempts and is never inferred from one score.
 historical=[]
-for day,shift in ((15,-0.018),(16,-0.007),(17,0.004),(18,-0.002),(19,0.008)):
+for day,shift in ((4,-0.03),(6,-0.024),(8,-0.021),(10,-0.012),(12,-0.015),(14,-0.009),(15,-0.018),(16,-0.007),(17,0.004),(18,-0.002),(19,0.008)):
     when=f'2026-09-{day:02d}T12:00:00Z'
     scores=json.loads(json.dumps(real_scores))
     for score in scores:
+        score['duration_ms'] = max(60000, score['duration_ms'] + (day - 15) * 47000 + (day % 3) * 81000)
         for metric in score['metrics']:
             if metric['value'] is not None:
                 metric['value']=round(metric['value']+shift*(100 if metric['unit'] in ('percent','score100') else 1),4)

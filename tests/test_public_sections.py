@@ -117,9 +117,10 @@ class PublicSectionsTests(unittest.TestCase):
             return dict(id=ident, attempt=attempt, created_at=f'2026-09-{day:02d}T12:00:00Z',
                         url=f'https://github.com/example/repo/actions/runs/{ident}', tests=[dict(
                             name='real-e2e-results', url=f'https://github.com/example/repo/actions/runs/{ident}/artifacts/{attempt}',
-                            scores=[dict(case='DRB-59', delivery='passed', quality_status='scored',
+                            scores=[dict(case='DRB-59', delivery='passed', quality_status='scored', duration_ms=attempt * 60000,
                                          metrics=[dict(label='RACE', value=value, unit='ratio')])])])
         points = score_history([run(1, 1, 18, .40), run(2, 1, 19, .52), run(1, 2, 18, .45)])['DRB-59']
         self.assertEqual([p['run_id'] for p in points], [1, 2])
         self.assertEqual([p['metrics'][0]['value'] for p in points], [.45, .52])
+        self.assertEqual([p['duration_ms'] for p in points], [120000, 60000])
         self.assertEqual(points[0]['attempt'], 2)

@@ -263,6 +263,9 @@ a.ci-run:hover, a.ci-run:focus-visible { outline: 2px solid var(--ink); outline-
 .score-dialog-head h2 { margin: 0; font-size: 18px; }
 .score-dialog-head p { margin: 5px 0 0; font-size: 12px; }
 .score-dialog-head form { flex: none; }
+.score-week-toolbar { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.score-week-toolbar strong { min-width: 142px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; }
+.score-week-toolbar .btn[disabled] { cursor: default; }
 .score-series { margin-top: 18px; border-top: 1px solid var(--grid); padding-top: 12px; }
 .score-series h3 { margin: 0 0 4px; font-size: 13px; }
 .score-series h3 .muted { font-weight: 400; font-size: 12px; }
@@ -270,6 +273,8 @@ a.ci-run:hover, a.ci-run:focus-visible { outline: 2px solid var(--ink); outline-
 .score-chart .score-grid { stroke: var(--grid); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .score-chart .score-line { fill: none; stroke: var(--s1); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .score-chart .score-dot { fill: var(--surface); stroke: var(--s1); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+.score-series.duration .score-line { stroke: var(--s2); }
+.score-series.duration .score-dot { stroke: var(--s2); }
 .score-chart text { fill: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }
 .score-run-links { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--grid); font-size: 12px; color: var(--muted); }
 .ratio { display: inline-block; width: 60px; height: 8px; background: var(--surface-2); border-radius: 4px; vertical-align: middle; overflow: hidden; margin-right: 6px; }

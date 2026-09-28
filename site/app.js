@@ -52,7 +52,7 @@
   const loadViews = () => { try { return { issues: 'table', prs: 'table', ...JSON.parse(localStorage.getItem(VIEW_KEY) || '{}') }; } catch (e) { return { issues: 'table', prs: 'table' }; } };
   const loadLine = () => { try { return localStorage.getItem(LINE_KEY); } catch (e) { return null; } };
   const loadCovSort = () => { try { return localStorage.getItem(COV_SORT_KEY) === 'lines' ? 'lines' : 'name'; } catch (e) { return 'name'; } };
-  const STATE = { snap: null, status: null, tab: 'overview', views: loadViews(), line: loadLine(), covOpen: new Set(), covSort: loadCovSort(), sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, coverageWeekOffset: 0, pollTimer: null };
+  const STATE = { snap: null, status: null, tab: 'overview', views: loadViews(), line: loadLine(), covOpen: new Set(), covSort: loadCovSort(), sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, coverageWeekOffset: 0, scoreWeekOffset: 0, scoreCase: null, pollTimer: null };
 
   // ------------------------------------------------------------ components
   const badge = (text, tone = '', extra = '') => `<span class="badge ${tone}"${extra}>${esc(text)}</span>`;
@@ -113,8 +113,8 @@
     const d = dayDate(day);
     return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
   };
-  const coverageRange = (languages) => {
-    const days = Object.values(languages).flatMap((dataset) => (dataset.history || []).map((row) => row.day).filter(Boolean)).sort();
+  const historyRange = (historyDays, offset) => {
+    const days = historyDays.filter(Boolean).sort();
     if (!days.length) return null;
     const latestDay = days[days.length - 1];
     const earliest = weekStart(days[0]);
@@ -122,12 +122,18 @@
     const maxOffset = dayDate(firstHistoryWeek) < dayDate(earliest)
       ? 0
       : Math.floor((dayDate(firstHistoryWeek) - dayDate(earliest)) / 604800000) + 1;
-    STATE.coverageWeekOffset = Math.max(0, Math.min(STATE.coverageWeekOffset, maxOffset));
-    if (STATE.coverageWeekOffset === 0) {
-      return { start: addDays(latestDay, -6), end: latestDay, maxOffset, recent: true };
+    const selectedOffset = Math.max(0, Math.min(offset, maxOffset));
+    if (selectedOffset === 0) {
+      return { start: addDays(latestDay, -6), end: latestDay, maxOffset, offset: selectedOffset, recent: true };
     }
-    const start = addDays(firstHistoryWeek, -7 * (STATE.coverageWeekOffset - 1));
-    return { start, end: addDays(start, 6), maxOffset, recent: false };
+    const start = addDays(firstHistoryWeek, -7 * (selectedOffset - 1));
+    return { start, end: addDays(start, 6), maxOffset, offset: selectedOffset, recent: false };
+  };
+  const coverageRange = (languages) => {
+    const days = Object.values(languages).flatMap((dataset) => (dataset.history || []).map((row) => row.day));
+    const range = historyRange(days, STATE.coverageWeekOffset);
+    if (range) STATE.coverageWeekOffset = range.offset;
+    return range;
   };
   const coverageTrend = (history, selectedWeek) => {
     if (!selectedWeek) return '';
@@ -699,26 +705,30 @@
     return n(value);
   };
   const scoreTick = (value, unit) => unit === 'percent' ? `${value.toFixed(1)}%`
-    : unit === 'score100' ? value.toFixed(1) : unit === 'ratio' ? value.toFixed(3) : n(value);
-  function scoreTrendChart(points, metric) {
-    const w = 580, h = 152, left = 56, right = 16, top = 14, bottom = 28;
+    : unit === 'score100' ? value.toFixed(1) : unit === 'ratio' ? value.toFixed(3)
+      : unit === 'duration_ms' ? dur(value / 1000) : n(value);
+  const scoreDay = (iso) => {
+    const timestamp = Date.parse(iso);
+    return Number.isFinite(timestamp) ? new Date(timestamp + 8 * 3600000).toISOString().slice(0, 10) : null;
+  };
+  function scoreTrendChart(points, metric, selectedRange) {
+    const w = 580, h = 152, left = 70, right = 16, top = 14, bottom = 28;
     const key = `${metric.label}\u0000${metric.unit}`;
     const values = points.map((point) => {
+      if (metric.unit === 'duration_ms') return point.duration_ms != null && Number.isFinite(Number(point.duration_ms)) ? Number(point.duration_ms) : null;
       const found = (point.metrics || []).find((item) => `${item.label}\u0000${item.unit}` === key);
       return found?.value != null && Number.isFinite(Number(found.value)) ? Number(found.value) : null;
     });
     const valid = values.filter((value) => value != null);
-    if (!valid.length) return `<div class="muted">历史运行没有可用的${esc(metric.label)}分数。</div>`;
+    if (!valid.length) return `<div class="muted">该时间范围内没有可用的${esc(metric.label)}记录。</div>`;
     const low = Math.min(...valid), high = Math.max(...valid);
-    const pad = Math.max((high - low) * .18, metric.unit === 'ratio' ? .005 : 1);
-    const floor = metric.unit === 'ratio' || metric.unit === 'percent' || metric.unit === 'score100' ? 0 : -Infinity;
+    const pad = Math.max((high - low) * .18, metric.unit === 'ratio' ? .005 : metric.unit === 'duration_ms' ? 60000 : 1);
+    const floor = metric.unit === 'ratio' || metric.unit === 'percent' || metric.unit === 'score100' || metric.unit === 'duration_ms' ? 0 : -Infinity;
     const ceiling = metric.unit === 'ratio' ? 1 : metric.unit === 'percent' || metric.unit === 'score100' ? 100 : Infinity;
     const yMin = Math.max(floor, low - pad), yMax = Math.min(ceiling, high + pad);
     const range = yMax - yMin || 1;
-    const timestamps = points.map((point) => Date.parse(point.created_at));
-    const timed = timestamps.every(Number.isFinite) && Math.max(...timestamps) > Math.min(...timestamps);
-    const timeMin = timed ? Math.min(...timestamps) : 0, timeSpan = timed ? Math.max(...timestamps) - timeMin : 1;
-    const xAt = (index) => left + (timed ? (timestamps[index] - timeMin) / timeSpan : index / Math.max(points.length - 1, 1)) * (w - left - right);
+    const timeMin = Date.parse(`${selectedRange.start}T00:00:00+08:00`);
+    const xAt = (index) => left + ((Date.parse(points[index].created_at) - timeMin) / (7 * 86400000)) * (w - left - right);
     const yAt = (value) => top + (yMax - value) / range * (h - top - bottom);
     const grid = [yMax, (yMin + yMax) / 2, yMin].map((value) => {
       const y = yAt(value).toFixed(1);
@@ -738,20 +748,30 @@
       const label = `${date(point.created_at)} · ${metric.label} ${scoreTick(value, metric.unit)}\nrun ${point.run_id} · 第 ${point.attempt} 次 · 交付 ${point.delivery || '未知'} · 评分 ${point.quality_status || '未知'}`;
       return `<circle class="score-dot" cx="${xAt(index).toFixed(1)}" cy="${yAt(value).toFixed(1)}" r="4"${tip(label)}><title>${esc(label)}</title></circle>`;
     }).join('');
-    const first = points[0], last = points[points.length - 1];
-    return `<svg class="score-chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(metric.label)}分数变化趋势">${grid}${lines}${dots}<text x="${left}" y="${h - 6}">${esc(shortDate(first.created_at))}</text><text x="${w - right}" y="${h - 6}" text-anchor="end">${esc(shortDate(last.created_at))}</text></svg>`;
+    const axis = Array.from({ length: 7 }, (_, index) => `<text x="${(left + (index + .5) * (w - left - right) / 7).toFixed(1)}" y="${h - 6}" text-anchor="middle">${dayLabel(addDays(selectedRange.start, index))}</text>`).join('');
+    return `<svg class="score-chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(metric.label)}变化趋势">${grid}${lines}${dots}${axis}</svg>`;
   }
-  function openScoreTrend(caseName) {
+  function openScoreTrend(caseName, reset = true) {
+    if (reset) STATE.scoreWeekOffset = 0;
+    STATE.scoreCase = caseName;
     const data = lineSection(STATE.snap, 'tests')?.data || {};
     const latest = data.executed?.find((entry) => entry.artifact.startsWith('real-e2e-results') && entry.scores?.some((row) => row.case === caseName));
     const points = data.score_history?.[caseName] || (latest ? [{ run_id: latest.run_id, attempt: latest.attempt,
       created_at: latest.created_at, url: latest.url, ...latest.scores.find((row) => row.case === caseName) }] : []);
     const metrics = new Map();
     for (const point of points) for (const metric of point.metrics || []) metrics.set(`${metric.label}\u0000${metric.unit}`, metric);
+    const selectedRange = historyRange(points.map((point) => scoreDay(point.created_at)), STATE.scoreWeekOffset);
+    if (selectedRange) STATE.scoreWeekOffset = selectedRange.offset;
+    const visible = selectedRange ? points.filter((point) => {
+      const day = scoreDay(point.created_at);
+      return day >= selectedRange.start && day <= selectedRange.end;
+    }) : [];
     const dialog = $('#score-trend-dialog');
-    const charts = [...metrics.values()].map((metric) => `<section class="score-series"><h3>${esc(metric.label)} <span class="muted">${esc(metric.unit === 'score100' ? '/ 100' : metric.unit === 'percent' ? '%' : metric.unit === 'ratio' ? '比值' : '')}</span></h3>${scoreTrendChart(points, metric)}</section>`).join('');
-    dialog.innerHTML = `<div class="score-dialog-head"><div><h2 id="score-trend-title">${esc(caseName)} · 分数趋势</h2><p class="muted">最近 ${points.length} 次有该用例评分记录的运行；各指标使用自己的纵轴。分数仅供观察，不改变 CI 结论。</p></div><form method="dialog"><button class="btn small" aria-label="关闭分数趋势">关闭</button></form></div>${points.length < 2 ? '<p class="muted">目前只有一次记录，后续运行后会形成曲线。</p>' : ''}${charts || empty('暂无可绘制的分数')}${points.length ? `<div class="score-run-links">来源：${points.slice(-5).reverse().map((point) => link(point.url, `run ${esc(point.run_id)}${point.attempt > 1 ? ` · 第 ${point.attempt} 次` : ''}`)).join(' · ')}</div>` : ''}`;
-    dialog.showModal();
+    const toolbar = selectedRange ? `<div class="score-week-toolbar"><button class="btn small" data-score-week="older"${STATE.scoreWeekOffset >= selectedRange.maxOffset ? ' disabled' : ''}>‹ 上一周</button><strong>${selectedRange.recent ? '最新 · ' : ''}${dayLabel(selectedRange.start)}–${dayLabel(selectedRange.end)}</strong><button class="btn small" data-score-week="newer"${STATE.scoreWeekOffset === 0 ? ' disabled' : ''}>下一周 ›</button><button class="btn small" data-score-week="latest"${STATE.scoreWeekOffset === 0 ? ' disabled' : ''}>最新</button></div>` : '';
+    const charts = visible.length ? [...metrics.values()].map((metric) => `<section class="score-series"><h3>${esc(metric.label)} <span class="muted">${esc(metric.unit === 'score100' ? '/ 100' : metric.unit === 'percent' ? '%' : metric.unit === 'ratio' ? '比值' : '')}</span></h3>${scoreTrendChart(visible, metric, selectedRange)}</section>`).join('') : '';
+    const durationChart = visible.length ? `<section class="score-series duration"><h3>运行耗时 <span class="muted">每次运行</span></h3>${scoreTrendChart(visible, { label: '运行耗时', unit: 'duration_ms' }, selectedRange)}</section>` : '';
+    dialog.innerHTML = `<div class="score-dialog-head"><div><h2 id="score-trend-title">${esc(caseName)} · 分数与耗时趋势</h2><p class="muted">按北京时间展示最近 7 天，历史按自然周查看；共保留 ${points.length} 次记录。各指标使用自己的纵轴，分数仅供观察，不改变 CI 结论。</p></div><form method="dialog"><button class="btn small" aria-label="关闭分数趋势">关闭</button></form></div>${toolbar}${!visible.length && selectedRange ? empty('该周没有此用例的运行记录') : ''}${visible.length === 1 ? '<p class="muted">该范围目前只有一次记录，后续运行后会形成曲线。</p>' : ''}${charts}${durationChart}${visible.length ? `<div class="score-run-links">来源：${visible.slice(-5).reverse().map((point) => link(point.url, `run ${esc(point.run_id)}${point.attempt > 1 ? ` · 第 ${point.attempt} 次` : ''}`)).join(' · ')}</div>` : ''}`;
+    if (!dialog.open) dialog.showModal();
   }
   const deliveryBadge = (value) => badge(value === 'passed' ? '通过' : value === 'failed' ? '失败' : value || '未知', value === 'passed' ? 'good' : value === 'failed' ? 'bad' : 'warn');
   function realScoresSection(executed) {
@@ -1128,6 +1148,15 @@
   document.addEventListener('click', (ev) => {
     const scoreButton = ev.target.closest('[data-score-case]');
     if (scoreButton) { openScoreTrend(scoreButton.dataset.scoreCase); return; }
+    const scoreWeekButton = ev.target.closest('[data-score-week]');
+    if (scoreWeekButton && !scoreWeekButton.disabled && STATE.scoreCase) {
+      const direction = scoreWeekButton.dataset.scoreWeek;
+      if (direction === 'older') STATE.scoreWeekOffset += 1;
+      if (direction === 'newer') STATE.scoreWeekOffset = Math.max(0, STATE.scoreWeekOffset - 1);
+      if (direction === 'latest') STATE.scoreWeekOffset = 0;
+      openScoreTrend(STATE.scoreCase, false);
+      return;
+    }
     const coverageWeekButton = ev.target.closest('[data-coverage-week]');
     if (coverageWeekButton && !coverageWeekButton.disabled) {
       const direction = coverageWeekButton.dataset.coverageWeek;
