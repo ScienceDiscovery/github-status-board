@@ -52,7 +52,7 @@
   const loadViews = () => { try { return { issues: 'table', prs: 'table', ...JSON.parse(localStorage.getItem(VIEW_KEY) || '{}') }; } catch (e) { return { issues: 'table', prs: 'table' }; } };
   const loadLine = () => { try { return localStorage.getItem(LINE_KEY); } catch (e) { return null; } };
   const loadCovSort = () => { try { return localStorage.getItem(COV_SORT_KEY) === 'lines' ? 'lines' : 'name'; } catch (e) { return 'name'; } };
-  const STATE = { snap: null, status: null, tab: 'overview', views: loadViews(), line: loadLine(), covOpen: new Set(), covSort: loadCovSort(), sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, coverageWeekOffset: 0, scoreWeekOffset: 0, scoreCase: null, pollTimer: null };
+  const STATE = { snap: null, status: null, tab: 'overview', views: loadViews(), line: loadLine(), covOpen: new Set(), covSort: loadCovSort(), sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, coverageWeekOffset: 0, scoreWeekOffset: 0, scoreCase: null, e2e: null, e2eSteps: {}, e2eView: null, pollTimer: null };
 
   // ------------------------------------------------------------ components
   const badge = (text, tone = '', extra = '') => `<span class="badge ${tone}"${extra}>${esc(text)}</span>`;
@@ -798,6 +798,70 @@
     return html;
   }
 
+  // E2E run records: each unexpired e2e-results on the board lists its Playwright
+  // cases with steps; the HTML report stays only as long as the Actions artifact.
+  const E2E_NAME = { failed: '失败', flaky: '重试通过', skipped: '跳过', passed: '通过' };
+  const E2E_TONE = { failed: 'bad', flaky: 'warn', skipped: '', passed: 'good' };
+  const E2E_ORDER = ['failed', 'flaky', 'skipped', 'passed'];
+  const E2E_STATUS = { pending: '等待下载：每次采集最多下载 2 份新产物', unreadable: '产物无法解析', empty: '产物里没有 Playwright results.json', too_large: '产物超过下载上限' };
+  const E2E_REASON = { untrusted: 'fork 仓库的运行不在看板托管 HTML', missing: '产物里没有 playwright-report/index.html', over_budget: '报告超过单份 HTML 上限', site_budget: '看板上的 HTML 总量已满', unavailable: '本次部署未取到 HTML' };
+  const msText = (v) => (v == null ? '—' : v < 1000 ? `${Math.round(v)}ms` : v < 60000 ? `${(v / 1000).toFixed(1)}s` : dur(v / 1000));
+  const e2eCounts = (t) => (t ? E2E_ORDER.filter((k) => t[k]).map((k) => badge(`${E2E_NAME[k]} ${n(t[k])}`, E2E_TONE[k])).join(' ') || badge('0 个用例') : '');
+  // Only paths the collector writes become same-site links; anything else goes to GitHub.
+  const reportLinks = (r) => (r.reports || []).map((rep) => (/^e2e\/\d+\/[A-Za-z0-9_@+=-][A-Za-z0-9._@+=-]*\/index\.html$/.test(rep.html || '')
+    ? `<a class="e2e-html" href="./${esc(rep.html)}" target="_blank" rel="noopener">${esc(rep.slice)} ↗</a>`
+    : `${link(r.artifact_url, `${esc(rep.slice)}：GitHub 产物`, ` class="e2e-html fallback"${tip(E2E_REASON[rep.reason] || 'HTML 未发布')}`)}`)).join(' ') || link(r.artifact_url, 'GitHub 产物', ' class="e2e-html fallback"');
+  function lineRunIds() {
+    const d = lineSection(STATE.snap, 'ci')?.data, ids = new Set();
+    for (const lane of d?.lanes?.lanes || []) for (const day of lane.days || []) for (const cell of day || []) ids.add(cell.id);
+    for (const run of d?.recent_runs || []) ids.add(run.id);
+    return ids;
+  }
+  function e2eRecordsSection() {
+    const index = STATE.e2e, ids = lineRunIds();
+    const records = (index?.records || []).filter((r) => ids.has(r.run_id));
+    let html = sectionHead('E2E 执行记录', index ? `${records.length} 次运行 · 步骤来自 Playwright results.json · HTML 报告与 Actions 产物同时过期，过期后从看板删除` : '');
+    if (!index) return html + `<div class="card">${empty('尚未读取到 E2E 执行记录')}</div>`;
+    html += `<div class="card">${table('e2e-records', [
+      { key: 'created_at', label: '运行', render: (r) => `${link(r.run_url, esc(r.title || `run ${r.run_id}`))}<div class="sub"><code>${esc(r.branch)}</code> · ${esc(r.event || '')} · ${date(r.created_at)}</div>` },
+      { key: 'totals', label: '用例结果', sortable: false, render: (r) => (r.totals ? e2eCounts(r.totals) : `<span class="muted">${esc(E2E_STATUS[r.status] || r.status)}</span>`) },
+      { key: 'steps', label: '用例步骤', sortable: false, render: (r) => (/^data\/e2e\/\d+\.json$/.test(r.steps || '') ? `<button type="button" class="btn small e2e-open" data-e2e-record="${esc(r.artifact_id)}">查看 ${n(r.totals?.tests)} 个用例</button>` : '<span class="muted">—</span>') },
+      { key: 'reports', label: '执行记录 HTML', sortable: false, render: reportLinks },
+      { key: 'expires_at', label: '保留至', render: (r) => `${shortDateTime(r.expires_at)}<div class="sub">${ago(r.created_at)}上传</div>` },
+    ], records, { defaultSort: { key: 'created_at', dir: 'desc' }, emptyText: '该分支线在看板窗口内没有仍在保留期的 e2e-results' })}</div>`;
+    return html;
+  }
+  const e2eSteps = (steps) => (steps?.length ? `<ol class="e2e-steps">${steps.map((s) => `<li class="e2e-step ${s.status === 'failed' ? 'failed' : 'passed'}"><div class="e2e-step-row"><span class="e2e-mark" aria-label="${s.status === 'failed' ? '失败' : '通过'}">${s.status === 'failed' ? '✗' : '✓'}</span><span class="e2e-step-title">${esc(s.title)}</span><span class="muted num">${msText(s.duration_ms)}</span></div>${s.error ? `<pre class="e2e-error">${esc(s.error)}</pre>` : ''}${e2eSteps(s.steps)}</li>`).join('')}</ol>` : '');
+  const e2eCase = (c) => `<details class="e2e-case ${esc(c.status)}"${c.status === 'failed' ? ' open' : ''}><summary>${badge(E2E_NAME[c.status] || c.status, E2E_TONE[c.status] ?? '')}<span class="e2e-case-title">${esc(c.title)}</span><span class="sub">${[(c.path || []).map(esc).join(' › '), c.file ? `<code>${esc(c.file)}${c.line ? `:${c.line}` : ''}</code>` : '', esc(c.project || ''), msText(c.duration_ms), c.attempts > 1 ? `共 ${c.attempts} 次尝试` : ''].filter(Boolean).join(' · ')}</span></summary>
+    ${c.error ? `<div class="e2e-error-head">${c.status === 'flaky' ? '重试前的失败' : '错误摘要'}</div><pre class="e2e-error">${esc(c.error)}</pre>` : ''}${c.steps?.length ? `<div class="e2e-error-head">步骤</div>${e2eSteps(c.steps)}` : '<div class="muted">这个用例没有 test.step 步骤；完整调用过程见执行记录 HTML。</div>'}</details>`;
+  function renderE2ECases() {
+    const view = STATE.e2eView, doc = view && STATE.e2eSteps[view.id], box = $('#e2e-cases');
+    if (!doc || !box) return;
+    const q = view.q.trim().toLowerCase();
+    box.innerHTML = doc.slices.map((s) => {
+      const cases = s.cases.filter((c) => (!view.status || c.status === view.status) && (!q || `${c.title} ${c.file} ${(c.path || []).join(' ')}`.toLowerCase().includes(q)))
+        .sort((a, b) => E2E_ORDER.indexOf(a.status) - E2E_ORDER.indexOf(b.status));
+      return `<section class="e2e-slice"><h3>${esc(s.slice)} <span class="sub">${e2eCounts(s.totals)}</span></h3>${cases.length ? cases.map(e2eCase).join('') : empty('没有符合条件的用例')}${s.truncated ? '<div class="muted">用例较多，只列出前 500 个的步骤；计数包含全部用例。</div>' : ''}</section>`;
+    }).join('');
+  }
+  async function openE2E(id) {
+    const record = STATE.e2e?.records?.find((r) => String(r.artifact_id) === String(id));
+    if (!record || !/^data\/e2e\/\d+\.json$/.test(record.steps || '')) return;
+    STATE.e2eView = { id: record.artifact_id, status: record.totals?.failed ? 'failed' : '', q: '' };
+    const dialog = $('#e2e-dialog');
+    const options = ['', ...E2E_ORDER].map((k) => `<option value="${k}"${STATE.e2eView.status === k ? ' selected' : ''}>${k ? `${E2E_NAME[k]}（${n(record.totals?.[k] || 0)}）` : `全部（${n(record.totals?.tests)}）`}</option>`).join('');
+    dialog.innerHTML = `<div class="score-dialog-head"><div><h2 id="e2e-dialog-title">E2E 用例步骤 · ${esc(record.title || `run ${record.run_id}`)}</h2><p class="muted">${link(record.run_url, `run ${esc(record.run_id)}`)} · <code>${esc(record.branch)}</code> · ${date(record.created_at)} · 产物保留至 ${date(record.expires_at)}</p><p class="e2e-links">执行记录 HTML：${reportLinks(record)}</p></div><form method="dialog"><button class="btn small" aria-label="关闭用例步骤">关闭</button></form></div>
+      <div class="filters e2e-filters"><select data-e2e-filter="status" aria-label="按结果筛选">${options}</select><input type="search" data-e2e-filter="q" placeholder="搜索用例、文件" aria-label="搜索用例"></div>
+      <div id="e2e-cases"><div class="skeleton"><span class="spinner"></span>读取用例步骤…</div></div>`;
+    if (!dialog.open) dialog.showModal();
+    try {
+      STATE.e2eSteps[record.artifact_id] ||= await fetchJson(`./${record.steps}`);
+      renderE2ECases();
+    } catch (err) {
+      $('#e2e-cases').innerHTML = `<div class="banner warn"><span class="icon">▲</span><div>无法读取用例步骤：${esc(err.message)}；可打开 ${link(record.artifact_url, 'GitHub 产物')}。</div></div>`;
+    }
+  }
+
   function renderTests(sec, line) {
     const d = sec?.data;
     let html = sectionState(sec, '测试');
@@ -811,6 +875,7 @@
       { label: 'CI 最近 UT 用例', value: n(ut?.totals?.tests), sub: ut?.totals ? `${ut.totals.passed} 通过 · ${ut.totals.failed} 失败 · ${ut.totals.skipped} 跳过` : ut ? '产物存在但没有解析出用例数' : '无产物', tone: ut?.totals?.failed ? 'bad' : ut?.totals ? 'good' : '' },
       { label: 'CI 最近 E2E 用例', value: n(e2e?.totals?.tests), sub: e2e?.totals ? `${e2e.totals.passed} 通过 · ${e2e.totals.failed} 失败/超时 · ${e2e.totals.skipped} 跳过 · ${e2e.totals.flaky} 重试通过` : e2e ? '产物存在但没有解析出用例数' : '无产物', tone: e2e?.totals?.failed ? 'bad' : e2e?.totals ? 'good' : '' },
     ]);
+    html += e2eRecordsSection();
     html += realScoresSection(d.executed, d.mock_real_e2e);
     html += taggedSection(d.tagged, line);
 
@@ -1112,6 +1177,8 @@
       STATE.snap=doc;STATE.status={refreshing:false};
       window.GSBLocalBoard?.setSnapshot(doc);
       STATE.clientError = null;
+      // Run records are optional: a missing index only hides that section.
+      STATE.e2e = await fetchJson('./data/e2e/index.json?ts='+Date.now()).catch(() => null);
     } catch (err) {
       STATE.clientError = err.name === 'AbortError'
         ? `读取静态快照超时（${FETCH_TIMEOUT_MS / 1000} 秒），已保留当前数据`
@@ -1151,7 +1218,21 @@
     const rect = dialog.getBoundingClientRect();
     if (ev.clientX < rect.left || ev.clientX >= rect.right || ev.clientY < rect.top || ev.clientY >= rect.bottom) dialog.close();
   });
+  $('#e2e-dialog').addEventListener('click', (ev) => {
+    const dialog = ev.currentTarget;
+    if (ev.target !== dialog) return;
+    const rect = dialog.getBoundingClientRect();
+    if (ev.clientX < rect.left || ev.clientX >= rect.right || ev.clientY < rect.top || ev.clientY >= rect.bottom) dialog.close();
+  });
+  $('#e2e-dialog').addEventListener('input', (ev) => {
+    const el = ev.target.closest('[data-e2e-filter]');
+    if (!el || !STATE.e2eView) return;
+    STATE.e2eView[el.dataset.e2eFilter] = el.value;
+    renderE2ECases();
+  });
   document.addEventListener('click', (ev) => {
+    const e2eButton = ev.target.closest('[data-e2e-record]');
+    if (e2eButton) { openE2E(e2eButton.dataset.e2eRecord); return; }
     const scoreButton = ev.target.closest('[data-score-case]');
     if (scoreButton) { openScoreTrend(scoreButton.dataset.scoreCase); return; }
     const scoreWeekButton = ev.target.closest('[data-score-week]');

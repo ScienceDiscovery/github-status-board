@@ -36,6 +36,7 @@ class Budget:
         self.gh, self.left, self.deadline = gh, requests, time.monotonic() + seconds
         self.downloaded = 0
         self.token = gh.token
+        self.recent = {}
 
     def call(self, method, *args, **kwargs):
         if self.left <= 0 or time.monotonic() >= self.deadline:
@@ -63,11 +64,16 @@ class Budget:
     def get_text_file(self, *a, **kw):
         return self.call("get_text_file", *a, **kw)
 
-    def download_artifact(self, *args, **kwargs):
+    def download_artifact(self, repo, artifact_id, **kwargs):
+        # E2E run records read the artifact the run details just downloaded. The
+        # download budget below also bounds what this keeps in memory.
+        if (repo, artifact_id) in self.recent:
+            return self.recent[repo, artifact_id]
         if self.downloaded >= 160 * 1024 * 1024:
             raise BudgetExhausted()
-        data = self.call("download_artifact", *args, **kwargs)
+        data = self.call("download_artifact", repo, artifact_id, **kwargs)
         self.downloaded += len(data)
+        self.recent[repo, artifact_id] = data
         return data
 
 

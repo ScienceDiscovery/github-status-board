@@ -493,3 +493,29 @@ dialog.settings textarea { width: 100%; font: inherit; font-size: 13px; padding:
   .cov-row { grid-template-columns: minmax(140px, 1fr) repeat(var(--metrics), 70px) 110px; min-width: 520px; }
   .work-board .bcol { max-height: 70vh; }
 }
+/* E2E run records: case list with nested Playwright steps */
+#e2e-dialog { width: min(900px, calc(100vw - 20px)); max-height: min(88vh, 1000px); overflow: auto; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--ink); box-shadow: 0 18px 55px rgba(0,0,0,.28); }
+#e2e-dialog::backdrop { background: rgba(0,0,0,.55); }
+.e2e-links { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.e2e-html { white-space: nowrap; }
+.e2e-html.fallback { color: var(--ink-2); text-decoration: underline dotted; }
+.e2e-open { white-space: nowrap; }
+.e2e-filters { margin: 14px 0 4px; }
+.e2e-filters input { flex: 1 1 200px; min-width: 0; }
+.e2e-slice { margin-top: 14px; border-top: 1px solid var(--grid); padding-top: 10px; }
+.e2e-slice h3 { margin: 0 0 8px; font-size: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.e2e-case { border: 1px solid var(--grid); border-radius: 8px; margin: 6px 0; padding: 6px 10px; }
+.e2e-case.failed { border-color: var(--critical); }
+.e2e-case summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.e2e-case-title { font-weight: 600; overflow-wrap: anywhere; }
+.e2e-case summary .sub { flex-basis: 100%; overflow-wrap: anywhere; }
+.e2e-error-head { margin-top: 8px; font-size: 12px; color: var(--ink-2); }
+.e2e-error { margin: 4px 0; padding: 8px; border-left: 3px solid var(--critical); background: var(--surface-2); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+/* Step titles carry their own numbering; the list keeps order without markers. */
+.e2e-steps { margin: 4px 0 2px; padding-left: 4px; list-style: none; }
+.e2e-steps .e2e-steps { padding-left: 18px; border-left: 1px dashed var(--grid); }
+.e2e-step { margin: 3px 0; }
+.e2e-step-row { display: flex; align-items: baseline; gap: 8px; }
+.e2e-step-title { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.e2e-mark { flex: none; width: 1em; text-align: center; color: var(--good-text); }
+.e2e-step.failed > .e2e-step-row .e2e-mark, .e2e-step.failed > .e2e-step-row .e2e-step-title { color: var(--critical); font-weight: 600; }
