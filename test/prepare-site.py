@@ -172,6 +172,53 @@ doc['line_sections']={'legacy':dict(ci=wrap(legacy_ci),tests=wrap(legacy_tests))
 doc['board']=BoardStore(cfg,persist=False).payload(doc)
 doc['details']={'issue:1':dict(body=item['body'],cross_references=[]),'pr:3':dict(body=pr['body'],cross_references=[])}
 export_site(root/'.e2e/site/github-status-board',doc)
+# E2E run records through the real collector and Pages attachment, offline: yesterday's
+# collection read three artifacts; by deployment time the daily one has expired, and
+# the release run came from a fork, so it keeps its steps but links HTML to GitHub.
+import shutil
+from datetime import timedelta
+from gsb import e2e_records
+records_now=datetime(2026,9,20,12,tzinfo=timezone.utc)
+step=lambda title,ms,*children,error=None:dict(title=title,duration=ms,steps=list(children),**({'error':dict(message=error)} if error else {}))
+journeys={'suites':[{'title':'journey-first-run.spec.ts','file':'journey-first-run.spec.ts','suites':[{'title':'J1 首次运行','file':'journey-first-run.spec.ts','specs':[
+    dict(title='创建项目后可以保存',file='journey-first-run.spec.ts',line=18,tests=[dict(projectName='mocked',status='unexpected',results=[dict(status='failed',duration=9150,
+        errors=[dict(message='\x1b[31mError: expect(locator).toBeVisible() failed\x1b[39m\n\nLocator: getByText(\'已保存\')\nExpected: visible\nTimeout: 5000ms\n    at journey-first-run.spec.ts:41:7')],
+        steps=[step('1. 打开控制台',1830,step('page.goto /console',1400),step('等待项目列表',380)),
+               step('2. 保存项目',7200,step('点击保存',90),step('等待已保存提示',5010,error='Timed out 5000ms waiting for getByText(\'已保存\')'),error='Error: expect(locator).toBeVisible() failed')])])]),
+    dict(title='恢复会话',file='journey-first-run.spec.ts',line=52,tests=[dict(projectName='mocked',status='flaky',results=[
+        dict(status='failed',duration=820,errors=[dict(message='Error: socket hang up')],steps=[step('重新连接',820)]),dict(status='passed',duration=640,steps=[step('重新连接',640)])])]),
+    dict(title='导出报告',file='journey-first-run.spec.ts',line=70,tests=[dict(projectName='mocked',status='skipped',results=[dict(status='skipped',duration=0)])]),
+    dict(title='模型设置可以保存',file='journey-first-run.spec.ts',line=88,tests=[dict(projectName='mocked',status='expected',results=[dict(status='passed',duration=2310,steps=[step('打开设置',400),step('保存',120)])])])]}]}]}
+def records_zip(label):
+    buf=io.BytesIO()
+    with zipfile.ZipFile(buf,'w') as archive:
+        archive.writestr('mocked-standard/e2e/test-results/results.json',json.dumps(journeys))
+        archive.writestr('mocked-standard/e2e/playwright-report/index.html',f'<!doctype html><title>{label}</title><h1>Playwright Report fixture</h1><p>{label}</p>')
+    return buf.getvalue()
+def listed(ident,run_id,expires,fork=False):
+    return dict(id=ident,name='e2e-results',size_in_bytes=4096,expired=False,created_at=f'2026-09-19T{ident-6990:02d}:00:00Z',expires_at=expires,
+                workflow_run=dict(id=run_id,repository_id=7,head_repository_id=8 if fork else 7,head_branch='main',head_sha='a'*40))
+class RecordSource:
+    artifacts=[listed(7001,10,'2026-10-04T08:00:00Z'),listed(7002,11,'2026-09-20T06:00:00Z'),listed(7003,12,'2026-10-04T09:00:00Z',fork=True)]
+    def get(self,path,params=None): return dict(artifacts=self.artifacts)
+    def download_artifact(self,repo,ident,*,max_bytes): return records_zip(f'artifact {ident}')
+checkout=root/'.e2e/records-checkout'
+shutil.rmtree(checkout,ignore_errors=True)
+collected=e2e_records.refresh(RecordSource(),repo,checkout,doc,records_now-timedelta(days=1),bundle=4242,downloads=3)
+site=root/'.e2e/site/github-status-board'
+for path,content in collected.files.items():
+    target=site/path.removeprefix('site/'); target.parent.mkdir(parents=True,exist_ok=True); target.write_text(content)
+collected.write_bundle(checkout/'bundle')
+bundle=io.BytesIO()
+with zipfile.ZipFile(bundle,'w') as archive:
+    for file in (checkout/'bundle').rglob('*'):
+        if file.is_file(): archive.write(file,file.relative_to(checkout/'bundle').as_posix())
+class BoardRuns:
+    def get(self,path,params=None):
+        return dict(artifacts=[dict(id=1,name='e2e-html',expired=False)]) if path.endswith('/artifacts') else dict(path='.github/workflows/collect.yml',head_branch='main',status='completed')
+    def download_artifact(self,repo,ident,*,max_bytes): return bundle.getvalue()
+e2e_records.attach(BoardRuns(),'ScienceDiscovery/github-status-board',site,records_now,sleep=lambda seconds:None)
+shutil.rmtree(checkout,ignore_errors=True)
 empty=json.loads(json.dumps(doc));empty['quality']['runs']=[];empty['releases']=[];empty['issues']=None;empty['prs']=None;empty['notices']=[{'message':'GitHub 数据不可读取，结果未知。'}]
 empty['sections']={k:dict(status='error',data=None,notes=[],error=dict(kind='error',message='结果未知')) for k in empty['sections']}
 empty['board']['items']=[];empty['details']={};empty['line_sections']={}

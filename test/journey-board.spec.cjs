@@ -374,6 +374,74 @@ test('real E2E scores open per-case trends without crowding the table', async ({
   await page.keyboard.press('Escape');
 });
 
+test('E2E run records open ordered steps and only unexpired HTML reports', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto('/github-status-board/#tests');
+  const records = page.locator('#tab-tests .card').filter({ has: page.locator('[data-e2e-record]') });
+  await expect(page.locator('#tab-tests .section-head', { hasText: 'E2E 执行记录' })).toContainText('过期后从看板删除');
+  // The existing E2E tile keeps its counts.
+  await expect(page.locator('#tab-tests .tile').filter({ hasText: 'CI 最近 E2E 用例' })).toContainText('1 重试通过');
+  const live = records.locator('tr', { has: page.locator('[data-e2e-record="7001"]') });
+  await expect(live).toContainText('失败 1');
+  await expect(live).toContainText('重试通过 1');
+  const report = live.locator('a.e2e-html', { hasText: 'mocked-standard' });
+  await expect(report).toHaveAttribute('href', './e2e/7001/mocked-standard/index.html');
+  const [tab] = await Promise.all([page.waitForEvent('popup'), report.click()]);
+  await expect(tab.locator('h1')).toHaveText('Playwright Report fixture');
+  await tab.close();
+  // The expired daily run is gone from the page, and so is its HTML file.
+  await expect(page.locator('[data-e2e-record="7002"]')).toHaveCount(0);
+  expect((await page.request.get('/github-status-board/e2e/7002/mocked-standard/index.html')).status()).toBe(404);
+  expect((await page.request.get('/github-status-board/data/e2e/7002.json')).status()).toBe(404);
+  // A fork's run shows steps; its HTML stays on GitHub.
+  const fork = records.locator('tr', { has: page.locator('[data-e2e-record="7003"]') });
+  await expect(fork.locator('a.e2e-html.fallback')).toHaveAttribute('href', /\/actions\/runs\/12\/artifacts\/7003$/);
+  await records.screenshot({ path: shot('e2e-records-desktop') });
+
+  await live.locator('[data-e2e-record="7001"]').click();
+  const dialog = page.locator('#e2e-dialog');
+  await expect(dialog).toBeVisible();
+  // Runs with failures open on the failed cases, expanded with their summary and steps.
+  await expect(dialog.locator('details.e2e-case')).toHaveCount(1);
+  const failed = dialog.locator('details.e2e-case.failed');
+  await expect(failed).toHaveAttribute('open', '');
+  await expect(failed.locator('summary')).toContainText('journey-first-run.spec.ts:18');
+  await expect(failed.locator(':scope > pre.e2e-error')).toHaveText("Error: expect(locator).toBeVisible() failed\n\nLocator: getByText('已保存')\nExpected: visible\nTimeout: 5000ms");
+  const top = failed.locator(':scope > ol.e2e-steps > li');
+  await expect(top.locator(':scope > .e2e-step-row .e2e-step-title')).toHaveText(['1. 打开控制台', '2. 保存项目']);
+  await expect(top.nth(0).locator('ol.e2e-steps .e2e-step-title')).toHaveText(['page.goto /console', '等待项目列表']);
+  await expect(top.nth(1)).toHaveClass(/failed/);
+  const nested = top.nth(1).locator('ol.e2e-steps > li');
+  await expect(nested.nth(1)).toHaveClass(/failed/);
+  await expect(nested.nth(1).locator('pre.e2e-error')).toHaveText("Timed out 5000ms waiting for getByText('已保存')");
+  await expect(nested.nth(1).locator('.e2e-step-row')).toContainText('5.0s');
+  await page.screenshot({ path: shot('e2e-steps-desktop'), fullPage: false });
+  await dialog.locator('select[data-e2e-filter="status"]').selectOption('');
+  await expect(dialog.locator('details.e2e-case')).toHaveCount(4);
+  await dialog.locator('input[data-e2e-filter="q"]').fill('恢复');
+  await expect(dialog.locator('details.e2e-case')).toHaveCount(1);
+  await dialog.locator('details.e2e-case summary').click();
+  await expect(dialog.locator('details.e2e-case')).toContainText('重试前的失败');
+  await expect(dialog.locator('details.e2e-case')).toContainText('socket hang up');
+  await dialog.getByRole('button', { name: '关闭用例步骤' }).click();
+  await expect(dialog).toBeHidden();
+
+  // Narrow screens keep the table and the steps inside the viewport.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(live).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  await records.screenshot({ path: shot('e2e-records-mobile') });
+  await live.locator('[data-e2e-record="7001"]').click();
+  await expect(failed.locator(':scope > pre.e2e-error')).toBeVisible();
+  const box = await dialog.boundingBox();
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(390);
+  expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBeTruthy();
+  await page.screenshot({ path: shot('e2e-steps-mobile'), fullPage: false });
+  expect(errors).toEqual([]);
+});
+
 test('CI, tests and coverage switch between main, legacy and release without mixing', async ({ page }) => {
   await page.goto('/github-status-board/#ci');
   const ci = page.locator('#tab-ci'), rows = ci.locator('.ci-lanes .ci-lane-row:not(.ci-axis)');

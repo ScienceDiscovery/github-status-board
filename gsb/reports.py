@@ -98,25 +98,28 @@ def totals(cases):
     return {"tests": len(cases), **out}
 
 
+def test_outcome(test):
+    """One Playwright test's final outcome: passed, failed, skipped or flaky."""
+    states = [r.get("status") for r in test.get("results", [])]
+    status = test.get("status")
+    # Playwright's outcome accounts for expected failures and retries.
+    if status in ("expected", "unexpected", "flaky", "skipped"):
+        return {"expected": "passed", "unexpected": "failed"}.get(status, status)
+    if not states or states[-1] == "skipped":
+        return "skipped"
+    if states[-1] == "passed":
+        return "flaky" if any(s in ("failed", "timedOut") for s in states[:-1]) else "passed"
+    return "failed"
+
+
 def playwright(doc):
     cases = []
 
     def walk(suite):
         for spec in suite.get("specs", []):
             for test in spec.get("tests", []):
-                states = [r.get("status") for r in test.get("results", [])]
-                status = test.get("status")
-                # Playwright's outcome accounts for expected failures and retries.
-                if status in ("expected", "unexpected", "flaky", "skipped"):
-                    outcome = {"expected": "passed", "unexpected": "failed"}.get(status, status)
-                elif not states or states[-1] == "skipped":
-                    outcome = "skipped"
-                elif states[-1] == "passed":
-                    outcome = "flaky" if any(s in ("failed", "timedOut") for s in states[:-1]) else "passed"
-                else:
-                    outcome = "failed"
                 cases.append({"name": str(spec.get("title", ""))[:300], "file": str(spec.get("file", suite.get("file", "")))[:300],
-                              "project": str(test.get("projectName", ""))[:100], "status": outcome})
+                              "project": str(test.get("projectName", ""))[:100], "status": test_outcome(test)})
         for child in suite.get("suites", []):
             walk(child)
 

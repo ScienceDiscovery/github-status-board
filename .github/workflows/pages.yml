@@ -19,6 +19,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      actions: read
       pages: write
       id-token: write
     environment:
@@ -30,6 +31,12 @@ jobs:
         run: |
           test -s site/index.html
           test -s site/data/snapshot.json
+      # Unexpired E2E HTML reports come from the collect runs that fetched them;
+      # anything unavailable falls back to its GitHub artifact link.
+      - name: Attach E2E HTML reports
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 run_records.py attach site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:

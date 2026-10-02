@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 from gsb.github import GitHub, GitHubError, discover_token
 from gsb.project import REPO_RE, build_project
@@ -64,6 +65,19 @@ def publish(gh, site, repository, branch="main", *, source_token=None):
 
 
 INLINE_FILE, INLINE_TOTAL = 256 * 1024, 2 * 1024 * 1024
+BUNDLE_DIR = ".tmp/e2e-html"
+
+
+def e2e_run_records(sync, snapshot):
+    """Replace E2E run records; any failure keeps the published ones and the collection goes on."""
+    from gsb import e2e_records
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    try:
+        return e2e_records.refresh(sync.gh, sync.repo, ROOT, snapshot, sync.now, bundle=int(run_id) if run_id.isdigit() else None,
+                                   max_bytes=sync.cfg.artifact_max_bytes)
+    except Exception as err:  # noqa: BLE001 - records are optional evidence
+        print(json.dumps({"e2e_records": "skipped", "error": type(err).__name__}), file=sys.stderr)
+        return None
 
 
 def publish_batch(gh, repository, branch, base, files, *, source_token=None):
@@ -77,8 +91,11 @@ def publish_batch(gh, repository, branch, base, files, *, source_token=None):
     if gh.get(prefix + "/git/ref/heads/" + branch)["object"]["sha"] != base:
         raise ValueError("publication conflict; retry from latest checkout")
     for path, content in files.items():
-        allowed = path in {"site/" + x for x in (*STATIC_FILES, "data/snapshot.json", ".nojekyll")} or path in {".sync/state.json", ".sync/aggregate.json", ".sync/supplements.json", ".sync/tagged.json", ".sync/coverage.json", ".sync/coverage-sources.json"} or re.fullmatch(r"site/data/history/(manifest\.json|(?:index|records|catalog)/(?:issues|prs|runs|releases)/[0-9]{12}\.json)", path)
-        if not allowed or any(t and t in content for t in (gh.token, source_token)):
+        allowed = path in {"site/" + x for x in (*STATIC_FILES, "data/snapshot.json", ".nojekyll")} or path in {".sync/state.json", ".sync/aggregate.json", ".sync/supplements.json", ".sync/tagged.json", ".sync/coverage.json", ".sync/coverage-sources.json"} or re.fullmatch(r"site/data/history/(manifest\.json|(?:index|records|catalog)/(?:issues|prs|runs|releases)/[0-9]{12}\.json)", path) or re.fullmatch(r"site/data/e2e/(?:index|[0-9]{1,20})\.json", path)
+        # None deletes a file; only E2E run records are ever removed.
+        if content is None and not path.startswith("site/data/e2e/"):
+            raise ValueError("unsafe public file")
+        if not allowed or any(t and content is not None and t in content for t in (gh.token, source_token)):
             raise ValueError("unsafe public file")
     if not files:
         return None
@@ -89,6 +106,9 @@ def publish_batch(gh, repository, branch, base, files, *, source_token=None):
     # which keeps big issue bodies out of a single giant tree body.
     entries, inline = [], 0
     for path, content in sorted(files.items()):
+        if content is None:
+            entries.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
+            continue
         size = len(content.encode("utf-8"))
         if size <= INLINE_FILE and inline + size <= INLINE_TOTAL:
             inline += size
@@ -119,19 +139,23 @@ def main():
     try:
         settings = json.loads(Path(args.settings).read_text())
         deployment = deployment_for(args.repo, settings, args.publish_repo)
-        sync = None
+        sync = records = None
         if args.incremental:
             from gsb.sync import Sync
             from gsb.incremental_project import build_snapshot
             sync = Sync(gh, ROOT, args.repo, settings, requests=args.request_budget).collect()
             phase = "snapshot"
             snapshot = build_snapshot(sync)
+            records = e2e_run_records(sync, snapshot)
         else:
             snapshot = build_project(gh, args.repo, settings)
         if deployment:
             snapshot["deployment"] = deployment
         export_site(args.output, snapshot)
         result = {"ok": True, "repo": args.repo, "generated_at": snapshot["generated_at"]}
+        if records:
+            records.write_preview(args.output)
+            result["e2e_records"] = records.summary
         if args.publish_repo:
             phase = "publish"
             if not publish_token:
@@ -142,7 +166,12 @@ def main():
                 files = sync.files()
                 files.update({"site/" + name: (Path(args.output) / name).read_text() for name in (*STATIC_FILES, ".nojekyll")})
                 files["site/data/snapshot.json"] = encode(snapshot)
-                files = {path: content for path, content in files.items() if not (ROOT / path).exists() or (ROOT / path).read_text() != content}
+                if records:
+                    files.update(records.files)
+                    # New HTML reports leave through the workflow's Actions artifact, never git.
+                    records.write_bundle(ROOT / BUNDLE_DIR)
+                files = {path: content for path, content in files.items()
+                         if ((ROOT / path).exists() if content is None else not (ROOT / path).exists() or (ROOT / path).read_text() != content)}
                 base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
                 result["commit"] = publish_batch(publisher, args.publish_repo, args.branch, base, files, source_token=token)
                 result["sync"] = sync.progress()

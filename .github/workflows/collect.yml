@@ -50,3 +50,17 @@ jobs:
           SDBOT_TOKEN_AUDIENCE: ${{ vars.SDBOT_TOKEN_AUDIENCE }}
         run: python3 collect_with_oidc.py
       # Scoped App tokens are revoked after collection. The App commit triggers pages.yml.
+      # New E2E HTML reports never enter git: they stay here as an Actions artifact
+      # until their source artifacts expire, and pages.yml attaches them.
+      - name: Measure E2E report retention
+        id: records
+        run: python3 run_records.py retention .tmp/e2e-html >> "$GITHUB_OUTPUT"
+      - name: Keep new E2E HTML reports
+        if: steps.records.outputs.days
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-html
+          path: .tmp/e2e-html
+          retention-days: ${{ steps.records.outputs.days }}
+          if-no-files-found: error
+          include-hidden-files: true

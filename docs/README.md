@@ -6,6 +6,7 @@
 | [Actions 采集](actions-collection.md) | 双站点映射、App 权限与 Secrets、工作流触发及 Pages 发布 |
 | [增量同步与历史](incremental-history.md) | 仓内进度、分片、预算、回填与重试、完整历史查询 |
 | [测试报告契约](test-reports.md) | 用例指标、UT / ST / E2E、覆盖率、run / attempt 关联及公开边界 |
+| [E2E 执行记录](e2e-run-records.md) | 保留期内 E2E 运行的用例步骤、错误摘要与 Playwright HTML 报告，每次采集有界替换、随产物过期删除 |
 | [CI 分层历史](ci-history-lanes.md) | PR / 主干 / Daily / 版本分层、共同日期轴、同日纵向排列及 PR 号推断 |
 | [标签化测试](tagged-tests.md) | 标签维度与用例数、PR / Daily / Release 组合规则、覆盖与从未覆盖的用例 |
 | [分支线](branch-lines.md) | CI、测试、Coverage 在 main、legacy 与 release 分支之间切换，按 PR 目标分支归类，数据互不混合 |

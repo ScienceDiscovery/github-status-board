@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from gsb.github import GitHubError
-from publish import export_site, publish, deployment_for, ROOT
+from publish import export_site, publish, publish_batch, deployment_for, ROOT
 
 
 class DeploymentTests(unittest.TestCase):
@@ -96,6 +96,25 @@ class PublishingTests(unittest.TestCase):
         with self.assertRaises(GitHubError): publish(GH(),self.site,'example/board')
         self.assertEqual(len(writes),3)
         self.assertFalse(writes[-1][2]['force'])
+    def test_expired_run_records_are_deleted_in_the_same_commit(self):
+        calls=[]
+        class GH:
+            token='test-secret-for-publishing'
+            def get(self,path):
+                if '/git/commits/' in path: return {'tree':{'sha':'base-tree'}}
+                return {'object':{'sha':'a'*40}} if '/git/' in path else {'private':False}
+            def _url(self,path,_): return path
+            def _request(self,method,path,body):
+                calls.append((method,path,body))
+                return ({'sha':'new'},None,200)
+        files={'site/data/e2e/index.json':'{"records":[]}\n','site/data/e2e/101.json':None}
+        publish_batch(GH(),'example/board','main','a'*40,files)
+        tree={e['path']:e for e in calls[0][2]['tree']}
+        # A null blob removes the file from the published tree.
+        self.assertEqual(tree['site/data/e2e/101.json'],{'path':'site/data/e2e/101.json','mode':'100644','type':'blob','sha':None})
+        self.assertEqual(tree['site/data/e2e/index.json']['content'],'{"records":[]}\n')
+        for unsafe in ({'site/data/snapshot.json':None},{'site/e2e/101/report/index.html':'<html>'}):
+            with self.assertRaises(ValueError): publish_batch(GH(),'example/board','main','a'*40,unsafe)
     def test_private_target_refused(self):
         class GH:
             token=''

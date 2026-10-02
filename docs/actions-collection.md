@@ -22,6 +22,8 @@ App 的 Actions 写权限在 App 注册页 **Permissions & events → Repository
 
 采集步骤从环境变量读取源仓 `GITHUB_TOKEN` 和目标仓 `GSB_PUBLISH_TOKEN`，运行 `publish.py --repo ... --publish-repo ... --output .tmp/collected-site --incremental`。临时目录不上传，不写回原始测试 artifact。发布器基于本轮 checkout 的准确 HEAD，将 `.sync/` 进度及变化的 `site/` 分片放入一个 Git 提交。保留源码和工作流；并发冲突直接失败，下轮从新 main 续跑。只有 site 变化才触发 Pages。详情见 [增量同步](incremental-history.md)。
 
+E2E 执行记录的 HTML 报告不进入提交：采集成功后，`collect.yml` 把新读取的报告上传为本次运行的 `e2e-html` 产物，保留到对应源产物的 `expires_at`；`pages.yml` 以 `actions: read` 读取这些产物并在部署前挂载，取不到时页面改为 GitHub 产物链接。见 [E2E 执行记录](e2e-run-records.md)。
+
 ## 完成状态和重试
 
 Bot 的“已触发采集”只表示 GitHub 接受调度。实际采集结果看 **Collect dashboard data**，Pages 结果看 **Deploy dashboard Pages**。失败保留上一版页面，支持手动重跑或下一轮刷新。
