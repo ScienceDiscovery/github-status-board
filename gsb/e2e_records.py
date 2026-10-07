@@ -11,6 +11,8 @@ then attaches the reports that have not expired yet (attach()).
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import io
 import json
 import math
@@ -33,7 +35,7 @@ ARTIFACT = "e2e-results"
 BUNDLE = "e2e-html"
 BUNDLE_WORKFLOW = ".github/workflows/collect.yml"
 INDEX = "site/data/e2e/index.json"
-VERSION = 2
+VERSION = 3
 MAX_RECORDS = 20                  # newest unexpired artifacts that get records
 MAX_DOWNLOADS = 2                 # source artifact downloads per collection
 ARTIFACT_BYTES = 80 * 1024 * 1024  # one compressed ZIP, including this separate phase
@@ -92,7 +94,7 @@ def _steps(rows, depth, budget):
     return out
 
 
-def playwright_cases(doc):
+def playwright_cases(doc, attachment_html=None):
     """Every test instance of a Playwright JSON report, with the steps of its final attempt."""
     cases, budget = [], [MAX_STEPS]
 
@@ -112,6 +114,14 @@ def playwright_cases(doc):
                 error = error_summary(failing[-1].get("errors") or failing[-1].get("error")) if failing and status in ("failed", "flaky") else None
                 if error:
                     row["error"] = error
+                if attachment_html:
+                    # Match the final attempt, just like the displayed steps. Never
+                    # substitute a retry's earlier report or the slice's index.html.
+                    for attachment in final.get("attachments") or []:
+                        html_path = attachment_html(attachment)
+                        if html_path:
+                            row["html"] = html_path
+                            break
                 cases.append(row)
         for child in suite.get("suites", []):
             walk(child, path + [_text(child.get("title"))])
@@ -133,6 +143,48 @@ def _safe_report_path(name):
     return not PureWindowsPath(name).is_absolute() and all(
         1 <= len(part) <= 128 and part not in (".", "..") and not UNSAFE_PATH_CHAR.search(part)
         for part in name.split("/"))
+
+
+def _attachment_key(path):
+    """Locate a ZIP member from Playwright's possibly absolute CI attachment path.
+
+    Only the known report/output subtree is used for lookup, never filesystem IO
+    or publication. The emitted link is separately validated against report files.
+    """
+    if not isinstance(path, str) or "\\" in path or any(part in (".", "..") for part in path.split("/")):
+        return None
+    if re.search(r"[\x00-\x1f\x7f-\x9f\ud800-\udfff]", path):
+        return None
+    for marker in ("journey-reports/", "test-results/", "playwright-report/"):
+        offset = ("/" + path).find("/" + marker)
+        if offset >= 0:
+            key = path[offset:]
+            return key if _safe_report_path(key) else None
+    return None
+
+
+def _case_html_resolver(archive, report, attachments):
+    # Use original bytes: journey links are rewritten only after the match.
+    by_content = {}
+    for rel, item in sorted(report.items()):
+        if rel.startswith("data/") and rel.endswith(".html") and _safe_report_path(rel):
+            by_content.setdefault(archive.read(item), rel)
+
+    def resolve(attachment):
+        if not isinstance(attachment, dict) or str(attachment.get("contentType", "")).split(";")[0] != "text/html":
+            return None
+        item = attachments.get(_attachment_key(attachment.get("path")))
+        if item is not None and item.file_size <= REPORT_BYTES:
+            return by_content.get(archive.read(item))
+        body = attachment.get("body")
+        if isinstance(body, str) and len(body) <= REPORT_BYTES * 4 // 3 + 4:
+            try:
+                return by_content.get(base64.b64decode(body, validate=True))
+            except (ValueError, binascii.Error):
+                pass
+        return None
+
+    return resolve
 
 
 class _JourneyLinks(HTMLParser):
@@ -198,12 +250,16 @@ def read_artifact(blob, *, html=True, room=SITE_BYTES):
         entries = [e for e in archive.infolist() if not e.is_dir()]
         if len(entries) > 3000 or sum(e.file_size for e in entries) > 160 * 1024 * 1024:
             raise ValueError("report archive exceeds extraction budget")
-        docs, reports, journeys = {}, {}, {}
+        docs, reports, journeys, attachments = {}, {}, {}, {}
         for item in entries:
             # ZipInfo.filename can truncate NULs; validate before any normalization.
             name = item.orig_filename
             if not _safe_report_path(name):
                 continue
+            attachment_key = _attachment_key(name)
+            if attachment_key and name.endswith(".html"):
+                prefix = name[:-len(attachment_key)]
+                attachments.setdefault(_slice(prefix), {})[attachment_key] = item
             marker = ("/" + name).find("/playwright-report/")
             if marker >= 0:
                 rel = name[marker + len("playwright-report/"):]
@@ -225,14 +281,12 @@ def read_artifact(blob, *, html=True, room=SITE_BYTES):
                     docs[key] = doc
         slices, files = [], {}
         for key in sorted(set(docs) | set(reports)):
-            cases = playwright_cases(docs[key]) if key in docs else []
             report = reports.get(key, {})
             rewritten = {}
             if html:
                 report, rewritten = _include_journeys(archive, report, journeys.get(key, {}))
             size = sum(len(rewritten[rel]) if rel in rewritten else item.file_size for rel, item in report.items())
-            entry = {"slice": key, "totals": totals(cases) if key in docs else None, "cases": cases,
-                     "report": {"files": len(report), "bytes": size, "html": None, "reason": None}}
+            entry = {"slice": key, "report": {"files": len(report), "bytes": size, "html": None, "reason": None}}
             safe = {rel: item for rel, item in report.items() if _safe_report_path(rel)}
             if not report:
                 entry["report"]["reason"] = "missing"
@@ -247,6 +301,9 @@ def read_artifact(blob, *, html=True, room=SITE_BYTES):
             else:
                 room -= size
                 files[key] = {rel: rewritten[rel] if rel in rewritten else archive.read(item) for rel, item in safe.items()}
+            resolver = _case_html_resolver(archive, safe, attachments.get(key, {})) if key in files else None
+            cases = playwright_cases(docs[key], resolver) if key in docs else []
+            entry.update(cases=cases, totals=totals(cases) if key in docs else None)
             slices.append(entry)
     return slices, files
 

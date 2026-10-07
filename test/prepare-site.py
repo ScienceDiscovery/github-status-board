@@ -175,13 +175,14 @@ export_site(root/'.e2e/site/github-status-board',doc)
 # E2E run records through the real collector and Pages attachment, offline: yesterday's
 # collection read three artifacts; by deployment time the daily one has expired, and
 # the release run came from a fork, so it keeps its steps but links HTML to GitHub.
+import base64
 import shutil
 from datetime import timedelta
 from gsb import e2e_records
 records_now=datetime(2026,9,20,12,tzinfo=timezone.utc)
 step=lambda title,ms,*children,error=None:dict(title=title,duration=ms,steps=list(children),**({'error':dict(message=error)} if error else {}))
 journeys={'suites':[{'title':'journey-first-run.spec.ts','file':'journey-first-run.spec.ts','suites':[{'title':'J1 首次运行','file':'journey-first-run.spec.ts','specs':[
-    dict(title='创建项目后可以保存',file='journey-first-run.spec.ts',line=18,tests=[dict(projectName='mocked',status='unexpected',results=[dict(status='failed',duration=9150,
+    dict(title='后台执行完成后显示运行时提示而不是伪装成用户消息，并且保留项目保存结果和完整的任务执行记录供后续查看',file='journey-first-run.spec.ts',line=18,tests=[dict(projectName='mocked',status='unexpected',results=[dict(status='failed',duration=9150,
         errors=[dict(message='\x1b[31mError: expect(locator).toBeVisible() failed\x1b[39m\n\nLocator: getByText(\'已保存\')\nExpected: visible\nTimeout: 5000ms\n    at journey-first-run.spec.ts:41:7')],
         steps=[step('1. 打开控制台',1830,step('page.goto /console',1400),step('等待项目列表',380)),
                step('2. 保存项目',7200,step('点击保存',90),step('等待已保存提示',5010,error='Timed out 5000ms waiting for getByText(\'已保存\')'),error='Error: expect(locator).toBeVisible() failed')])])]),
@@ -189,12 +190,29 @@ journeys={'suites':[{'title':'journey-first-run.spec.ts','file':'journey-first-r
         dict(status='failed',duration=820,errors=[dict(message='Error: socket hang up')],steps=[step('重新连接',820)]),dict(status='passed',duration=640,steps=[step('重新连接',640)])])]),
     dict(title='导出报告',file='journey-first-run.spec.ts',line=70,tests=[dict(projectName='mocked',status='skipped',results=[dict(status='skipped',duration=0)])]),
     dict(title='模型设置可以保存',file='journey-first-run.spec.ts',line=88,tests=[dict(projectName='mocked',status='expected',results=[dict(status='passed',duration=2310,steps=[step('打开设置',400),step('保存',120)])])])]}]}]}
+journey_dir = 'journey-reports/issue-77-wake-notice/后台执行完成后显示运行时提示而不是伪装成用户消息'
+case_html = 'data/40072e79cd3d0cda7a79c6bad7501851b4babf54.html'
+shots = ['01-跑一个后台任务并等它完成.png', '02-对话页把唤醒记成运行时提示.png', '03-提示本身说明了完成了什么.png']
+journeys['suites'][0]['suites'][0]['specs'][0]['tests'][0]['results'][-1]['attachments'] = [dict(
+    name='journey report', contentType='text/html', path='/home/runner/work/project/project/e2e/test-results/wake/attachments/report.html')]
 def records_zip(label):
     buf=io.BytesIO()
+    html = '<!doctype html><meta charset="utf-8"><h1>后台执行完成后显示运行时提示</h1>' + ''.join(f'<img src="{name}">' for name in shots)
+    png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jT1sAAAAASUVORK5CYII=')
     with zipfile.ZipFile(buf,'w') as archive:
-        archive.writestr('mocked-standard/e2e/test-results/results.json',json.dumps(journeys))
-        archive.writestr('mocked-standard/e2e/playwright-report/index.html',f'<!doctype html><title>{label}</title><h1>Playwright Report fixture</h1><p>{label}</p>')
+        prefix='mocked-standard/e2e/'
+        archive.writestr(prefix+'test-results/results.json',json.dumps(journeys))
+        archive.writestr(prefix+'test-results/wake/attachments/report.html',html)
+        archive.writestr(prefix+'playwright-report/index.html',f'<!doctype html><title>{label}</title><h1>Playwright Report fixture</h1>')
+        archive.writestr(prefix+'playwright-report/'+case_html,html)
+        archive.writestr(prefix+journey_dir+'/report.html',html)
+        for name in shots:
+            archive.writestr(prefix+journey_dir+'/'+name,png)
+        # Another slice without HTML must still show cases, with a GitHub fallback.
+        archive.writestr('mocked-literature/e2e/test-results/results.json',json.dumps({'suites':[{'specs':[
+            dict(title='文献查询完成后显示引用来源',tests=[dict(status='expected',results=[dict(status='passed',steps=[step('查询文献',120)])])])]}]}))
     return buf.getvalue()
+
 def listed(ident,run_id,expires,fork=False):
     return dict(id=ident,name='e2e-results',size_in_bytes=4096,expired=False,created_at=f'2026-09-19T{ident-6990:02d}:00:00Z',expires_at=expires,
                 workflow_run=dict(id=run_id,repository_id=7,head_repository_id=8 if fork else 7,head_branch='main',head_sha='a'*40))

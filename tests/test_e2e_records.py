@@ -1,3 +1,5 @@
+import base64
+import copy
 import io
 import json
 import tempfile
@@ -66,7 +68,16 @@ def journey_files():
     other = 'journey-reports/another-spec/另一个 用例(同名截图)#1'
     other_html = ('<title>Different case</title><img src="' + SHOTS[0] + '"><a href=report.html>report</a>').encode('utf-8')
     prefix = 'mocked-standard/e2e/'
-    return {prefix + 'test-results/results.json': json.dumps(REPORT),
+    doc = copy.deepcopy(REPORT)
+    specs = doc['suites'][0]['specs']
+    specs[0]['title'] = JOURNEY.rsplit('/', 1)[1]
+    specs[0]['tests'][0]['results'][-1]['attachments'] = [
+        {'name': 'journey report', 'contentType': 'text/html',
+         'path': '/home/runner/work/project/project/e2e/test-results/wake/attachments/report.html'}]
+    specs[1]['tests'][0]['results'][-1]['attachments'] = [
+        {'name': 'journey report', 'contentType': 'text/html', 'path': other + '/report.html'}]
+    return {prefix + 'test-results/results.json': json.dumps(doc),
+            prefix + 'test-results/wake/attachments/report.html': html,
             prefix + 'test-results/unpublished.png': b'test-results',
             prefix + 'playwright-report/index.html': b'<html>Playwright</html>',
             prefix + 'playwright-report/' + HASH_HTML: html,
@@ -164,6 +175,51 @@ class StepParsingTests(unittest.TestCase):
         slices, files = read_artifact(archive(journey_files()), room=1)
         self.assertEqual((files, slices[0]['report']['reason']), ({}, 'site_budget'))
 
+    def test_case_links_require_hosted_byte_matches_from_the_final_attempt(self):
+        source = journey_files()
+        name = 'mocked-standard/e2e/test-results/results.json'
+        doc = json.loads(source[name])
+        cases = doc['suites'][0]['specs']
+        # The prior failed attempt has an HTML attachment; the final attempt has none.
+        results = cases[1]['tests'][0]['results']
+        results[0]['attachments'] = results[-1].pop('attachments')
+        source[name] = json.dumps(doc)
+        slices, files = read_artifact(archive(source))
+        self.assertEqual(slices[0]['cases'][0]['html'], HASH_HTML)
+        self.assertEqual([c['path'] for c in slices[0]['cases']], [[], [], [], []])
+        self.assertNotIn('html', slices[0]['cases'][1])
+        self.assertNotIn('html', slices[0]['cases'][2])
+        self.assertIn(HASH_HTML, files['mocked-standard'])
+        for options in ({'html': False}, {'room': 0}):
+            with self.subTest(options=options):
+                slices, files = read_artifact(archive(source), **options)
+                self.assertFalse(files)
+                self.assertTrue(all('html' not in c for c in slices[0]['cases']))
+        # Same filename but different bytes must not identify an unrelated HTML.
+        source['mocked-standard/e2e/test-results/wake/attachments/report.html'] = b'not the report'
+        slices, _ = read_artifact(archive(source))
+        self.assertNotIn('html', slices[0]['cases'][0])
+
+    def test_inline_attachment_body_and_unsafe_paths(self):
+        source = journey_files()
+        name = 'mocked-standard/e2e/test-results/results.json'
+        doc = json.loads(source[name])
+        final = doc['suites'][0]['specs'][0]['tests'][0]['results'][-1]
+        for path in ['../secret.html', 'journey-reports/../secret.html',
+                     'journey-reports/secret\\report.html', 'journey-reports/secret\x00.html']:
+            with self.subTest(path=path):
+                final['attachments'] = [{'contentType': 'text/html', 'path': path}]
+                source[name] = json.dumps(doc)
+                source['mocked-standard/e2e/' + path] = source['mocked-standard/e2e/playwright-report/' + HASH_HTML]
+                slices, files = read_artifact(archive(source))
+                self.assertNotIn('html', slices[0]['cases'][0])
+                self.assertNotIn(path, files['mocked-standard'])
+        final['attachments'] = [{'contentType': 'text/html', 'body': base64.b64encode(
+            source['mocked-standard/e2e/playwright-report/' + HASH_HTML]).decode()}]
+        source[name] = json.dumps(doc)
+        slices, _ = read_artifact(archive(source))
+        self.assertEqual(slices[0]['cases'][0]['html'], HASH_HTML)
+
     def test_failed_case_keeps_ordered_nested_steps_and_error_summary(self):
         cases = {c['title']: c for c in playwright_cases(REPORT)}
         failed = cases['J1 creates a project']
@@ -204,7 +260,7 @@ class ReplacementTests(unittest.TestCase):
     def test_successful_upgrade_replaces_old_html_without_double_counting_site_space(self):
         with tempfile.TemporaryDirectory() as root:
             listing = [artifact(101, 901), artifact(102, 902)]
-            with patch.object(e2e_records, 'VERSION', 1):
+            with patch.object(e2e_records, 'VERSION', 2):
                 previous = refresh(Source(listing), REPO, root, snapshot(901, 902), NOW, bundle=41)
             checkout(root, previous)
             size = sum(r['bytes'] for record in json.loads(previous.files[e2e_records.INDEX])['records'] for r in record['reports'])
@@ -218,7 +274,7 @@ class ReplacementTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as root:
             listing = [artifact(100 + i, 900 + i) for i in range(3)]
-            with patch.object(e2e_records, 'VERSION', 1):
+            with patch.object(e2e_records, 'VERSION', 2):
                 previous = refresh(Source(listing), REPO, root, snapshot(900, 901, 902), NOW, bundle=41, downloads=3)
             checkout(root, previous)
             old_records = json.loads(previous.files[e2e_records.INDEX])['records']
@@ -238,15 +294,15 @@ class ReplacementTests(unittest.TestCase):
             for path, data in steps.items():
                 self.assertEqual((site / path).read_bytes(), data)
             self.assertEqual((site / 'e2e/102/mocked-standard/index.html').read_bytes(), b'<html>report</html>')
-            # Keeping version 1 makes the failed upgrades retryable on the next collection.
+            # Keeping version 2 makes the failed upgrades retryable on the next collection.
             retried = refresh(Source(listing), REPO, root, snapshot(900, 901, 902), NOW, bundle=43)
             self.assertEqual([(r['artifact_id'], r['version'], r['bundle']) for r in json.loads(retried.files[e2e_records.INDEX])['records']],
-                             [(102, 2, 43), (101, 2, 43), (100, 1, 41)])
+                             [(102, 3, 43), (101, 3, 43), (100, 2, 41)])
 
     def test_old_ready_records_are_downloaded_again_newest_first_with_the_same_limit(self):
         with tempfile.TemporaryDirectory() as root:
             listing = [artifact(100 + i, 900 + i) for i in range(3)]
-            with patch.object(e2e_records, 'VERSION', 1):
+            with patch.object(e2e_records, 'VERSION', 2):
                 previous = refresh(Source(listing), REPO, root, snapshot(900, 901, 902), NOW, bundle=41, downloads=3)
             checkout(root, previous)
             source = Source(listing)
@@ -255,7 +311,7 @@ class ReplacementTests(unittest.TestCase):
             self.assertEqual(source.downloads, [102, 101])
             records = json.loads(result.files[e2e_records.INDEX])['records']
             self.assertEqual([(r['artifact_id'], r['status'], r['version'], r['bundle']) for r in records],
-                             [(102, 'ready', 2, 42), (101, 'ready', 2, 42), (100, 'ready', 1, 41)])
+                             [(102, 'ready', 3, 42), (101, 'ready', 3, 42), (100, 'ready', 2, 41)])
             checkout(root, result)
             source = Source(listing)
             refresh(source, REPO, root, snapshot(900, 901, 902), NOW, bundle=43)
@@ -363,7 +419,13 @@ class AttachTests(unittest.TestCase):
             mounted = attach(Board({bundle_id: bundle}), BOARD, site, NOW, sleep=lambda s: None)
             self.assertEqual((mounted['attached'], mounted['errors']), (1, []))
             base = site / 'e2e' / str(ident) / 'mocked-standard'
-            rewritten = (base / HASH_HTML).read_bytes()
+            detail = json.loads((site / f'data/e2e/{ident}.json').read_text())
+            cases = detail['slices'][0]['cases']
+            self.assertEqual(cases[0]['title'], JOURNEY.rsplit('/', 1)[1])
+            self.assertEqual([c.get('html') for c in cases], [HASH_HTML, 'data/other.html', None, None])
+            self.assertNotIn('/home/runner', json.dumps(detail))
+            # Follow the case's link, not an invented path or the report index.
+            rewritten = (base / cases[0]['html']).read_bytes()
             links = Links(rewritten).links
             images = [value for tag, key, value in links if tag == 'img' and key == 'src']
             for i, src in enumerate(images[:3]):
