@@ -14,16 +14,12 @@ from __future__ import annotations
 import io
 import json
 import math
-import posixpath
 import re
 import shutil
 import time
 import zipfile
 from datetime import datetime, timezone
-from html import escape, unescape
-from html.parser import HTMLParser
-from pathlib import Path, PureWindowsPath
-from urllib.parse import quote
+from pathlib import Path
 
 from .github import GitHubError
 from .history import encode, read_json
@@ -33,18 +29,16 @@ ARTIFACT = "e2e-results"
 BUNDLE = "e2e-html"
 BUNDLE_WORKFLOW = ".github/workflows/collect.yml"
 INDEX = "site/data/e2e/index.json"
-VERSION = 2
+VERSION = 1
 MAX_RECORDS = 20                  # newest unexpired artifacts that get records
 MAX_DOWNLOADS = 2                 # source artifact downloads per collection
-REPORT_BYTES = 40 * 1024 * 1024   # one report, including referenced journey directories
+REPORT_BYTES = 16 * 1024 * 1024   # one playwright-report directory
 SITE_BYTES = 256 * 1024 * 1024    # all attached reports together
 MAX_CASES, MAX_STEPS, STEP_DEPTH = 500, 3000, 8
-# Generated slice IDs stay ASCII; report attachments keep their original names.
-SLICE = re.compile(r"[A-Za-z0-9_@+=-][A-Za-z0-9._@+=-]{0,127}")
-UNSAFE_PATH_CHAR = re.compile(r"[/\\\x00-\x1f\x7f-\x9f\ud800-\udfff]")
+# Report files keep their own names; anything else (.., absolute, odd bytes) is skipped.
+SEGMENT = re.compile(r"[A-Za-z0-9_@+=-][A-Za-z0-9._@+=-]{0,127}")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 FRAME = re.compile(r"\s+at\s")
-HTML_ATTR = re.compile(r'''([^\s"'<>/=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))''')
 
 
 def _time(value):
@@ -124,68 +118,7 @@ def playwright_cases(doc):
 def _slice(prefix):
     parts = [p for p in prefix.split("/") if p and p not in ("e2e", "test-results", "playwright-report")]
     name = "-".join(parts) or "e2e"
-    return name if SLICE.fullmatch(name) else "report"
-
-
-def _safe_report_path(name):
-    """Keep relative Unicode paths verbatim, without traversal or invalid text."""
-    return not PureWindowsPath(name).is_absolute() and all(
-        1 <= len(part) <= 128 and part not in (".", "..") and not UNSAFE_PATH_CHAR.search(part)
-        for part in name.split("/"))
-
-
-class _JourneyLinks(HTMLParser):
-    """Rebase actual src/href attributes without serializing scripts or other markup."""
-
-    def __init__(self, source, prefix):
-        super().__init__(convert_charrefs=False)
-        self.source, self.prefix, self.edits = source, prefix, []
-        self.lines = [0] + [m.end() for m in re.finditer("\n", source)]
-
-    def handle_starttag(self, tag, attrs):
-        line, column = self.getpos()
-        offset = self.lines[line - 1] + column
-        for attr in HTML_ATTR.finditer(self.get_starttag_text()):
-            if attr[1].lower() not in ("src", "href"):
-                continue
-            group = next(i for i in (2, 3, 4) if attr[i] is not None)
-            value = unescape(attr[group]).strip()
-            if not value or value.startswith(("/", "\\", "#", "?")) or re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", value):
-                continue
-            value = escape(self.prefix + value, quote=True)
-            if group == 4:  # the new directory name may contain spaces
-                value = '"' + value + '"'
-            self.edits.append((offset + attr.start(group), offset + attr.end(group), value))
-
-    def rewrite(self):
-        self.feed(self.source)
-        self.close()
-        result = self.source
-        for start, end, value in reversed(self.edits):
-            result = result[:start] + value + result[end:]
-        return result.encode("utf-8")
-
-
-def _include_journeys(archive, report, journeys):
-    """Match attached HTML by its bytes and retain only the matching journey directories."""
-    by_content = {}
-    for rel, item in sorted(journeys.items()):
-        if rel.endswith("/report.html") and item.file_size <= REPORT_BYTES:
-            by_content.setdefault(archive.read(item), posixpath.dirname(rel))
-    selected, rewritten = set(), {}
-    for rel, item in report.items():
-        if not rel.startswith("data/") or not rel.endswith(".html") or item.file_size > REPORT_BYTES:
-            continue
-        content = archive.read(item)
-        directory = by_content.get(content)
-        if directory is None:
-            continue
-        prefix = quote(posixpath.relpath(directory, posixpath.dirname(rel)) + "/", safe="/")
-        rewritten[rel] = _JourneyLinks(content.decode("utf-8"), prefix).rewrite()
-        selected.add(directory)
-    files = {**report, **{rel: item for rel, item in journeys.items()
-                         if any(rel.startswith(directory + "/") for directory in selected)}}
-    return files, rewritten
+    return name if SEGMENT.fullmatch(name) else "report"
 
 
 def read_artifact(blob, *, html=True, room=SITE_BYTES):
@@ -197,20 +130,13 @@ def read_artifact(blob, *, html=True, room=SITE_BYTES):
         entries = [e for e in archive.infolist() if not e.is_dir()]
         if len(entries) > 3000 or sum(e.file_size for e in entries) > 160 * 1024 * 1024:
             raise ValueError("report archive exceeds extraction budget")
-        docs, reports, journeys = {}, {}, {}
+        docs, reports = {}, {}
         for item in entries:
-            # ZipInfo.filename can truncate NULs; validate before any normalization.
-            name = item.orig_filename
-            if not _safe_report_path(name):
-                continue
+            name = item.filename.replace("\\", "/")
             marker = ("/" + name).find("/playwright-report/")
             if marker >= 0:
                 rel = name[marker + len("playwright-report/"):]
                 reports.setdefault(_slice(name[:marker]), {})[rel] = item
-            elif (marker := ("/" + name).find("/journey-reports/")) >= 0:
-                # Mount beside data/, keeping spec/case directories and filenames intact.
-                rel = name[marker:]
-                journeys.setdefault(_slice(name[:marker]), {})[rel] = item
             elif name.lower().endswith(("results.json", "report.json")) and item.file_size <= 40 * 1024 * 1024:
                 key = _slice(name.rsplit("/", 1)[0] if "/" in name else "")
                 if key in docs:
@@ -226,13 +152,10 @@ def read_artifact(blob, *, html=True, room=SITE_BYTES):
         for key in sorted(set(docs) | set(reports)):
             cases = playwright_cases(docs[key]) if key in docs else []
             report = reports.get(key, {})
-            rewritten = {}
-            if html:
-                report, rewritten = _include_journeys(archive, report, journeys.get(key, {}))
-            size = sum(len(rewritten[rel]) if rel in rewritten else item.file_size for rel, item in report.items())
+            size = sum(item.file_size for item in report.values())
             entry = {"slice": key, "totals": totals(cases) if key in docs else None, "cases": cases,
                      "report": {"files": len(report), "bytes": size, "html": None, "reason": None}}
-            safe = {rel: item for rel, item in report.items() if _safe_report_path(rel)}
+            safe = {rel: item for rel, item in report.items() if all(SEGMENT.fullmatch(part) for part in rel.split("/"))}
             if not report:
                 entry["report"]["reason"] = "missing"
             elif not html:
@@ -245,7 +168,7 @@ def read_artifact(blob, *, html=True, room=SITE_BYTES):
                 entry["report"]["reason"] = "site_budget"
             else:
                 room -= size
-                files[key] = {rel: rewritten[rel] if rel in rewritten else archive.read(item) for rel, item in safe.items()}
+                files[key] = {rel: archive.read(item) for rel, item in safe.items()}
             slices.append(entry)
     return slices, files
 
@@ -487,10 +410,10 @@ def _fetch_bundle(gh, repository, run_id, pairs, site, deadline, sleep, clock):
     found, written = set(), 0
     with zipfile.ZipFile(io.BytesIO(blob)) as archive:
         for item in archive.infolist():
-            if not _safe_report_path(item.orig_filename):
-                continue
-            parts = item.orig_filename.split("/")
+            parts = item.filename.replace("\\", "/").split("/")
             if item.is_dir() or len(parts) < 3 or not parts[0].isdigit() or (int(parts[0]), parts[1]) not in pairs:
+                continue
+            if not all(SEGMENT.fullmatch(part) for part in parts[1:]):
                 continue
             written += item.file_size
             if written > SITE_BYTES:

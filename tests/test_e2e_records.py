@@ -6,8 +6,6 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
-from html.parser import HTMLParser
-from urllib.parse import unquote, urljoin, urlsplit
 
 from gsb import e2e_records
 from gsb.e2e_records import attach, playwright_cases, read_artifact, refresh, retention_days, window_runs
@@ -47,46 +45,6 @@ REPORT = {'suites': [{'title': 'journey.spec.ts', 'file': 'journey.spec.ts', 'sp
     {'title': 'J3 exports', 'file': 'journey.spec.ts', 'line': 60, 'tests': [{'projectName': 'mocked', 'status': 'skipped', 'results': [{'status': 'skipped'}]}]},
     {'title': 'J4 settings', 'file': 'journey.spec.ts', 'line': 80, 'tests': [{'projectName': 'mocked', 'status': 'expected', 'results': [{'status': 'passed', 'duration': 90}]}]},
 ]}]}
-
-JOURNEY = 'journey-reports/issue-77-wake-notice/后台执行完成后显示运行时提示而不是伪装成用户消息'
-HASH_HTML = 'data/40072e79cd3d0cda7a79c6bad7501851b4babf54.html'
-SHOTS = ['01-跑一个后台任务并等它完成.png', '02-对话页把唤醒记成运行时提示.png', '03-提示本身说明了完成了什么.png']
-
-
-def journey_files():
-    """Playwright attaches only HTML; the screenshots remain beside the original report."""
-    html = ('<!doctype html><title>Wake notice</title>\n' + ''.join(f'<img src="{name}">' for name in SHOTS)
-            + '\n<a href="report.html?view=1&amp;mode=2#details">details</a>'
-            + '<img src="https://example.org/image.png"><a href="//example.org/">external</a>'
-            + '<a href="/root">root</a><a href="#details">anchor</a><a href="?view=2">query</a>'
-            + '<a href="mailto:test@example.org">mail</a><img src="data:image/png;base64,cG5n">'
-            + '<script>const text = \'<img src="unchanged.png">\';</script>'
-            + '<div data-note=\'src="unchanged.png"\'></div>').encode('utf-8')
-    other = 'journey-reports/another-spec/另一个 用例(同名截图)#1'
-    other_html = ('<title>Different case</title><img src="' + SHOTS[0] + '"><a href=report.html>report</a>').encode('utf-8')
-    prefix = 'mocked-standard/e2e/'
-    return {prefix + 'test-results/results.json': json.dumps(REPORT),
-            prefix + 'test-results/unpublished.png': b'test-results',
-            prefix + 'playwright-report/index.html': b'<html>Playwright</html>',
-            prefix + 'playwright-report/' + HASH_HTML: html,
-            prefix + 'playwright-report/data/other.html': other_html,
-            prefix + JOURNEY + '/report.html': html,
-            **{prefix + JOURNEY + '/' + name: ('png-' + str(i)).encode() for i, name in enumerate(SHOTS)},
-            prefix + JOURNEY + '/../secret.png': b'rejected',
-            prefix + other + '/report.html': other_html,
-            prefix + other + '/' + SHOTS[0]: b'other-png',
-            prefix + 'journey-reports/unreferenced/report.html': b'not attached',
-            prefix + 'journey-reports/unreferenced/private.png': b'not published'}
-
-
-class Links(HTMLParser):
-    def __init__(self, html):
-        super().__init__()
-        self.links = []
-        self.feed(html.decode('utf-8'))
-
-    def handle_starttag(self, tag, attrs):
-        self.links.extend((tag, key, value) for key, value in attrs if key in ('src', 'href'))
 
 
 def e2e_zip(report_bytes=b'<html>report</html>'):
@@ -141,26 +99,6 @@ def checkout(root, result):
 
 
 class StepParsingTests(unittest.TestCase):
-    def test_slice_budget_includes_journeys_and_overflow_keeps_steps(self):
-        self.assertEqual(e2e_records.REPORT_BYTES, 40 * 1024 * 1024)
-        for mib, reason in [(25, None), (41, 'over_budget')]:
-            with self.subTest(mib=mib):
-                source = journey_files()
-                source['mocked-standard/e2e/' + JOURNEY + '/' + SHOTS[0]] = b'x' * (mib * 1024 * 1024)
-                blob = archive(source)
-                slices, files = read_artifact(blob)
-                self.assertEqual(slices[0]['report']['reason'], reason)
-                self.assertEqual(bool(files), reason is None)
-                self.assertGreater(slices[0]['report']['bytes'], mib * 1024 * 1024)
-                self.assertEqual(len(slices[0]['cases']), 4)
-                with tempfile.TemporaryDirectory() as root:
-                    result = refresh(Source([artifact(101, 901)], blobs={101: blob}), REPO, root, snapshot(901), NOW, bundle=42)
-                    record = json.loads(result.files[e2e_records.INDEX])['records'][0]
-                    self.assertEqual((record['status'], record['totals']['tests'], record['reports'][0]['reason']), ('ready', 4, reason))
-                    self.assertEqual(bool(record['reports'][0]['html']), reason is None)
-        slices, files = read_artifact(archive(journey_files()), room=1)
-        self.assertEqual((files, slices[0]['report']['reason']), ({}, 'site_budget'))
-
     def test_failed_case_keeps_ordered_nested_steps_and_error_summary(self):
         cases = {c['title']: c for c in playwright_cases(REPORT)}
         failed = cases['J1 creates a project']
@@ -198,24 +136,6 @@ class StepParsingTests(unittest.TestCase):
 
 
 class ReplacementTests(unittest.TestCase):
-    def test_old_ready_records_are_downloaded_again_newest_first_with_the_same_limit(self):
-        with tempfile.TemporaryDirectory() as root:
-            listing = [artifact(100 + i, 900 + i) for i in range(3)]
-            with patch.object(e2e_records, 'VERSION', 1):
-                previous = refresh(Source(listing), REPO, root, snapshot(900, 901, 902), NOW, bundle=41, downloads=3)
-            checkout(root, previous)
-            source = Source(listing)
-            result = refresh(source, REPO, root, snapshot(900, 901, 902), NOW, bundle=42)
-            self.assertEqual(source.gets, [(f'/repos/{REPO}/actions/artifacts', {'name': 'e2e-results', 'per_page': 100})])
-            self.assertEqual(source.downloads, [102, 101])
-            records = json.loads(result.files[e2e_records.INDEX])['records']
-            self.assertEqual([(r['artifact_id'], r['status'], r['version'], r['bundle']) for r in records],
-                             [(102, 'ready', 2, 42), (101, 'ready', 2, 42), (100, 'pending', 2, None)])
-            checkout(root, result)
-            source = Source(listing)
-            refresh(source, REPO, root, snapshot(900, 901, 902), NOW, bundle=43)
-            self.assertEqual(source.downloads, [100])  # updated ready records are reused
-
     def test_one_listing_without_cursor_and_bounded_downloads(self):
         with tempfile.TemporaryDirectory() as root:
             source = Source([artifact(100 + i, 900 + i) for i in range(5)] + [artifact(200, 999)])  # run 999 is not on the board
@@ -304,83 +224,6 @@ class Board:
 
 
 class AttachTests(unittest.TestCase):
-    def test_attached_journey_html_resolves_its_screenshots_after_pages_mount(self):
-        with tempfile.TemporaryDirectory() as root:
-            ident, bundle_id = 11445217151, 42
-            source_files = journey_files()
-            source = Source([artifact(ident, 901, created=stamp(timedelta()))], blobs={ident: archive(source_files)})
-            result = refresh(source, REPO, root, snapshot(901), NOW, bundle=bundle_id)
-            bundle_dir = Path(root) / 'bundle'
-            result.write_bundle(bundle_dir)
-            bundle = archive({p.relative_to(bundle_dir).as_posix(): p.read_bytes() for p in bundle_dir.rglob('*') if p.is_file()})
-            checkout(root, result)
-            site = Path(root) / 'site'
-            mounted = attach(Board({bundle_id: bundle}), BOARD, site, NOW, sleep=lambda s: None)
-            self.assertEqual((mounted['attached'], mounted['errors']), (1, []))
-            base = site / 'e2e' / str(ident) / 'mocked-standard'
-            rewritten = (base / HASH_HTML).read_bytes()
-            links = Links(rewritten).links
-            images = [value for tag, key, value in links if tag == 'img' and key == 'src']
-            for i, src in enumerate(images[:3]):
-                resolved = unquote(urlsplit(urljoin('https://board.example/' + HASH_HTML, src)).path).lstrip('/')
-                self.assertEqual(resolved, JOURNEY + '/' + SHOTS[i])
-                self.assertEqual((base / resolved).read_bytes(), ('png-' + str(i)).encode())
-            href = next(value for tag, key, value in links if key == 'href')
-            self.assertTrue(href.endswith('/report.html?view=1&mode=2#details'))
-            original_html = source_files['mocked-standard/e2e/' + JOURNEY + '/report.html']
-            self.assertEqual((base / JOURNEY / 'report.html').read_bytes(), original_html)
-            for value in ['https://example.org/image.png', '//example.org/', '/root', '#details', '?view=2',
-                          'mailto:test@example.org', 'data:image/png;base64,cG5n']:
-                self.assertIn(value, [value for _, _, value in links])
-            self.assertIn(b'const text = \'<img src="unchanged.png">\';', rewritten)
-            self.assertIn(b'data-note=\'src="unchanged.png"\'', rewritten)
-            other_links = Links((base / 'data/other.html').read_bytes()).links
-            for _, _, src in other_links:
-                resolved = unquote(urlsplit(urljoin('https://board.example/data/other.html', src)).path).lstrip('/')
-                self.assertTrue((base / resolved).is_file())
-                if resolved.endswith('.png'):
-                    self.assertEqual((base / resolved).read_bytes(), b'other-png')
-            self.assertFalse(any(p.name == 'secret.png' for p in site.rglob('*')))
-            self.assertFalse((base / 'test-results').exists())
-            self.assertFalse((base / 'journey-reports/unreferenced').exists())
-            self.assertFalse(any((base / 'data').glob('*.png')))
-
-    def test_report_screenshots_keep_their_names_through_collection_and_pages(self):
-        screenshots = ['01-跑一个后台任务并等它完成.png', '02-查看 任务(完成).png',
-                       '03-查看结果（截图）.png', '.hidden.png', 'x' * 124 + '.png']
-        journey = 'data/40072e79cd3d0cda7a79c6bad7501851b4babf54.html'
-        html = ''.join(f'<img src="{name}">' for name in screenshots).encode('utf-8')
-        safe = {'index.html': b'<a href="' + journey.encode() + b'">journey</a>', journey: html,
-                **{'data/' + name: b'png' for name in screenshots}}
-        unsafe = ['../secret.png', 'data/../secret.png', './dot.png', 'data//empty.png', '/absolute.png',
-                  'data/back\\slash.png', 'data/tab\t.png', 'data/control\x1f.png', 'data/delete\x7f.png',
-                  'data/c1\x85.png', 'data/nullXtail.png', 'data/' + 'x' * 125 + '.png']
-        prefix = 'mocked-standard/e2e/playwright-report/'
-        source_zip = archive({'mocked-standard/e2e/test-results/results.json': json.dumps(REPORT),
-                              **{prefix + rel: data for rel, data in safe.items()},
-                              **{prefix + rel: b'rejected' for rel in unsafe},
-                              '/absolute/playwright-report/root.png': b'rejected',
-                              'C:/absolute/playwright-report/drive.png': b'rejected',
-                              '../playwright-report/outside.png': b'rejected'})
-        # Patch both ZIP headers: writestr itself truncates a name containing NUL.
-        source_zip = source_zip.replace(b'nullXtail.png', b'null\x00tail.png')
-        with tempfile.TemporaryDirectory() as root:
-            result = refresh(Source([artifact(101, 901)], blobs={101: source_zip}), REPO, root, snapshot(901), NOW, bundle=42)
-            self.assertEqual(result.html, {(101, 'mocked-standard'): safe})
-            bundle_dir = Path(root) / 'bundle'
-            result.write_bundle(bundle_dir)
-            bundle_files = {p.relative_to(bundle_dir).as_posix(): p.read_bytes() for p in bundle_dir.rglob('*') if p.is_file()}
-            # A bundle must reject unsafe paths independently of source collection.
-            bundle_files.update({'101/mocked-standard/' + rel: b'rejected' for rel in unsafe})
-            checkout(root, result)
-            site = Path(root) / 'site'
-            bundle_zip = archive(bundle_files).replace(b'nullXtail.png', b'null\x00tail.png')
-            attached = attach(Board({42: bundle_zip}), BOARD, site, NOW, sleep=lambda s: None)
-            self.assertEqual((attached['attached'], attached['errors']), (1, []))
-            published = {p.relative_to(site / 'e2e').as_posix(): p.read_bytes() for p in (site / 'e2e').rglob('*') if p.is_file()}
-            self.assertEqual(published, {'101/mocked-standard/' + rel: data for rel, data in safe.items()})
-            self.assertFalse((site / 'e2e/101/secret.png').exists())
-
     def site(self, root, records):
         site = Path(root) / 'site'
         (site / 'data/e2e').mkdir(parents=True)
