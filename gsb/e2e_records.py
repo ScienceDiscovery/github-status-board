@@ -19,7 +19,7 @@ import shutil
 import time
 import zipfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from .github import GitHubError
 from .history import encode, read_json
@@ -29,14 +29,15 @@ ARTIFACT = "e2e-results"
 BUNDLE = "e2e-html"
 BUNDLE_WORKFLOW = ".github/workflows/collect.yml"
 INDEX = "site/data/e2e/index.json"
-VERSION = 1
+VERSION = 2
 MAX_RECORDS = 20                  # newest unexpired artifacts that get records
 MAX_DOWNLOADS = 2                 # source artifact downloads per collection
 REPORT_BYTES = 16 * 1024 * 1024   # one playwright-report directory
 SITE_BYTES = 256 * 1024 * 1024    # all attached reports together
 MAX_CASES, MAX_STEPS, STEP_DEPTH = 500, 3000, 8
-# Report files keep their own names; anything else (.., absolute, odd bytes) is skipped.
-SEGMENT = re.compile(r"[A-Za-z0-9_@+=-][A-Za-z0-9._@+=-]{0,127}")
+# Generated slice IDs stay ASCII; report attachments keep their original names.
+SLICE = re.compile(r"[A-Za-z0-9_@+=-][A-Za-z0-9._@+=-]{0,127}")
+UNSAFE_PATH_CHAR = re.compile(r"[/\\\x00-\x1f\x7f-\x9f\ud800-\udfff]")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 FRAME = re.compile(r"\s+at\s")
 
@@ -118,7 +119,14 @@ def playwright_cases(doc):
 def _slice(prefix):
     parts = [p for p in prefix.split("/") if p and p not in ("e2e", "test-results", "playwright-report")]
     name = "-".join(parts) or "e2e"
-    return name if SEGMENT.fullmatch(name) else "report"
+    return name if SLICE.fullmatch(name) else "report"
+
+
+def _safe_report_path(name):
+    """Keep relative Unicode paths verbatim, without traversal or invalid text."""
+    return not PureWindowsPath(name).is_absolute() and all(
+        1 <= len(part) <= 128 and part not in (".", "..") and not UNSAFE_PATH_CHAR.search(part)
+        for part in name.split("/"))
 
 
 def read_artifact(blob, *, html=True, room=SITE_BYTES):
@@ -132,7 +140,10 @@ def read_artifact(blob, *, html=True, room=SITE_BYTES):
             raise ValueError("report archive exceeds extraction budget")
         docs, reports = {}, {}
         for item in entries:
-            name = item.filename.replace("\\", "/")
+            # ZipInfo.filename can truncate NULs; validate before any normalization.
+            name = item.orig_filename
+            if not _safe_report_path(name):
+                continue
             marker = ("/" + name).find("/playwright-report/")
             if marker >= 0:
                 rel = name[marker + len("playwright-report/"):]
@@ -155,7 +166,7 @@ def read_artifact(blob, *, html=True, room=SITE_BYTES):
             size = sum(item.file_size for item in report.values())
             entry = {"slice": key, "totals": totals(cases) if key in docs else None, "cases": cases,
                      "report": {"files": len(report), "bytes": size, "html": None, "reason": None}}
-            safe = {rel: item for rel, item in report.items() if all(SEGMENT.fullmatch(part) for part in rel.split("/"))}
+            safe = {rel: item for rel, item in report.items() if _safe_report_path(rel)}
             if not report:
                 entry["report"]["reason"] = "missing"
             elif not html:
@@ -410,10 +421,10 @@ def _fetch_bundle(gh, repository, run_id, pairs, site, deadline, sleep, clock):
     found, written = set(), 0
     with zipfile.ZipFile(io.BytesIO(blob)) as archive:
         for item in archive.infolist():
-            parts = item.filename.replace("\\", "/").split("/")
-            if item.is_dir() or len(parts) < 3 or not parts[0].isdigit() or (int(parts[0]), parts[1]) not in pairs:
+            if not _safe_report_path(item.orig_filename):
                 continue
-            if not all(SEGMENT.fullmatch(part) for part in parts[1:]):
+            parts = item.orig_filename.split("/")
+            if item.is_dir() or len(parts) < 3 or not parts[0].isdigit() or (int(parts[0]), parts[1]) not in pairs:
                 continue
             written += item.file_size
             if written > SITE_BYTES:

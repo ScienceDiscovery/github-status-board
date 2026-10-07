@@ -136,6 +136,24 @@ class StepParsingTests(unittest.TestCase):
 
 
 class ReplacementTests(unittest.TestCase):
+    def test_old_ready_records_are_downloaded_again_newest_first_with_the_same_limit(self):
+        with tempfile.TemporaryDirectory() as root:
+            listing = [artifact(100 + i, 900 + i) for i in range(3)]
+            with patch.object(e2e_records, 'VERSION', 1):
+                previous = refresh(Source(listing), REPO, root, snapshot(900, 901, 902), NOW, bundle=41, downloads=3)
+            checkout(root, previous)
+            source = Source(listing)
+            result = refresh(source, REPO, root, snapshot(900, 901, 902), NOW, bundle=42)
+            self.assertEqual(source.gets, [(f'/repos/{REPO}/actions/artifacts', {'name': 'e2e-results', 'per_page': 100})])
+            self.assertEqual(source.downloads, [102, 101])
+            records = json.loads(result.files[e2e_records.INDEX])['records']
+            self.assertEqual([(r['artifact_id'], r['status'], r['version'], r['bundle']) for r in records],
+                             [(102, 'ready', 2, 42), (101, 'ready', 2, 42), (100, 'pending', 2, None)])
+            checkout(root, result)
+            source = Source(listing)
+            refresh(source, REPO, root, snapshot(900, 901, 902), NOW, bundle=43)
+            self.assertEqual(source.downloads, [100])  # updated ready records are reused
+
     def test_one_listing_without_cursor_and_bounded_downloads(self):
         with tempfile.TemporaryDirectory() as root:
             source = Source([artifact(100 + i, 900 + i) for i in range(5)] + [artifact(200, 999)])  # run 999 is not on the board
@@ -224,6 +242,42 @@ class Board:
 
 
 class AttachTests(unittest.TestCase):
+    def test_report_screenshots_keep_their_names_through_collection_and_pages(self):
+        screenshots = ['01-跑一个后台任务并等它完成.png', '02-查看 任务(完成).png',
+                       '03-查看结果（截图）.png', '.hidden.png', 'x' * 124 + '.png']
+        journey = 'data/40072e79cd3d0cda7a79c6bad7501851b4babf54.html'
+        html = ''.join(f'<img src="{name}">' for name in screenshots).encode('utf-8')
+        safe = {'index.html': b'<a href="' + journey.encode() + b'">journey</a>', journey: html,
+                **{'data/' + name: b'png' for name in screenshots}}
+        unsafe = ['../secret.png', 'data/../secret.png', './dot.png', 'data//empty.png', '/absolute.png',
+                  'data/back\\slash.png', 'data/tab\t.png', 'data/control\x1f.png', 'data/delete\x7f.png',
+                  'data/c1\x85.png', 'data/nullXtail.png', 'data/' + 'x' * 125 + '.png']
+        prefix = 'mocked-standard/e2e/playwright-report/'
+        source_zip = archive({'mocked-standard/e2e/test-results/results.json': json.dumps(REPORT),
+                              **{prefix + rel: data for rel, data in safe.items()},
+                              **{prefix + rel: b'rejected' for rel in unsafe},
+                              '/absolute/playwright-report/root.png': b'rejected',
+                              'C:/absolute/playwright-report/drive.png': b'rejected',
+                              '../playwright-report/outside.png': b'rejected'})
+        # Patch both ZIP headers: writestr itself truncates a name containing NUL.
+        source_zip = source_zip.replace(b'nullXtail.png', b'null\x00tail.png')
+        with tempfile.TemporaryDirectory() as root:
+            result = refresh(Source([artifact(101, 901)], blobs={101: source_zip}), REPO, root, snapshot(901), NOW, bundle=42)
+            self.assertEqual(result.html, {(101, 'mocked-standard'): safe})
+            bundle_dir = Path(root) / 'bundle'
+            result.write_bundle(bundle_dir)
+            bundle_files = {p.relative_to(bundle_dir).as_posix(): p.read_bytes() for p in bundle_dir.rglob('*') if p.is_file()}
+            # A bundle must reject unsafe paths independently of source collection.
+            bundle_files.update({'101/mocked-standard/' + rel: b'rejected' for rel in unsafe})
+            checkout(root, result)
+            site = Path(root) / 'site'
+            bundle_zip = archive(bundle_files).replace(b'nullXtail.png', b'null\x00tail.png')
+            attached = attach(Board({42: bundle_zip}), BOARD, site, NOW, sleep=lambda s: None)
+            self.assertEqual((attached['attached'], attached['errors']), (1, []))
+            published = {p.relative_to(site / 'e2e').as_posix(): p.read_bytes() for p in (site / 'e2e').rglob('*') if p.is_file()}
+            self.assertEqual(published, {'101/mocked-standard/' + rel: data for rel, data in safe.items()})
+            self.assertFalse((site / 'e2e/101/secret.png').exists())
+
     def site(self, root, records):
         site = Path(root) / 'site'
         (site / 'data/e2e').mkdir(parents=True)
