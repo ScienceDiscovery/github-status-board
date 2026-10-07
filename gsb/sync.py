@@ -64,11 +64,19 @@ class Budget:
     def get_text_file(self, *a, **kw):
         return self.call("get_text_file", *a, **kw)
 
+    def separate_phase(self, *, requests, seconds):
+        """Give a bounded follow-up phase its own budget, sharing downloaded bytes."""
+        phase = Budget(self.gh, requests=requests, seconds=seconds)
+        phase.recent = self.recent
+        return phase
+
     def download_artifact(self, repo, artifact_id, **kwargs):
-        # E2E run records read the artifact the run details just downloaded. The
-        # download budget below also bounds what this keeps in memory.
+        # Reuse artifacts across phases, but honor each caller's per-file limit.
         if (repo, artifact_id) in self.recent:
-            return self.recent[repo, artifact_id]
+            data = self.recent[repo, artifact_id]
+            if len(data) > kwargs["max_bytes"]:
+                raise GitHubError("cached artifact exceeds download limit", kind="error")
+            return data
         if self.downloaded >= 160 * 1024 * 1024:
             raise BudgetExhausted()
         data = self.call("download_artifact", repo, artifact_id, **kwargs)

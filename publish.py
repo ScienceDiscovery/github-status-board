@@ -73,7 +73,10 @@ def e2e_run_records(sync, snapshot):
     from gsb import e2e_records
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     try:
-        return e2e_records.refresh(sync.gh, sync.repo, ROOT, snapshot, sync.now, bundle=int(run_id) if run_id.isdigit() else None,
+        # Run details may spend their entire budget before records get a turn.
+        # Reserve one listing and two capped ZIP downloads, not an unbounded bypass.
+        gh = sync.gh.separate_phase(requests=1 + e2e_records.MAX_DOWNLOADS, seconds=120)
+        return e2e_records.refresh(gh, sync.repo, ROOT, snapshot, sync.now, bundle=int(run_id) if run_id.isdigit() else None,
                                    max_bytes=sync.cfg.artifact_max_bytes)
     except Exception as err:  # noqa: BLE001 - records are optional evidence
         print(json.dumps({"e2e_records": "skipped", "error": type(err).__name__}), file=sys.stderr)
