@@ -379,6 +379,21 @@ const wakeCase = page => page.locator('[data-e2e-slice="mocked-standard"] .e2e-c
   .filter({ has: page.getByRole('heading', { name: wakeTitle, exact: true }) })
   .filter({ has: page.locator('.e2e-case-file code', { hasText: /^journey-first-run\.spec\.ts$/ }) });
 
+// Check actual point geometry: hiding overflow must not masquerade as fitting the axis.
+async function expectTimelineFits(page, timeline) {
+  expect(await timeline.evaluate(el => {
+    const box = el.getBoundingClientRect(), style = getComputedStyle(el);
+    return el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight
+      && !['scroll','auto'].includes(style.overflowX) && !['scroll','auto'].includes(style.overflowY)
+      && [...el.querySelectorAll('.e2e-point')].every(point => {
+        const p = point.getBoundingClientRect();
+        return p.width > 0 && p.height > 0 && p.left >= box.left && p.right <= box.right
+          && p.top >= box.top && p.bottom <= box.bottom;
+      });
+  })).toBeTruthy();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+}
+
 test('E2E run records show categories and case timelines without opening runs', async ({ page }) => {
   const errors = [], requests = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -387,7 +402,7 @@ test('E2E run records show categories and case timelines without opening runs', 
   const records = page.locator('#e2e-records'), subject = wakeCase(page);
   await expect(records.locator('.section-head')).toContainText('2 个类别 · 7 个用例');
   await expect(records.locator(':scope > .e2e-category')).toHaveCount(2);
-  await expect(records.locator('.e2e-category > h3')).toHaveText(['mocked-literature 2 个用例', 'mocked-standard 5 个用例']);
+  await expect(records.locator('.e2e-category-toggle')).toHaveText(['mocked-literature 2 个用例', 'mocked-standard 5 个用例']);
   await expect(records.locator('[data-e2e-run], [data-e2e-record]')).toHaveCount(0);
   await expect(page.locator('#e2e-dialog, dialog[open]')).toHaveCount(0);
   await expect(subject).toHaveCount(1);
@@ -397,11 +412,27 @@ test('E2E run records show categories and case timelines without opening runs', 
   const points = subject.locator('.e2e-history-point');
   await expect(points).toHaveCount(4);
   expect(await points.evaluateAll(els => els.map(el => el.dataset.e2eArtifact))).toEqual(['7001','7004','7005','7003']);
-  await expect(points.locator('.e2e-point-status .badge')).toHaveText(['失败','重试通过','跳过','通过']);
-  await expect(points.locator('.sub')).toHaveText(['耗时 9.2s','耗时 640ms','耗时 0ms','耗时 2.3s']);
-  expect(await points.locator('time').evaluateAll(els => els.map(el => el.dateTime))).toEqual([
-    '2026-09-19T11:00:00Z','2026-09-19T14:00:00Z','2026-09-19T15:00:00Z','2026-09-19T16:00:00Z']);
-  expect(new Set(await points.evaluateAll(els => els.map(el => getComputedStyle(el, '::after').backgroundColor))).size).toBe(4);
+  const descriptions = await points.locator('.e2e-point').evaluateAll(els => els.map(el => el.getAttribute('aria-label')));
+  for (const [i, status, duration, time] of [[0,'失败','9.2s','19:00:00'],[1,'重试通过','640ms','22:00:00'],[2,'跳过','0ms','23:00:00'],[3,'通过','2.3s','00:00:00']]) {
+    expect(descriptions[i]).toContain(status);
+    expect(descriptions[i]).toContain(`耗时 ${duration}`);
+    expect(descriptions[i]).toContain(time);
+  }
+  expect(new Set(await points.locator('.e2e-status-mark').evaluateAll(els => els.map(el => getComputedStyle(el).backgroundColor))).size).toBe(4);
+  // Details are available on both pointer hover and keyboard focus, not inside cards.
+  await points.first().locator('.e2e-point').hover();
+  await expect(page.locator('#tooltip')).toBeVisible();
+  await expect(page.locator('#tooltip')).toHaveText(descriptions[0]);
+  expect(descriptions[0]).toContain('2026/9/19 19:00:00');
+  expect(descriptions[0]).toMatch(/ · .+ 10/);
+  await page.mouse.move(0, 0);
+  await points.nth(2).locator('.e2e-point').focus();
+  await expect(points.nth(2).locator('.e2e-point')).toBeFocused();
+  await expect(page.locator('#tooltip')).toBeVisible();
+  await expect(page.locator('#tooltip')).toHaveText(descriptions[2]);
+  await page.keyboard.press('Tab');
+  await expect(points.last().locator('.e2e-point')).toBeFocused();
+  await expect(page.locator('#tooltip')).toHaveText(descriptions[3]);
   await expect(points.nth(2).locator('a')).toHaveCount(0); // skipped without an HTML attachment
   await expect(points.nth(3).locator('a')).toHaveCount(0); // fork's HTML is not hosted
   await expect(records.locator('a[href*="/index.html"]')).toHaveCount(0);
@@ -416,17 +447,9 @@ test('E2E run records show categories and case timelines without opening runs', 
     expect((await page.request.get(src)).status()).toBe(200);
   }
   await tab.close();
-  // Details still belong to the case; each historical execution keeps its steps/errors.
-  await subject.locator('.e2e-case-details > summary').click();
-  const failed = subject.locator('.e2e-attempt').last();
-  await expect(failed).toHaveAttribute('open', '');
-  await expect(failed.locator(':scope > pre.e2e-error')).toHaveText("Error: expect(locator).toBeVisible() failed\n\nLocator: getByText('已保存')\nExpected: visible\nTimeout: 5000ms");
-  const top = failed.locator(':scope > ol.e2e-steps > li');
-  await expect(top.locator(':scope > .e2e-step-row .e2e-step-title')).toHaveText(['1. 打开控制台', '2. 保存项目']);
-  await expect(top.nth(0).locator('ol.e2e-steps .e2e-step-title')).toHaveText(['page.goto /console', '等待项目列表']);
-  await expect(top.nth(1)).toHaveClass(/failed/);
-  await subject.locator('.e2e-case-details > summary').click();
-  await expect(subject.locator('.e2e-case-details')).not.toHaveAttribute('open', '');
+  await expect(records.locator('.e2e-case-details, .e2e-attempt, .e2e-error, .e2e-steps')).toHaveCount(0);
+  await expect(records).not.toContainText('步骤与错误摘要');
+  await expect(records).not.toContainText('Error: expect(locator)');
   await records.getByLabel('按最新结果筛选').selectOption('flaky');
   await expect(records.locator('.e2e-case')).toHaveCount(1);
   await expect(records.locator('.e2e-case-title')).toHaveText('恢复会话');
@@ -439,7 +462,6 @@ test('E2E run records show categories and case timelines without opening runs', 
   await records.evaluate(el => scrollTo(0, scrollY + el.getBoundingClientRect().top - 110));
   await page.screenshot({ path: shot('e2e-case-history-desktop') });
 
-  await expect(subject.locator('.e2e-case-details')).not.toHaveAttribute('open', '');
   await subject.evaluate(el => scrollTo(0, scrollY + el.getBoundingClientRect().top - 110));
   await page.screenshot({ path: shot('e2e-case-timeline-desktop') });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -448,18 +470,109 @@ test('E2E run records show categories and case timelines without opening runs', 
   await expect(title).toHaveText(wakeTitle);
   expect(await title.evaluate(el => el.scrollHeight <= el.clientHeight && getComputedStyle(el).whiteSpace === 'normal' && getComputedStyle(el).textOverflow !== 'ellipsis')).toBeTruthy();
   const timeline = subject.locator('.e2e-timeline');
-  expect(await timeline.evaluate(el => el.scrollWidth > el.clientWidth)).toBeTruthy();
+  await expectTimelineFits(page, timeline);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   const box = await timeline.boundingBox();
   expect(box.x).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width).toBeLessThanOrEqual(390);
   await page.screenshot({ path: shot('e2e-case-history-mobile') });
-  await timeline.evaluate(el => { el.scrollLeft = el.scrollWidth; });
-  await expect(points.last().getByText('通过', { exact: true })).toBeVisible();
+  await expect(points.last().locator('.e2e-point')).toBeVisible();
   // Expired and oversized records never produce a point or a steps request.
   await expect(records.locator('[data-e2e-artifact="7002"], [data-e2e-artifact="7007"]')).toHaveCount(0);
   expect(requests.some(url => /data\/e2e\/(7002|7007)\.json/.test(url))).toBeFalsy();
   expect(errors).toEqual([]);
+});
+
+test('E2E run records remember category collapse and reveal filtered matches', async ({ page }) => {
+  await page.clock.install();
+  await page.goto('/github-status-board/#tests');
+  const records = page.locator('#e2e-records');
+  const standard = records.locator('[data-e2e-slice="mocked-standard"]');
+  const literature = records.locator('[data-e2e-slice="mocked-literature"]');
+  const toggle = standard.getByRole('button', { name: 'mocked-standard 5 个用例' });
+  await expect(records.locator('.e2e-case')).toHaveCount(7);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(standard.locator('.e2e-case').first()).toBeHidden();
+  await expect(literature.locator('.e2e-case').first()).toBeVisible();
+  // Both manual refresh and the real 60-second poll retain the closed category.
+  await page.locator('#refresh-btn').click();
+  await expect(page.locator('#refresh-btn')).toBeEnabled();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  const polled = page.waitForResponse(r => r.url().includes('/data/e2e/index.json'));
+  await page.clock.fastForward(60_001);
+  await polled;
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  // Rendering a search result temporarily expands the matching category.
+  await records.getByLabel('搜索用例').fill('journey-first-run');
+  await expect(standard.locator('.e2e-category-toggle')).toHaveAttribute('aria-expanded', 'true');
+  await expect(wakeCase(page)).toBeVisible();
+  await records.getByLabel('搜索用例').fill('');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await records.getByLabel('按最新结果筛选').selectOption('passed');
+  await expect(standard.locator('.e2e-category-toggle')).toHaveAttribute('aria-expanded', 'true');
+  await expect(wakeCase(page)).toBeVisible();
+  await records.getByLabel('按最新结果筛选').selectOption('');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.focus();
+  await page.keyboard.press('Enter');
+  await expect(toggle).toBeFocused();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(wakeCase(page)).toBeVisible();
+  await page.keyboard.press('Space');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await records.evaluate(el => scrollTo(0, scrollY + el.getBoundingClientRect().top - 110));
+  await page.mouse.move(0, 0);
+  await page.screenshot({ path: shot('e2e-categories-collapsed') });
+});
+
+test('E2E run records show every retained point without scrolling on desktop and narrow screens', async ({ page }) => {
+  const { readFileSync } = require('node:fs');
+  const read = file => JSON.parse(readFileSync(resolve(__dirname, '../.e2e/site/github-status-board/data/e2e', file), 'utf8'));
+  const index = read('index.json'), source = index.records.find(r => r.artifact_id === 7001), steps = read('7001.json');
+  const ids = Array.from({length: 20}, (_, i) => 8000 + i);
+  // Expand only the already-published browser fixture, without changing collector limits.
+  index.records = ids.map((id, i) => ({...source, artifact_id: id, run_id: id, steps: `data/e2e/${id}.json`, reports: [],
+    created_at: new Date(Date.UTC(2026, 8, i + 1, 11)).toISOString()})).reverse();
+  await page.route('**/data/snapshot.json*', async route => {
+    const response = await route.fetch(), doc = await response.json();
+    const runs = doc.sections.ci.data.recent_runs;
+    runs.push(...ids.map(id => ({...runs[0], id})));
+    await route.fulfill({response, json: doc});
+  });
+  await page.route('**/data/e2e/index.json*', route => route.fulfill({json: index}));
+  await page.route(/\/data\/e2e\/80\d\d\.json$/, route => {
+    const id = Number(route.request().url().match(/(80\d\d)\.json$/)[1]);
+    const doc = structuredClone(steps), c = doc.slices.find(s => s.slice === 'mocked-standard').cases[0];
+    c.status = ['failed','flaky','skipped','passed'][id % 4];
+    c.duration_ms = id === 8019 ? null : 1234;
+    return route.fulfill({json: doc});
+  });
+  await page.goto('/github-status-board/#tests');
+  const subject = wakeCase(page), timeline = subject.locator('.e2e-timeline'), points = timeline.locator('.e2e-point');
+  await expect(points).toHaveCount(20);
+  expect(await timeline.locator('.e2e-history-point').evaluateAll(els => els.map(el => Number(el.dataset.e2eArtifact)))).toEqual(ids);
+  await expect(points.last()).toHaveAttribute('aria-label', /耗时 —/);
+  await expect(timeline.locator('a')).toHaveCount(0);
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({width, height: width === 390 ? 844 : 1000});
+    await subject.evaluate(el => scrollTo(0, scrollY + el.getBoundingClientRect().top - 110));
+    await expectTimelineFits(page, timeline);
+    const title = subject.locator('.e2e-case-title');
+    expect(await title.evaluate(el => el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight
+      && getComputedStyle(el).whiteSpace === 'normal' && getComputedStyle(el).textOverflow !== 'ellipsis')).toBeTruthy();
+    if (width === 390) expect(await points.last().evaluate(el => el.offsetTop)).toBeGreaterThan(await points.first().evaluate(el => el.offsetTop));
+    await points.nth(18).focus();
+    await page.keyboard.press('Tab');
+    await expect(points.last()).toBeFocused();
+    await expect(page.locator('#tooltip')).toHaveText(await points.last().getAttribute('aria-label'));
+    await expect(page.locator('#tooltip')).toBeVisible();
+    expect(await page.locator('#tooltip').evaluate(el => {
+      const b = el.getBoundingClientRect(); return b.left >= 0 && b.right <= innerWidth;
+    })).toBeTruthy();
+    await page.screenshot({ path: shot(`e2e-all-points-${width}`) });
+  }
 });
 
 test('E2E run records isolate missing steps and branch histories', async ({ page }) => {

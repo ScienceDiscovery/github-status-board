@@ -52,7 +52,7 @@
   const loadViews = () => { try { return { issues: 'table', prs: 'table', ...JSON.parse(localStorage.getItem(VIEW_KEY) || '{}') }; } catch (e) { return { issues: 'table', prs: 'table' }; } };
   const loadLine = () => { try { return localStorage.getItem(LINE_KEY); } catch (e) { return null; } };
   const loadCovSort = () => { try { return localStorage.getItem(COV_SORT_KEY) === 'lines' ? 'lines' : 'name'; } catch (e) { return 'name'; } };
-  const STATE = { snap: null, status: null, tab: 'overview', views: loadViews(), line: loadLine(), covOpen: new Set(), covSort: loadCovSort(), sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, coverageWeekOffset: 0, scoreWeekOffset: 0, scoreCase: null, e2e: null, e2eSteps: {}, e2eFilter: { status: '', q: '' }, e2eLoading: new Set(), e2eErrors: new Set(), e2eDetails: new Map(), pollTimer: null };
+  const STATE = { snap: null, status: null, tab: 'overview', views: loadViews(), line: loadLine(), covOpen: new Set(), covSort: loadCovSort(), sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, coverageWeekOffset: 0, scoreWeekOffset: 0, scoreCase: null, e2e: null, e2eSteps: {}, e2eFilter: { status: '', q: '' }, e2eLoading: new Set(), e2eErrors: new Set(), e2eCollapsed: new Set(), pollTimer: null };
 
   // ------------------------------------------------------------ components
   const badge = (text, tone = '', extra = '') => `<span class="badge ${tone}"${extra}>${esc(text)}</span>`;
@@ -799,14 +799,13 @@
   }
 
   // E2E run records: each unexpired e2e-results on the board lists its Playwright
-  // cases with steps; the HTML report stays only as long as the Actions artifact.
+  // cases and execution history; HTML stays only as long as the Actions artifact.
   const E2E_NAME = { failed: '失败', flaky: '重试通过', skipped: '跳过', passed: '通过' };
   const E2E_TONE = { failed: 'bad', flaky: 'warn', skipped: '', passed: 'good' };
   const E2E_ORDER = ['failed', 'flaky', 'skipped', 'passed'];
-  const E2E_REASON = { untrusted: 'fork 仓库的运行不在看板托管 HTML', missing: '产物里没有 playwright-report/index.html', over_budget: '报告超过单份 HTML 上限', site_budget: '看板上的 HTML 总量已满', unavailable: '本次部署未取到 HTML' };
+  const E2E_MARK = { failed: '×', flaky: '↻', skipped: '−', passed: '✓' };
   const msText = (v) => (v == null ? '—' : v < 1000 ? `${Math.round(v)}ms` : v < 60000 ? `${(v / 1000).toFixed(1)}s` : dur(v / 1000));
   const hostedSlice = (r, slice) => r.reports?.some((rep) => rep.slice === slice && rep.html === `e2e/${r.artifact_id}/${slice}/index.html`);
-  const artifactLink = (r, label = 'GitHub 产物', reason = '') => link(r.artifact_url, esc(label), ` class="e2e-html fallback"${tip(E2E_REASON[reason] || 'HTML 未发布')}`);
   function caseHTMLPath(c, r, slice) {
     const path = typeof c.html === 'string' ? c.html : '';
     // The index is authoritative after Pages attaches bundles. A cached steps file
@@ -854,30 +853,19 @@
       }).sort((a, b) => a.title.localeCompare(b.title, 'zh-CN') || a.file.localeCompare(b.file)),
     }));
   }
-  const e2eSteps = (steps) => (steps?.length ? `<ol class="e2e-steps">${steps.map((s) => `<li class="e2e-step ${s.status === 'failed' ? 'failed' : 'passed'}"><div class="e2e-step-row"><span class="e2e-mark" aria-label="${s.status === 'failed' ? '失败' : '通过'}">${s.status === 'failed' ? '✗' : '✓'}</span><span class="e2e-step-title">${esc(s.title)}</span><span class="muted num">${msText(s.duration_ms)}</span></div>${s.error ? `<pre class="e2e-error">${esc(s.error)}</pre>` : ''}${e2eSteps(s.steps)}</li>`).join('')}</ol>` : '');
-  const e2eDetailOpen = (key, fallback = false) => (STATE.e2eDetails.get(key) ?? fallback) ? ' open' : '';
   function e2eHistoryCase(item) {
     const latest = item.history.at(-1).c;
     const points = item.history.map(({record, c}) => {
       const href = caseHTMLPath(c, record, item.slice);
       const description = `${date(record.created_at)} · ${E2E_NAME[c.status]} · 耗时 ${msText(c.duration_ms)} · ${record.title || 'run'} ${record.run_id}${c.project ? ` · ${c.project}` : ''}${href ? ' · 打开执行记录 HTML' : ''}`;
-      const content = `<span class="e2e-point-status">${badge(E2E_NAME[c.status], E2E_TONE[c.status])}${href ? '<span aria-hidden="true">↗</span>' : ''}</span><time datetime="${esc(record.created_at)}">${shortDateTime(record.created_at)}</time><span class="sub">耗时 ${msText(c.duration_ms)}</span>`;
+      const content = `<span class="e2e-status-mark ${esc(c.status)}" aria-hidden="true">${E2E_MARK[c.status]}</span>`;
       return `<li class="e2e-history-point ${esc(c.status)}" data-e2e-artifact="${esc(record.artifact_id)}">${href
         ? `<a class="e2e-point e2e-case-html" href="${esc(href)}" target="_blank" rel="noopener"${tip(description)} aria-label="${esc(description)}">${content}</a>`
-        : `<div class="e2e-point" tabindex="0"${tip(description)} aria-label="${esc(description)}">${content}</div>`}</li>`;
-    }).join('');
-    const detailKey = item.key;
-    const attempts = item.history.slice().reverse().map(({record, c, position}) => {
-      const key = JSON.stringify([item.key, record.artifact_id, position]);
-      return `<details class="e2e-attempt" data-e2e-detail="${esc(key)}"${e2eDetailOpen(key, c.status === 'failed')}><summary>${badge(E2E_NAME[c.status], E2E_TONE[c.status])} ${date(record.created_at)} · 耗时 ${msText(c.duration_ms)}${c.project ? ` · ${esc(c.project)}` : ''}</summary>
-        <div class="sub e2e-attempt-source">${link(record.run_url, esc(`${record.title || 'run'} · ${record.run_id}`))} · ${artifactLink(record)}${c.line ? ` · 行 ${esc(c.line)}` : ''}${c.attempts > 1 ? ` · ${n(c.attempts)} 次尝试` : ''}</div>
-        ${c.error ? `<div class="e2e-error-head">${c.status === 'flaky' ? '重试前的失败' : '错误摘要'}</div><pre class="e2e-error">${esc(c.error)}</pre>` : ''}
-        ${c.steps?.length ? e2eSteps(c.steps) : '<div class="muted">这个用例没有 test.step 步骤。</div>'}</details>`;
+        : `<span class="e2e-point" tabindex="0" role="img"${tip(description)} aria-label="${esc(description)}">${content}</span>`}</li>`;
     }).join('');
     return `<article class="e2e-case" data-e2e-case="${esc(item.key)}"><header class="e2e-case-head"><h4 class="e2e-case-title">${esc(item.title)}</h4><span class="sub">${n(item.history.length)} 次执行 · 最新 ${badge(E2E_NAME[latest.status], E2E_TONE[latest.status])}</span></header>
       <div class="sub e2e-case-file"><code>${esc(item.file)}</code></div>
-      <ol class="e2e-timeline" aria-label="${esc(item.title)}的执行历史">${points}</ol>
-      <details class="e2e-case-details" data-e2e-detail="${esc(detailKey)}"${e2eDetailOpen(detailKey)}><summary>步骤与错误摘要</summary>${attempts}</details></article>`;
+      <ol class="e2e-timeline" aria-label="${esc(item.title)}的执行历史">${points}</ol></article>`;
   }
   function e2eHistoryContent() {
     const groups = e2eCaseGroups(), filter = STATE.e2eFilter, records = e2eRecords();
@@ -893,7 +881,13 @@
     const q = filter.q.trim().toLowerCase();
     const visible = groups.map(g => ({...g, cases: g.cases.filter(c => (!filter.status || c.history.at(-1).c.status === filter.status)
       && (!q || `${g.slice} ${c.title} ${c.file}`.toLowerCase().includes(q)))})).filter(g => g.cases.length);
-    html += visible.map(g => `<section class="card e2e-category" data-e2e-slice="${esc(g.slice)}"><h3>${esc(g.slice)} <span class="sub">${n(g.cases.length)} 个用例</span></h3>${g.cases.map(e2eHistoryCase).join('')}</section>`).join('');
+    html += `<div class="e2e-legend" aria-label="执行状态图例">${E2E_ORDER.map(status => `<span><span class="e2e-status-mark ${status}" aria-hidden="true">${E2E_MARK[status]}</span>${E2E_NAME[status]}</span>`).join('')}</div>`;
+    html += visible.map(g => {
+      // Search/filter opens matches without overwriting the user's collapse choice.
+      const open = Boolean(q || filter.status) || !STATE.e2eCollapsed.has(g.slice);
+      const id = `e2e-category-${encodeURIComponent(g.slice)}`;
+      return `<section class="card e2e-category" data-e2e-slice="${esc(g.slice)}"><h3><button type="button" class="e2e-category-toggle" data-e2e-category="${esc(g.slice)}" aria-expanded="${open}" aria-controls="${esc(id)}"><span class="e2e-category-chevron" aria-hidden="true"></span><span>${esc(g.slice)}</span> <span class="sub">${n(g.cases.length)} 个用例</span></button></h3><div id="${esc(id)}"${open ? '' : ' hidden'}>${g.cases.map(e2eHistoryCase).join('')}</div></section>`;
+    }).join('');
     if (!visible.length && !loading) html += empty(count ? '没有符合条件的用例' : '该分支线暂时没有可展示的用例执行历史');
     return html;
   }
@@ -1302,11 +1296,14 @@
     renderE2EHistory();
   });
   document.addEventListener('click', (ev) => {
-    const historySummary = ev.target.closest('[data-e2e-detail] > summary');
-    if (historySummary) {
-      const detail = historySummary.parentElement;
-      // Record the native toggle before an in-flight JSON render replaces the node.
-      STATE.e2eDetails.set(detail.dataset.e2eDetail, !detail.open);
+    const category = ev.target.closest('[data-e2e-category]');
+    if (category) {
+      const open = category.getAttribute('aria-expanded') !== 'true';
+      const slice = category.dataset.e2eCategory;
+      if (open) STATE.e2eCollapsed.delete(slice); else STATE.e2eCollapsed.add(slice);
+      category.setAttribute('aria-expanded', String(open));
+      document.getElementById(category.getAttribute('aria-controls')).hidden = !open;
+      return;
     }
     const scoreButton = ev.target.closest('[data-score-case]');
     if (scoreButton) { openScoreTrend(scoreButton.dataset.scoreCase); return; }
@@ -1415,7 +1412,6 @@
   // Remember expanded coverage directories across the periodic refresh.
   document.addEventListener('toggle', (ev) => {
     const dir = ev.target;
-    if (dir.matches?.('[data-e2e-detail]') && dir.isConnected) STATE.e2eDetails.set(dir.dataset.e2eDetail, dir.open);
     if (!dir.matches?.('.cov-dir')) return;
     if (dir.open) STATE.covOpen.add(dir.dataset.covPath); else STATE.covOpen.delete(dir.dataset.covPath);
   }, true);
