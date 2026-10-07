@@ -21,7 +21,7 @@
 
 1. 只请求一次 `GET /repos/{源仓}/actions/artifacts?name=e2e-results&per_page=100`。只读第一页，不带页码，也不保存游标，因此不会回扫更早的产物历史。
 2. 只保留出现在本次快照中的运行，包括各分支线 CI 分层历史里的运行和最近 run。去掉 `expired` 为真或 `expires_at` 已过的产物，再按创建时间取最新 20 份。
-3. 同一产物、同一记录版本的已有记录直接沿用。当前记录版本为 2，版本 1 中已就绪的记录也会按最新优先重新下载，以补齐此前被过滤的中文截图。其余产物每次采集最多下载 2 份，并受整次采集 160 MiB 下载预算约束。运行详情在同一次采集里刚下载过的产物直接复用，不重复请求；版本升级不回扫历史页，也不提高下载上限。
+3. 同一产物、同一记录版本的已有记录直接沿用。当前记录版本为 2，版本 1 中已就绪的记录也会按最新优先重新下载，以补齐此前被过滤或留在旅程目录中未发布的截图。其余产物每次采集最多下载 2 份，并受整次采集 160 MiB 下载预算约束。运行详情在同一次采集里刚下载过的产物直接复用，不重复请求；版本升级不回扫历史页，也不提高下载上限。
 4. 未下载的产物标为等待，由后续采集补齐。列表请求失败时不下载，只按已保存的 `expires_at` 移除过期记录。下载失败、解析失败或超出预算都只影响该条记录，整次采集照常完成。
 5. 每次都输出完整的记录集合：索引 `site/data/e2e/index.json`，以及每份产物的步骤文件 `site/data/e2e/<artifact_id>.json`。离开集合的记录，其步骤文件在同一个提交里删除。issue、PR、CI 的增量同步不受影响，`.sync/` 不保存任何执行记录状态。
 
@@ -33,14 +33,18 @@
 
 ### HTML：随 Actions 产物保存，不进 Git
 
-一次运行的三个分片报告合计约 8 MiB。提交进 Git 会让历史永久增长，所以 HTML 只在 Actions 和 Pages 之间传递：
+HTML 报告及截图提交进 Git 会让历史永久增长，所以它们只在 Actions 和 Pages 之间传递：
 
-1. 采集把新下载、且允许托管的分片报告写到 `.tmp/e2e-html/<artifact_id>/<分片>/`，包括 `index.html` 和同目录资源（如 `data/`）。
+1. 采集把新下载、且允许托管的分片报告写到 `.tmp/e2e-html/<artifact_id>/<分片>/`，包括 `playwright-report/` 下的 `index.html`、`data/` 等资源，以及该报告引用的 `journey-reports/<规格>/<用例>/` 目录。
 2. `collect.yml` 用 `run_records.py retention` 从这些报告中最晚的 `expires_at` 算出保留天数（1–90 天），再把目录上传为本次运行的 `e2e-html` 产物。索引的 `bundle` 字段记录报告所在的采集 run。
 3. `pages.yml` 上传站点前运行 `run_records.py attach site`。它用本 job 的 `GITHUB_TOKEN`（`actions: read`）读取索引中未过期记录所在的 `e2e-html` 产物，只接受本仓 main 分支上的 `collect.yml` 运行。采集先提交、后上传，因此 Pages 会等待该运行最多 5 分钟。
 4. 取不到的报告在部署出的索引里改为 GitHub 链接。已过期的记录连同其步骤文件从部署内容中移除。这一步任何失败都不会阻止 Pages 部署。
 
 采集打包与 Pages 挂载共用相同的相对路径校验，按原名保留中文、空格、括号等截图与附件，使 HTML 中的相对引用保持有效。每段长度为 1–128 个字符，不能是 `.` 或 `..`，不能含路径分隔符、控制字符或 Unicode 代理码位；绝对路径和空路径段也会被丢弃。不把反斜杠改成斜杠，也不对文件名进行归一化后再放行。
+
+Playwright 的 HTML 附件可能只有 `data/<hash>.html`，截图仍留在原始旅程目录。采集以 HTML 原始字节内容匹配同一分片 `journey-reports/.../report.html`，只带上匹配目录的报告与附件；未被引用的旅程目录及 `test-results/` 不发布。`data/<hash>.html` 地址保持不变，其中实际 HTML 标签的相对 `src`／`href` 改写为 `../journey-reports/<规格>/<用例>/...`（目录部分做 URL 编码），原旅程目录的 `report.html` 保持原文。绝对地址、带协议的链接、仅锚点或查询参数的链接保持不变，脚本文本也不改写。各用例保留独立目录，同名步骤截图不会覆盖。
+
+单片大小按 Playwright 报告、所选旅程目录及改写后的 HTML 合计计算，超过 40 MiB 仅放弃该片的 HTML 托管，仍保留用例步骤并链接 GitHub 产物，不中断采集。
 
 ## 边界与阈值
 
@@ -49,13 +53,12 @@
 | 看板上的记录 | 最新 20 份 | 更早的运行只在 GitHub 查看 |
 | 每次采集新下载 | 2 份 | 标为等待，后续采集补齐 |
 | 单个产物下载 | 80 MiB（`GSB_ARTIFACT_MAX_MB`） | 标为超过下载上限，无步骤，链接 GitHub 产物 |
-| 单个分片的 `playwright-report/` | 16 MiB | 仍显示步骤，HTML 改为 GitHub 产物链接 |
+| 单个分片的 Playwright 报告及引用的旅程目录 | 40 MiB | 仍显示步骤，HTML 改为 GitHub 产物链接 |
 | 看板上 HTML 总量 | 256 MiB | 同上 |
 
-- 以当前源仓的 `e2e-results` 实测：每次运行 3 个分片，HTML 分别约 1.1、5.1、2.1 MiB，步骤 JSON 约 33 KB，都在阈值内。
 - 保存期限以 GitHub 返回的 `expires_at` 和 `expired` 为准，不写死 14 天。过期后的下一次成功采集删除步骤文件；每次 Pages 部署也会按 `expires_at` 排除 HTML。看板自己的 `e2e-html` 产物在其中最后一个源产物过期后约一天内被 GitHub 清除。
 - 来自 fork 的运行（产物的 `head_repository_id` 与源仓不同）只显示步骤，其 HTML 不在看板域名下托管。
-- trace、截图、视频不另外归档。`playwright-report/data/` 里的附件随报告保留；`test-results/` 等其余内容请下载 GitHub 产物。
+- trace、截图、视频不另外长期归档。`playwright-report/data/` 及被引用旅程目录里的附件随报告保留；`test-results/` 等其余内容请下载 GitHub 产物。
 - 页面只把 `e2e/<数字>/<分片>/index.html` 形式的路径渲染为站内链接，其余一律链接到 GitHub。
 
 ## 验证
@@ -70,6 +73,8 @@ node .e2e/node_modules/playwright/cli.js test --config test/playwright.config.cj
 - 单次列表请求、无游标、下载上限；
 - 旧版本已就绪记录按最新优先重下，仍遵守每次 2 份的限制；
 - 中文、空格、括号截图从源 zip 到采集 bundle 再到 Pages 保留原名，拒绝越界、控制字符及超长路径；
+- 按真实产物布局匹配 hash HTML 与旅程报告，挂载后相对链接能读取对应 PNG 字节，同名截图隔离、外部链接和脚本不改写；
+- 25 MiB 以上的完整旅程分片可托管，41 MiB 分片只降级 HTML，步骤与采集结果仍可用；
 - 过期记录的删除，以及 fork、超预算、GitHub 失败时的降级；
 - Pages 只挂载未过期报告、会等待上传、拒绝非采集运行的产物；
 - 保留天数计算。
