@@ -374,43 +374,38 @@ test('real E2E scores open per-case trends without crowding the table', async ({
   await page.keyboard.press('Escape');
 });
 
-test('E2E run records expand inline with direct case HTML and preserved steps', async ({ page }) => {
-  const errors = [];
-  page.on('pageerror', e => errors.push(e.message));
-  await page.goto('/github-status-board/#tests');
-  const records = page.locator('#e2e-records'), live = records.locator('[data-e2e-run="7001"]');
-  await expect(page.locator('#e2e-dialog')).toHaveCount(0);
-  await expect(page.locator('#tab-tests .section-head', { hasText: 'E2E 执行记录' })).toContainText('过期后从看板删除');
-  await expect(page.locator('#tab-tests .tile').filter({ hasText: 'CI 最近 E2E 用例' })).toContainText('1 重试通过');
-  await expect(live).toContainText('失败 1');
-  await expect(live).toContainText('重试通过 1');
-  await expect(records.locator('a[href*="/index.html"]')).toHaveCount(0);
-  await expect(page.locator('[data-e2e-record="7002"]')).toHaveCount(0);
-  expect((await page.request.get('/github-status-board/e2e/7002/mocked-standard/index.html')).status()).toBe(404);
-  expect((await page.request.get('/github-status-board/data/e2e/7002.json')).status()).toBe(404);
-  const fork = records.locator('[data-e2e-run="7003"]');
-  await expect(fork.locator('a.e2e-html.fallback').first()).toHaveAttribute('href', /\/actions\/runs\/12\/artifacts\/7003$/);
+const wakeTitle = '后台执行完成后显示运行时提示而不是伪装成用户消息，并且保留项目保存结果和完整的任务执行记录供后续查看';
+const wakeCase = page => page.locator('[data-e2e-slice="mocked-standard"] .e2e-case')
+  .filter({ has: page.getByRole('heading', { name: wakeTitle, exact: true }) })
+  .filter({ has: page.locator('.e2e-case-file code', { hasText: /^journey-first-run\.spec\.ts$/ }) });
 
-  await live.locator('[data-e2e-record]').click();
-  const panel = live.locator('#e2e-expanded');
-  await expect(panel).toBeVisible();
-  await expect(page.locator('dialog[open]')).toHaveCount(0);
-  await expect(live.locator('[data-e2e-record]')).toHaveAttribute('aria-expanded', 'true');
-  await expect(panel.locator('.e2e-slice')).toHaveCount(2);
-  await expect(panel.locator('details.e2e-case')).toHaveCount(1);
-  const failed = panel.locator('details.e2e-case.failed');
-  await expect(failed).toHaveAttribute('open', '');
-  await expect(failed.locator('summary')).toContainText('journey-first-run.spec.ts:18');
-  await expect(failed.locator(':scope > pre.e2e-error')).toHaveText("Error: expect(locator).toBeVisible() failed\n\nLocator: getByText('已保存')\nExpected: visible\nTimeout: 5000ms");
-  const top = failed.locator(':scope > ol.e2e-steps > li');
-  await expect(top.locator(':scope > .e2e-step-row .e2e-step-title')).toHaveText(['1. 打开控制台', '2. 保存项目']);
-  await expect(top.nth(0).locator('ol.e2e-steps .e2e-step-title')).toHaveText(['page.goto /console', '等待项目列表']);
-  await expect(top.nth(1)).toHaveClass(/failed/);
-  const nested = top.nth(1).locator('ol.e2e-steps > li');
-  await expect(nested.nth(1)).toHaveClass(/failed/);
-  await expect(nested.nth(1).locator('pre.e2e-error')).toHaveText("Timed out 5000ms waiting for getByText('已保存')");
-  await expect(nested.nth(1).locator('.e2e-step-row')).toContainText('5.0s');
-  const report = failed.locator('.e2e-case-html');
+test('E2E run records show categories and case timelines without opening runs', async ({ page }) => {
+  const errors = [], requests = [];
+  page.on('pageerror', e => errors.push(e.message));
+  page.on('request', r => requests.push(r.url()));
+  await page.goto('/github-status-board/#tests');
+  const records = page.locator('#e2e-records'), subject = wakeCase(page);
+  await expect(records.locator('.section-head')).toContainText('2 个类别 · 7 个用例');
+  await expect(records.locator(':scope > .e2e-category')).toHaveCount(2);
+  await expect(records.locator('.e2e-category > h3')).toHaveText(['mocked-literature 2 个用例', 'mocked-standard 5 个用例']);
+  await expect(records.locator('[data-e2e-run], [data-e2e-record]')).toHaveCount(0);
+  await expect(page.locator('#e2e-dialog, dialog[open]')).toHaveCount(0);
+  await expect(subject).toHaveCount(1);
+  await expect(subject.getByRole('heading', { name: wakeTitle, exact: true })).toBeVisible();
+  // Same title in another file or slice remains a separate case, not another execution.
+  await expect(records.getByRole('heading', { name: wakeTitle, exact: true })).toHaveCount(3);
+  const points = subject.locator('.e2e-history-point');
+  await expect(points).toHaveCount(4);
+  expect(await points.evaluateAll(els => els.map(el => el.dataset.e2eArtifact))).toEqual(['7001','7004','7005','7003']);
+  await expect(points.locator('.e2e-point-status .badge')).toHaveText(['失败','重试通过','跳过','通过']);
+  await expect(points.locator('.sub')).toHaveText(['耗时 9.2s','耗时 640ms','耗时 0ms','耗时 2.3s']);
+  expect(await points.locator('time').evaluateAll(els => els.map(el => el.dateTime))).toEqual([
+    '2026-09-19T11:00:00Z','2026-09-19T14:00:00Z','2026-09-19T15:00:00Z','2026-09-19T16:00:00Z']);
+  expect(new Set(await points.evaluateAll(els => els.map(el => getComputedStyle(el, '::after').backgroundColor))).size).toBe(4);
+  await expect(points.nth(2).locator('a')).toHaveCount(0); // skipped without an HTML attachment
+  await expect(points.nth(3).locator('a')).toHaveCount(0); // fork's HTML is not hosted
+  await expect(records.locator('a[href*="/index.html"]')).toHaveCount(0);
+  const report = points.first().locator('a');
   await expect(report).toHaveAttribute('href', './e2e/7001/mocked-standard/data/40072e79cd3d0cda7a79c6bad7501851b4babf54.html');
   const [tab] = await Promise.all([page.waitForEvent('popup'), report.click()]);
   await expect(tab.locator('h1')).toHaveText('后台执行完成后显示运行时提示');
@@ -421,42 +416,75 @@ test('E2E run records expand inline with direct case HTML and preserved steps', 
     expect((await page.request.get(src)).status()).toBe(200);
   }
   await tab.close();
-  await records.screenshot({ path: shot('e2e-records-desktop') });
-  await panel.locator('select[data-e2e-filter="status"]').selectOption('');
-  expect(errors).toEqual([]);
-  await expect(panel.locator('details.e2e-case')).toHaveCount(5);
-  await expect(panel.locator('details.e2e-case').filter({ hasText: '导出报告' }).locator('a')).toHaveCount(0);
-  await panel.locator('input[data-e2e-filter="q"]').fill('恢复');
-  await expect(panel.locator('details.e2e-case')).toHaveCount(1);
-  await panel.locator('details.e2e-case summary').click();
-  await expect(panel.locator('details.e2e-case')).toContainText('重试前的失败');
-  await expect(panel.locator('details.e2e-case')).toContainText('socket hang up');
-  await live.locator('[data-e2e-record]').click();
-  await expect(panel).toHaveCount(0);
-  await expect(live.locator('[data-e2e-record]')).toHaveAttribute('aria-expanded', 'false');
+  // Details still belong to the case; each historical execution keeps its steps/errors.
+  await subject.locator('.e2e-case-details > summary').click();
+  const failed = subject.locator('.e2e-attempt').last();
+  await expect(failed).toHaveAttribute('open', '');
+  await expect(failed.locator(':scope > pre.e2e-error')).toHaveText("Error: expect(locator).toBeVisible() failed\n\nLocator: getByText('已保存')\nExpected: visible\nTimeout: 5000ms");
+  const top = failed.locator(':scope > ol.e2e-steps > li');
+  await expect(top.locator(':scope > .e2e-step-row .e2e-step-title')).toHaveText(['1. 打开控制台', '2. 保存项目']);
+  await expect(top.nth(0).locator('ol.e2e-steps .e2e-step-title')).toHaveText(['page.goto /console', '等待项目列表']);
+  await expect(top.nth(1)).toHaveClass(/failed/);
+  await subject.locator('.e2e-case-details > summary').click();
+  await expect(subject.locator('.e2e-case-details')).not.toHaveAttribute('open', '');
+  await records.getByLabel('按最新结果筛选').selectOption('flaky');
+  await expect(records.locator('.e2e-case')).toHaveCount(1);
+  await expect(records.locator('.e2e-case-title')).toHaveText('恢复会话');
+  await records.getByLabel('按最新结果筛选').selectOption('');
+  await records.getByLabel('搜索用例').fill('journey-other');
+  await expect(records.locator('.e2e-case')).toHaveCount(1);
+  await expect(records.locator('.e2e-history-point')).toHaveCount(1);
+  await records.getByLabel('搜索用例').fill('');
+  await expect(records.locator('.e2e-case')).toHaveCount(7);
+  await records.evaluate(el => scrollTo(0, scrollY + el.getBoundingClientRect().top - 110));
+  await page.screenshot({ path: shot('e2e-case-history-desktop') });
 
+  await expect(subject.locator('.e2e-case-details')).not.toHaveAttribute('open', '');
+  await subject.evaluate(el => scrollTo(0, scrollY + el.getBoundingClientRect().top - 110));
+  await page.screenshot({ path: shot('e2e-case-timeline-desktop') });
   await page.setViewportSize({ width: 390, height: 844 });
-  await live.locator('[data-e2e-record]').click();
-  await expect(failed.locator(':scope > pre.e2e-error')).toBeVisible();
-  const title = failed.locator('.e2e-case-title');
-  await expect(title).toHaveText('后台执行完成后显示运行时提示而不是伪装成用户消息，并且保留项目保存结果和完整的任务执行记录供后续查看');
+  await subject.evaluate(el => scrollTo(0, scrollY + el.getBoundingClientRect().top - 130));
+  const title = subject.locator('.e2e-case-title');
+  await expect(title).toHaveText(wakeTitle);
   expect(await title.evaluate(el => el.scrollHeight <= el.clientHeight && getComputedStyle(el).whiteSpace === 'normal' && getComputedStyle(el).textOverflow !== 'ellipsis')).toBeTruthy();
-  const box = await panel.boundingBox();
+  const timeline = subject.locator('.e2e-timeline');
+  expect(await timeline.evaluate(el => el.scrollWidth > el.clientWidth)).toBeTruthy();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  const box = await timeline.boundingBox();
   expect(box.x).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width).toBeLessThanOrEqual(390);
-  expect(await panel.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBeTruthy();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
-  await records.screenshot({ path: shot('e2e-records-mobile') });
-  await fork.locator('[data-e2e-record]').click();
-  await expect(live.locator('#e2e-expanded')).toHaveCount(0);
-  await expect(fork.locator('.e2e-case')).toHaveCount(1);
-  await expect(fork.locator('.e2e-case-html')).toHaveCount(0);
-  await expect(records.locator('a[href*="/index.html"]')).toHaveCount(0);
+  await page.screenshot({ path: shot('e2e-case-history-mobile') });
+  await timeline.evaluate(el => { el.scrollLeft = el.scrollWidth; });
+  await expect(points.last().getByText('通过', { exact: true })).toBeVisible();
+  // Expired and oversized records never produce a point or a steps request.
+  await expect(records.locator('[data-e2e-artifact="7002"], [data-e2e-artifact="7007"]')).toHaveCount(0);
+  expect(requests.some(url => /data\/e2e\/(7002|7007)\.json/.test(url))).toBeFalsy();
   expect(errors).toEqual([]);
 });
 
-// Links are unavailable if Pages could not attach the bundle, even when steps
-// were cached with an HTML path. Malformed paths must never become site links.
+test('E2E run records isolate missing steps and branch histories', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.route('**/data/e2e/7004.json', route => route.fulfill({ status: 404, body: 'missing' }));
+  await page.goto('/github-status-board/#tests');
+  const records = page.locator('#e2e-records');
+  await expect(wakeCase(page).locator('.e2e-history-point')).toHaveCount(3);
+  await expect(records).toContainText('1 份执行记录暂不可读取');
+  await page.locator('#tab-tests [data-line="release"]').click();
+  await expect(wakeCase(page).locator('.e2e-history-point')).toHaveCount(1);
+  await expect(wakeCase(page).locator('.e2e-history-point')).toHaveAttribute('data-e2e-artifact', '7006');
+  await page.locator('#tab-tests [data-line="legacy"]').click();
+  await expect(records.locator('.e2e-case')).toHaveCount(0);
+  await expect(records).toContainText('暂时没有可展示的用例执行历史');
+  await page.locator('#tab-tests [data-line="main"]').click();
+  await expect(wakeCase(page).locator('.e2e-history-point')).toHaveCount(3);
+  await page.unroute('**/data/e2e/7004.json');
+  await page.locator('#refresh-btn').click();
+  await expect(wakeCase(page).locator('.e2e-history-point')).toHaveCount(4);
+  await expect(records).not.toContainText('暂不可读取');
+  expect(errors).toEqual([]);
+});
+
 test('E2E run records reject unsafe case paths and unavailable bundles', async ({ page }) => {
   await page.route('**/data/e2e/7001.json', async route => {
     const response = await route.fetch(), doc = await response.json();
@@ -466,9 +494,9 @@ test('E2E run records reject unsafe case paths and unavailable bundles', async (
     await route.fulfill({response, json: doc});
   });
   await page.goto('/github-status-board/#tests');
-  await page.locator('[data-e2e-record="7001"]').click();
-  await expect(page.locator('#e2e-cases .e2e-case')).toHaveCount(5);
-  await expect(page.locator('#e2e-cases .e2e-case-html')).toHaveCount(0);
+  const badPoints = wakeCase(page).locator('[data-e2e-artifact="7001"]');
+  await expect(badPoints).toHaveCount(5);
+  await expect(badPoints.locator('a')).toHaveCount(0);
   await page.unroute('**/data/e2e/7001.json');
   await page.route('**/data/e2e/index.json*', async route => {
     const response = await route.fetch(), doc = await response.json();
@@ -476,13 +504,12 @@ test('E2E run records reject unsafe case paths and unavailable bundles', async (
     await route.fulfill({response, json: doc});
   });
   await page.reload();
-  await page.locator('[data-e2e-record="7001"]').click();
-  await expect(page.locator('#e2e-cases .e2e-case')).toHaveCount(1);
-  await expect(page.locator('#e2e-cases .e2e-case-html')).toHaveCount(0);
-  await expect(page.locator('#e2e-cases .e2e-html.fallback').first()).toHaveAttribute('href', /\/artifacts\/7001$/);
+  await expect(badPoints).toHaveCount(1);
+  await expect(badPoints.locator('a')).toHaveCount(0);
+  await expect(wakeCase(page).locator('[data-e2e-artifact="7004"] a')).toHaveCount(1);
 });
 
-test('E2E run records reload upgraded steps while the inline view stays open', async ({ page }) => {
+test('E2E run records reuse published JSON and refresh changed versions', async ({ page }) => {
   let upgraded = false, reads = 0;
   await page.route('**/data/e2e/index.json*', async route => {
     const response = await route.fetch(), doc = await response.json();
@@ -496,13 +523,15 @@ test('E2E run records reload upgraded steps while the inline view stays open', a
     await route.fulfill({response, json: doc});
   });
   await page.goto('/github-status-board/#tests');
-  await page.locator('[data-e2e-record="7001"]').click();
-  await expect(page.locator('#e2e-cases .e2e-case')).toHaveCount(1);
-  await expect(page.locator('#e2e-cases .e2e-case-html')).toHaveCount(0);
+  const point = wakeCase(page).locator('[data-e2e-artifact="7001"]');
+  await expect(point).toHaveCount(1);
+  await expect(point.locator('a')).toHaveCount(0);
+  await page.locator('#refresh-btn').click();
+  await expect(page.locator('#refresh-btn')).toBeEnabled();
+  expect(reads).toBe(1);
   upgraded = true;
   await page.locator('#refresh-btn').click();
-  await expect(page.locator('#e2e-cases .e2e-case-html')).toHaveAttribute('href', /\/data\/40072e79cd3d0cda7a79c6bad7501851b4babf54\.html$/);
-  await expect(page.locator('#e2e-expanded select')).toHaveValue('failed');
+  await expect(point.locator('a')).toHaveAttribute('href', /\/data\/40072e79cd3d0cda7a79c6bad7501851b4babf54\.html$/);
   expect(reads).toBe(2);
 });
 

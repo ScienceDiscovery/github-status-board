@@ -173,8 +173,8 @@ doc['board']=BoardStore(cfg,persist=False).payload(doc)
 doc['details']={'issue:1':dict(body=item['body'],cross_references=[]),'pr:3':dict(body=pr['body'],cross_references=[])}
 export_site(root/'.e2e/site/github-status-board',doc)
 # E2E run records through the real collector and Pages attachment, offline: yesterday's
-# collection read three artifacts; by deployment time the daily one has expired, and
-# the release run came from a fork, so it keeps its steps but links HTML to GitHub.
+# collection read histories across multiple runs and branch lines. An expired
+# artifact disappears; fork and oversized artifacts have no hosted HTML.
 import base64
 import shutil
 from datetime import timedelta
@@ -195,13 +195,30 @@ case_html = 'data/40072e79cd3d0cda7a79c6bad7501851b4babf54.html'
 shots = ['01-跑一个后台任务并等它完成.png', '02-对话页把唤醒记成运行时提示.png', '03-提示本身说明了完成了什么.png']
 journeys['suites'][0]['suites'][0]['specs'][0]['tests'][0]['results'][-1]['attachments'] = [dict(
     name='journey report', contentType='text/html', path='/home/runner/work/project/project/e2e/test-results/wake/attachments/report.html')]
-def records_zip(label):
+def records_zip(ident):
+    label=f'artifact {ident}'
+    report=json.loads(json.dumps(journeys))
+    specs=report['suites'][0]['suites'][0]['specs']
+    case=specs[0]; test=case['tests'][0]
+    if ident == 7003:
+        case['line']=218  # Moving source lines must not split the case's history.
+        test.update(status='expected',results=[dict(status='passed',duration=2310,steps=[step('确认运行时提示',2310)])])
+    elif ident == 7004:
+        case['line']=45
+        test['status']='flaky'
+        test['results'].append(dict(status='passed',duration=640,steps=[step('重试后完成',640)],attachments=test['results'][0]['attachments']))
+    elif ident == 7005:
+        case['line']=77
+        test.update(status='skipped',results=[dict(status='skipped',duration=0)])
+    if ident == 7001:
+        # Same title in another file is a different case.
+        specs.append(dict(title=case['title'],file='journey-other.spec.ts',line=18,tests=[dict(status='expected',results=[dict(status='passed',duration=800)])]))
     buf=io.BytesIO()
     html = '<!doctype html><meta charset="utf-8"><h1>后台执行完成后显示运行时提示</h1>' + ''.join(f'<img src="{name}">' for name in shots)
     png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jT1sAAAAASUVORK5CYII=')
     with zipfile.ZipFile(buf,'w') as archive:
         prefix='mocked-standard/e2e/'
-        archive.writestr(prefix+'test-results/results.json',json.dumps(journeys))
+        archive.writestr(prefix+'test-results/results.json',json.dumps(report))
         archive.writestr(prefix+'test-results/wake/attachments/report.html',html)
         archive.writestr(prefix+'playwright-report/index.html',f'<!doctype html><title>{label}</title><h1>Playwright Report fixture</h1>')
         archive.writestr(prefix+'playwright-report/'+case_html,html)
@@ -210,19 +227,22 @@ def records_zip(label):
             archive.writestr(prefix+journey_dir+'/'+name,png)
         # Another slice without HTML must still show cases, with a GitHub fallback.
         archive.writestr('mocked-literature/e2e/test-results/results.json',json.dumps({'suites':[{'specs':[
-            dict(title='文献查询完成后显示引用来源',tests=[dict(status='expected',results=[dict(status='passed',steps=[step('查询文献',120)])])])]}]}))
+            dict(title='文献查询完成后显示引用来源',tests=[dict(status='expected',results=[dict(status='passed',steps=[step('查询文献',120)])])]),
+            dict(title=case['title'],file=case['file'],tests=[dict(status='expected',results=[dict(status='passed',duration=100)])])]}]}))
     return buf.getvalue()
 
 def listed(ident,run_id,expires,fork=False):
-    return dict(id=ident,name='e2e-results',size_in_bytes=4096,expired=False,created_at=f'2026-09-19T{ident-6990:02d}:00:00Z',expires_at=expires,
+    return dict(id=ident,name='e2e-results',size_in_bytes=4096,expired=False,created_at=f'2026-09-19T{16 if ident == 7003 else ident-6990:02d}:00:00Z',expires_at=expires,
                 workflow_run=dict(id=run_id,repository_id=7,head_repository_id=8 if fork else 7,head_branch='main',head_sha='a'*40))
 class RecordSource:
-    artifacts=[listed(7001,10,'2026-10-04T08:00:00Z'),listed(7002,11,'2026-09-20T06:00:00Z'),listed(7003,12,'2026-10-04T09:00:00Z',fork=True)]
+    artifacts=[listed(7001,10,'2026-10-04T08:00:00Z'),listed(7002,11,'2026-09-20T06:00:00Z'),listed(7003,12,'2026-10-04T09:00:00Z',fork=True),
+               listed(7004,470,'2026-10-04T10:00:00Z'),listed(7005,471,'2026-10-04T11:00:00Z'),
+               listed(7006,602,'2026-10-04T12:00:00Z'),dict(listed(7007,480,'2026-10-04T13:00:00Z'),size_in_bytes=e2e_records.ARTIFACT_BYTES+1)]
     def get(self,path,params=None): return dict(artifacts=self.artifacts)
-    def download_artifact(self,repo,ident,*,max_bytes): return records_zip(f'artifact {ident}')
+    def download_artifact(self,repo,ident,*,max_bytes): return records_zip(ident)
 checkout=root/'.e2e/records-checkout'
 shutil.rmtree(checkout,ignore_errors=True)
-collected=e2e_records.refresh(RecordSource(),repo,checkout,doc,records_now-timedelta(days=1),bundle=4242,downloads=3)
+collected=e2e_records.refresh(RecordSource(),repo,checkout,doc,records_now-timedelta(days=1),bundle=4242,downloads=6)
 site=root/'.e2e/site/github-status-board'
 for path,content in collected.files.items():
     target=site/path.removeprefix('site/'); target.parent.mkdir(parents=True,exist_ok=True); target.write_text(content)
