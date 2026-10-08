@@ -523,3 +523,24 @@ a.e2e-point:hover { outline-color: var(--link); text-decoration: none; }
 @media (max-width: 700px) {
   .e2e-case-title { flex-basis: 100%; }
 }
+
+/* GitCode sync page */
+.tabs a .tab-count { display: inline-block; min-width: 16px; margin-left: 4px; padding: 0 5px; border-radius: 8px; background: var(--critical); color: #fff; font-size: 11px; line-height: 16px; text-align: center; }
+tr.sync-error td { background: rgba(208, 59, 59, .07); }
+.sync-error-text { color: var(--critical); }
+.sync-detail { min-width: 260px; overflow-wrap: anywhere; }
+.sync-toolbar { display: inline-flex; gap: 6px; align-items: center; margin: 0 0 8px; font-size: 13px; color: var(--ink-2); }
+#tab-sync .card { margin-top: 12px; }
+#tab-sync .banner { margin-bottom: 10px; }
+.sync-reasons { margin: 4px 0 0; padding-left: 18px; color: var(--ink-2); }
+/* Narrow screens stack each row so status and error summary stay in view. */
+@media (max-width: 700px) {
+  #tab-sync table, #tab-sync tbody, #tab-sync tr, #tab-sync td { display: block; width: 100%; }
+  #tab-sync thead { display: none; }
+  #tab-sync tr { border-bottom: 1px solid var(--grid); padding: 6px 0; }
+  #tab-sync td { border: 0; padding: 2px 8px; }
+  #tab-sync td[data-label]::before { content: attr(data-label) "："; color: var(--muted); font-size: 12px; margin-right: 4px; }
+  #tab-sync td .sub { display: inline; margin-left: 4px; }
+  .sync-detail { min-width: 0; }
+}
+td.nowrap { white-space: nowrap; }

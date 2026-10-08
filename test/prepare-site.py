@@ -261,3 +261,35 @@ empty=json.loads(json.dumps(doc));empty['quality']['runs']=[];empty['releases']=
 empty['sections']={k:dict(status='error',data=None,notes=[],error=dict(kind='error',message='结果未知')) for k in empty['sections']}
 empty['board']['items']=[];empty['details']={};empty['line_sections']={}
 export_site(root/'.e2e/site/empty',empty)
+
+# GitCode sync page: a bot response with failures, divergence, a hostile title and
+# credential-shaped error text, passed through the same public_document() as publish.py.
+from gsb import gitcode_sync
+FAKE_TOKEN = 'gitcode-e2e-fake-token-0123456789'
+gh_pr = lambda n: f'https://github.com/openJiuwen-ai/sciencediscovery/pull/{n}'
+mr = lambda n: f'https://gitcode.com/openJiuwen/sciencediscovery/merge_requests/{n}'
+def sync_record(ident, minute, pr, action, status, summary, *, mr_number=None, code=None, error=None, sha='a' * 40, title='feat(reader): stream long PDFs'):
+    return dict(id=ident, time=f'2026-10-07T06:{minute:02d}:00.000Z', pr=pr, pr_url=gh_pr(pr), title=title, action=action, head_sha=sha,
+                mr=mr_number, mr_url=mr(mr_number) if mr_number else None, status=status, summary=summary, error_code=code, error=error)
+bot_payload = dict(ok=True, enabled=True, source='openJiuwen-ai/sciencediscovery', target='openJiuwen/sciencediscovery', check_name='CodeCheck (GitCode)', records=[
+    sync_record('s1', 1, 119, 'opened', 'success', '已推送原始 head 1111111，已创建 GitCode MR !9', mr_number=9, sha='1' * 40),
+    sync_record('s2', 5, 119, 'merged', 'success', '已在 GitHub 合并；已关闭 GitCode MR !9（未调用合并接口）', mr_number=9, sha='1' * 40),
+    sync_record('s3', 10, 120, 'opened', 'success', '已推送原始 head aaaaaaa，已创建 GitCode MR !11', mr_number=11),
+    sync_record('s4', 20, 121, 'synchronize', 'error', '同步失败（第 1 次，已停止重试）', code='permission_denied', sha='b' * 40, title='<script>alert(1)</script> fix sync',
+                error=f'GitCode receive-pack returned HTTP 403: credentials rejected token={FAKE_TOKEN} via https://sync-bot:{FAKE_TOKEN}@gitcode.com/x.git'),
+    sync_record('s5', 30, 122, 'synchronize', 'error', '已推送原始 head ccccccc，已更新 GitCode MR !12；两边历史不一致，GitCode diff 可能包含本 PR 以外的提交', mr_number=12,
+                code='history_diverged', sha='c' * 40, error='GitCode MR !12 lists 9 commits but GitHub PR #122 has 3; the GitCode diff may include commits outside this PR'),
+    sync_record('s6', 40, 120, 'codecheck', 'error', 'CodeCheck 未通过（ci-failed），已写 GitHub Check', mr_number=11, code='codecheck_failed', error='GitCode labelled the merge request ci-failed'),
+], pulls=[
+    dict(pr=122, pr_url=gh_pr(122), title='refactor: split runner', base='main', head_sha='c' * 40, mr=12, mr_url=mr(12), sync_status='diverged', check='pending',
+         error_code='history_diverged', error='GitCode MR !12 lists 9 commits but GitHub PR #122 has 3; the GitCode diff may include commits outside this PR', updated_at='2026-10-07T06:30:00Z', pending=True),
+    dict(pr=121, pr_url=gh_pr(121), title='<script>alert(1)</script> fix sync', base='main', head_sha='b' * 40, mr=None, mr_url=None, sync_status='failed', check='failure',
+         error_code='permission_denied', error=f'Authorization: Bearer {FAKE_TOKEN} rejected', updated_at='2026-10-07T06:20:00Z', pending=False),
+    dict(pr=120, pr_url=gh_pr(120), title='feat(reader): stream long PDFs', base='main', head_sha='a' * 40, mr=11, mr_url=mr(11), sync_status='synced', check='failure',
+         error_code=None, error=None, updated_at='2026-10-07T06:10:00Z', pending=False),
+    dict(pr=119, pr_url=gh_pr(119), title='docs: tidy', base='main', head_sha='1' * 40, mr=9, mr_url=mr(9), sync_status='merged', check='cancelled',
+         error_code=None, error=None, updated_at='2026-10-07T06:05:00Z', pending=False),
+])
+sync_doc = gitcode_sync.public_document(bot_payload, None, '2026-10-07T07:00:00Z')
+assert FAKE_TOKEN not in gitcode_sync.encode(sync_doc)
+(site / 'data/gitcode-sync.json').write_text(gitcode_sync.encode(sync_doc), encoding='utf-8')

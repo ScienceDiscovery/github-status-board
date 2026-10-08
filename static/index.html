@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GitHub 状态看板</title>
 <!-- Keep the UI bundle on one cache version so GitHub Pages cannot mix old CSS with new JS. -->
-<link rel="stylesheet" href="./style.css?v=20261007.3">
+<link rel="stylesheet" href="./style.css?v=20261008.1">
 </head>
 <body>
 <header class="topbar">
@@ -22,6 +22,7 @@
     <a href="#coverage" data-tab="coverage">Coverage</a>
     <a href="#releases" data-tab="releases">版本验证</a>
     <a href="#ops" data-tab="ops">运维</a>
+    <a href="#sync" data-tab="sync">GitCode 同步</a>
   </nav>
   <div class="topbar-status">
     <div class="meta"><span>快照更新于</span><time id="meta">载入中…</time></div>
@@ -40,6 +41,7 @@
   <section id="tab-coverage" class="tab"></section>
   <section id="tab-releases" class="tab"></section>
   <section id="tab-ops" class="tab"></section>
+  <section id="tab-sync" class="tab"></section>
 </main>
 
 
@@ -47,7 +49,8 @@
 <dialog id="board-settings" class="settings"></dialog>
 <dialog id="score-trend-dialog" aria-labelledby="score-trend-title"></dialog>
 <div id="tooltip" class="tooltip hidden"></div>
-<script src="./board-local.js?v=20261007.3"></script><script src="./app.js?v=20261007.3"></script>
-<script src="./board.js?v=20261007.3"></script>
+<script src="./board-local.js?v=20261008.1"></script><script src="./app.js?v=20261008.1"></script>
+<script src="./board.js?v=20261008.1"></script>
+<script src="./gitcode-sync.js?v=20261008.1"></script>
 </body>
 </html>

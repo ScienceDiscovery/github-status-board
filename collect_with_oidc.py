@@ -15,6 +15,8 @@ import urllib.request
 from collection_context import collection_context
 
 ROOT = Path(__file__).resolve().parent
+# GitCode sync records fetched from the bot for publish.py; not uploaded anywhere by itself.
+SYNC_RECORDS = ROOT / ".tmp" / "gitcode-sync.json"
 
 
 class CredentialError(RuntimeError):
@@ -26,15 +28,15 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def request_json(url, bearer, body=None, method="GET"):
+def request_json(url, bearer, body=None, method="GET", limit=65536):
     request = urllib.request.Request(url, method=method, headers={
         "Authorization": "Bearer " + bearer, "Accept": "application/json",
         "Content-Type": "application/json", "User-Agent": "dashboard-collector",
     }, data=None if body is None else json.dumps(body).encode())
     try:
         with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
-            raw = response.read(65537)
-            if len(raw) > 65536:
+            raw = response.read(limit + 1)
+            if len(raw) > limit:
                 raise CredentialError("credential response too large")
             return json.loads(raw) if raw else None
     except urllib.error.HTTPError as error:
@@ -65,6 +67,18 @@ def oidc_identity(audience):
     return token
 
 
+def sync_records(url, identity):
+    """GitCode sync records are optional evidence: a failure becomes a stale marker, never a failed collection."""
+    try:
+        value = request_json(url, identity, {}, "POST", limit=2_000_000)
+        return value if isinstance(value, dict) else {"ok": False, "error": "invalid response"}
+    except CredentialError as error:
+        status = getattr(error, "status", None)
+        return {"ok": False, "error": f"bot returned HTTP {status}" if isinstance(status, int) else "bot unreachable"}
+    except Exception:
+        return {"ok": False, "error": "bot unreachable"}
+
+
 def main():
     grants = []
     stage = "configuration"
@@ -91,9 +105,13 @@ def main():
             expires = datetime.fromisoformat(grant.get("expires_at", "").replace("Z", "+00:00"))
             if grant.get("repository") != context[purpose] or grant.get("purpose") != purpose or (expires - datetime.now(timezone.utc)).total_seconds() < 600:
                 raise CredentialError("App token scope or lifetime mismatch")
+        # Same broker, same OIDC identity; the bot returns only sanitized records for this dashboard's source.
+        stage = "GitCode sync records"
+        SYNC_RECORDS.parent.mkdir(parents=True, exist_ok=True)
+        SYNC_RECORDS.write_text(json.dumps(sync_records(urllib.parse.urlunsplit(endpoint._replace(path="/actions/gitcode-sync")), identity)), encoding="utf-8")
         # The collector receives neither OIDC credentials nor any App private key.
         child_env = {k: v for k, v in os.environ.items() if k not in {"ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "GH_TOKEN", "GITHUB_TOKEN", "GSB_PUBLISH_TOKEN"} and "PRIVATE_KEY" not in k}
-        child_env.update(GITHUB_TOKEN=grants[0], GSB_PUBLISH_TOKEN=grants[1])
+        child_env.update(GITHUB_TOKEN=grants[0], GSB_PUBLISH_TOKEN=grants[1], GSB_GITCODE_SYNC_FILE=str(SYNC_RECORDS))
         return subprocess.run([sys.executable, str(ROOT / "publish.py"), "--repo", context["source"], "--publish-repo", context["target"], "--output", ".tmp/collected-site", "--incremental"], env=child_env, cwd=ROOT, check=False).returncode
     except Exception as error:
         status = getattr(error, "status", None)

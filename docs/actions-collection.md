@@ -20,6 +20,8 @@ App 的 Actions 写权限在 App 注册页 **Permissions & events → Repository
 
 工作流接受 `workflow_dispatch`，并在每小时第 17、47 分钟定时续跑；固定 checkout main，禁止 checkout 输入指定的任意分支。输入 `source_repository` 可省略，填写时必须匹配本站源仓；`request_id` 为诊断用刷新编号，不包含原始 Webhook、私钥或安装令牌。可在 Actions 的 **Collect dashboard data** 手动执行，也可以由 Bot 调用 GitHub workflow dispatch API。
 
+兑换令牌后，客户端用同一 OIDC 身份向同一 Worker 的 `/actions/gitcode-sync` 读取 GitCode 同步记录，经 `GSB_GITCODE_SYNC_FILE` 交给发布器；读取失败只把页面标为过期，不影响采集。见 [GitCode 同步记录](gitcode-sync.md)。
+
 采集步骤从环境变量读取源仓 `GITHUB_TOKEN` 和目标仓 `GSB_PUBLISH_TOKEN`，运行 `publish.py --repo ... --publish-repo ... --output .tmp/collected-site --incremental`。临时目录不上传，不写回原始测试 artifact。发布器基于本轮 checkout 的准确 HEAD，将 `.sync/` 进度及变化的 `site/` 分片放入一个 Git 提交。保留源码和工作流；并发冲突直接失败，下轮从新 main 续跑。只有 site 变化才触发 Pages。详情见 [增量同步](incremental-history.md)。
 
 E2E 执行记录的 HTML 报告不进入提交：采集成功后，`collect.yml` 把新读取的报告上传为本次运行的 `e2e-html` 产物，保留到对应源产物的 `expires_at`；`pages.yml` 以 `actions: read` 读取这些产物并在部署前挂载，取不到时页面改为 GitHub 产物链接。见 [E2E 执行记录](e2e-run-records.md)。

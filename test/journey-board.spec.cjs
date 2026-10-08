@@ -23,7 +23,7 @@ test('all existing pages render; only static requests and no promotional copy', 
   await expect(page.locator('#global-banner')).toContainText('超过两小时');
   await expect(page.locator('body')).not.toContainText('把进展与风险放在同一页');
   await page.screenshot({path:shot('overview-desktop'),fullPage:true});
-  await expect(page.locator('.topbar #tabs a')).toHaveCount(8);
+  await expect(page.locator('.topbar #tabs a')).toHaveCount(9);
   await expect(page.locator('.topbar #tabs')).not.toContainText('构建报告');
   await expect(page.locator('.topbar #tabs')).not.toContainText('历史数据');
   await expect(page.locator('body > footer')).toHaveCount(0);
@@ -32,7 +32,7 @@ test('all existing pages render; only static requests and no promotional copy', 
   const tabsBox=await page.locator('#tabs').boundingBox(), timeBox=await page.locator('#meta').boundingBox();
   expect(timeBox.x).toBeGreaterThan(tabsBox.x+tabsBox.width);
   expect(timeBox.y).toBeLessThan(tabsBox.y+tabsBox.height);
-  for (const id of ['issues','prs','ci','tests','coverage','releases','ops']) {
+  for (const id of ['issues','prs','ci','tests','coverage','releases','ops','sync']) {
     await page.locator(`[data-tab="${id}"]`).click();
     await expect(page.locator(`#tab-${id}`)).toBeVisible();
     await expect(page.locator(`#tab-${id}`)).not.toContainText('渲染出错');

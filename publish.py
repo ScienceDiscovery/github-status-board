@@ -11,11 +11,14 @@ import shutil
 import subprocess
 import sys
 
+from gsb import gitcode_sync
 from gsb.github import GitHub, GitHubError, discover_token
 from gsb.project import REPO_RE, build_project
 
 ROOT = Path(__file__).resolve().parent
-STATIC_FILES = ("index.html", "app.js", "style.css", "board.js", "board-local.js")
+STATIC_FILES = ("index.html", "app.js", "style.css", "board.js", "board-local.js", "gitcode-sync.js")
+# Written only when the collect workflow fetched GitCode sync records from the bot.
+SYNC_DATA = "data/gitcode-sync.json"
 
 
 def deployment_for(repo, settings, target=None):
@@ -49,7 +52,7 @@ def publish(gh, site, repository, branch="main", *, source_token=None):
     # source files and workflows; the bot's Contents token changes only site/.
     old = gh.get(prefix + "/git/ref/heads/" + branch)["object"]["sha"]
     base_tree = gh.get(prefix + "/git/commits/" + old)["tree"]["sha"]
-    files = [*STATIC_FILES, "data/snapshot.json", ".nojekyll"]
+    files = [*STATIC_FILES, "data/snapshot.json", ".nojekyll", *([SYNC_DATA] if (Path(site) / SYNC_DATA).exists() else [])]
     tree = [{"path": "site/" + p, "mode": "100644", "type": "blob", "content": (Path(site) / p).read_text(encoding="utf-8")} for p in files]
     for entry in tree:
         if any(token and token in entry["content"] for token in (gh.token, source_token)):
@@ -94,7 +97,7 @@ def publish_batch(gh, repository, branch, base, files, *, source_token=None):
     if gh.get(prefix + "/git/ref/heads/" + branch)["object"]["sha"] != base:
         raise ValueError("publication conflict; retry from latest checkout")
     for path, content in files.items():
-        allowed = path in {"site/" + x for x in (*STATIC_FILES, "data/snapshot.json", ".nojekyll")} or path in {".sync/state.json", ".sync/aggregate.json", ".sync/supplements.json", ".sync/tagged.json", ".sync/coverage.json", ".sync/coverage-sources.json"} or re.fullmatch(r"site/data/history/(manifest\.json|(?:index|records|catalog)/(?:issues|prs|runs|releases)/[0-9]{12}\.json)", path) or re.fullmatch(r"site/data/e2e/(?:index|[0-9]{1,20})\.json", path)
+        allowed = path in {"site/" + x for x in (*STATIC_FILES, "data/snapshot.json", ".nojekyll", SYNC_DATA)} or path in {".sync/state.json", ".sync/aggregate.json", ".sync/supplements.json", ".sync/tagged.json", ".sync/coverage.json", ".sync/coverage-sources.json"} or re.fullmatch(r"site/data/history/(manifest\.json|(?:index|records|catalog)/(?:issues|prs|runs|releases)/[0-9]{12}\.json)", path) or re.fullmatch(r"site/data/e2e/(?:index|[0-9]{1,20})\.json", path)
         # None deletes a file; only E2E run records are ever removed.
         if content is None and not path.startswith("site/data/e2e/"):
             raise ValueError("unsafe public file")
@@ -156,6 +159,10 @@ def main():
             snapshot["deployment"] = deployment
         export_site(args.output, snapshot)
         result = {"ok": True, "repo": args.repo, "generated_at": snapshot["generated_at"]}
+        sync_doc = gitcode_sync.load(os.environ.get("GSB_GITCODE_SYNC_FILE"), ROOT / "site" / SYNC_DATA, snapshot["generated_at"])
+        if sync_doc is not None:
+            (Path(args.output) / SYNC_DATA).write_text(gitcode_sync.encode(sync_doc), encoding="utf-8")
+            result["gitcode_sync"] = {"available": sync_doc["available"], "records": len(sync_doc["records"])}
         if records:
             records.write_preview(args.output)
             result["e2e_records"] = records.summary
@@ -169,6 +176,8 @@ def main():
                 files = sync.files()
                 files.update({"site/" + name: (Path(args.output) / name).read_text() for name in (*STATIC_FILES, ".nojekyll")})
                 files["site/data/snapshot.json"] = encode(snapshot)
+                if sync_doc is not None:
+                    files["site/" + SYNC_DATA] = gitcode_sync.encode(sync_doc)
                 if records:
                     files.update(records.files)
                     # New HTML reports leave through the workflow's Actions artifact, never git.

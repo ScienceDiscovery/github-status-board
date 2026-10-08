@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import collect_with_oidc as client
+import tempfile
 
 
 class OIDCCollectionTests(unittest.TestCase):
@@ -18,8 +19,12 @@ class OIDCCollectionTests(unittest.TestCase):
                     'SDBOT_TOKEN_AUDIENCE': 'test-audience', 'ACTIONS_ID_TOKEN_REQUEST_URL': 'https://issuer.example/oidc?x=1',
                     'ACTIONS_ID_TOKEN_REQUEST_TOKEN': 'runner-auth', 'SDBOT_GITHUB_APP_PRIVATE_KEY': 'must-not-inherit'}
         self.calls = []
+        temp = tempfile.TemporaryDirectory(dir=client.ROOT / '.tmp' if (client.ROOT / '.tmp').is_dir() else None)
+        self.addCleanup(temp.cleanup)
+        patcher = patch.object(client, 'SYNC_RECORDS', Path(temp.name) / 'gitcode-sync.json')
+        patcher.start(); self.addCleanup(patcher.stop)
 
-    def request(self, url, bearer, body=None, method='GET'):
+    def request(self, url, bearer, body=None, method='GET', **kwargs):
         self.calls.append((url, bearer, body, method))
         if url.startswith('https://issuer.example/'):
             self.assertIn('audience=test-audience', url)
@@ -28,6 +33,9 @@ class OIDCCollectionTests(unittest.TestCase):
         if method == 'DELETE':
             return None
         self.assertEqual(bearer, 'oidc-identity')
+        if url == 'https://broker.example/actions/gitcode-sync':
+            self.assertEqual((body, method), ({}, 'POST'))
+            return {'ok': True, 'enabled': True, 'source': self.source, 'target': 'openJiuwen/sciencediscovery', 'records': [], 'pulls': []}
         purpose = body['purpose']
         return {'token': purpose + '-token', 'repository': self.source if purpose == 'source' else self.target,
                 'purpose': purpose, 'expires_at': (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()}
@@ -84,3 +92,28 @@ class OIDCCollectionTests(unittest.TestCase):
         out = io.StringIO()
         with patch('sys.stdout', out): client.mask('a%\nb\r')
         self.assertEqual(out.getvalue(), '::add-mask::a%25%0Ab%0D\n')
+
+    def test_sync_records_use_the_same_identity_and_reach_publish_as_a_file(self):
+        with patch.dict(os.environ, self.env, clear=True), patch.object(client, 'request_json', side_effect=self.request), \
+             patch.object(client, 'mask'), patch.object(client.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as run:
+            self.assertEqual(client.main(), 0)
+        env = run.call_args.kwargs['env']
+        self.assertEqual(env['GSB_GITCODE_SYNC_FILE'], str(client.SYNC_RECORDS))
+        self.assertEqual(json.loads(client.SYNC_RECORDS.read_text())['enabled'], True)
+        records = [c for c in self.calls if c[0].endswith('/actions/gitcode-sync')]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0][1], 'oidc-identity')
+
+    def test_unreadable_sync_records_do_not_fail_collection(self):
+        def request(url, bearer, body=None, method='GET', **kwargs):
+            if url.endswith('/actions/gitcode-sync'):
+                failure = client.CredentialError('private upstream body')
+                failure.status = 503
+                raise failure
+            return self.request(url, bearer, body, method)
+        with patch.dict(os.environ, self.env, clear=True), patch.object(client, 'request_json', side_effect=request), \
+             patch.object(client, 'mask'), patch.object(client.subprocess, 'run', return_value=SimpleNamespace(returncode=0)):
+            self.assertEqual(client.main(), 0)
+        written = json.loads(client.SYNC_RECORDS.read_text())
+        self.assertEqual(written, {'ok': False, 'error': 'bot returned HTTP 503'})
+
