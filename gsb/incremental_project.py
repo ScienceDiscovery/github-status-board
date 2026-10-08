@@ -10,7 +10,7 @@ from .collectors import Context, collect_ci, summarize_issues, summarize_prs, da
 from .coverage_store import CoverageStore
 from .history import read_json, encode
 from .lines import canonical_branch, configured_lines, line_of, target_of
-from .public_sections import public_ops, public_tests, score_history, envelope
+from .public_sections import public_ops, public_tests, score_history, daily_score_runs, latest_score_report, envelope
 from .sync import stamp, date
 
 
@@ -275,9 +275,14 @@ def build_snapshot(sync):
         if tests.get("data"):
             # Refresh test metrics without re-fetching the repository tree/Codecov.
             tests["data"]["executed"] = _executed(runs)
+            tests["data"]["score_report"] = latest_score_report(runs)
             daily = history.select("runs", lambda r, key=key: r.get("channel") == "daily"
                                    and run_line.get(r["id"]) == key, limit=120)
             tests["data"]["score_history"] = score_history(daily)
+            tests["data"]["score_runs"] = [dict(run_id=r["id"], attempt=r.get("attempt", 1), branch=r.get("branch"),
+                created_at=r.get("created_at"), url=r.get("url"), event=r.get("event"), conclusion=r.get("conclusion"),
+                duration_s=r.get("duration_s"), artifact_status=next((t.get("status") for t in r.get("tests", [])
+                    if t.get("name", "").startswith("real-e2e-results")), "missing")) for r in daily_score_runs(daily)]
         for row in history.select("runs", lambda r, key=key: bool(r.get("channel")) and run_line.get(r["id"]) == key, limit=100):
             if row.get("coverage") and tests.get("data") and not tests["data"].get("coverage", {}).get("languages"):
                 tests["data"]["coverage"].update(source=f"Actions run {row['id']} / attempt {row['attempt']}", value=row["coverage"][0])

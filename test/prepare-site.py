@@ -45,7 +45,11 @@ real_scores += [
     dict(case='TC-E2E-01',family='research-team',delivery='passed',quality_status='scored',duration_ms=2850000,metrics=[dict(label='Judge total',value=86.25,unit='score100')]),
     dict(case='PUCT-COMPRESS',family='evolve-compression',delivery='passed',quality_status='scored',duration_ms=534000,metrics=[dict(label='Held-out test',value=0.695296,unit='ratio'),dict(label='LLM judge',value=86.25,unit='score100')]),
 ]
-runs[1]['tests'].insert(0,dict(name='real-e2e-results',layer='e2e',status='available',counts=dict(tests=9,passed=9,failed=0,skipped=0,flaky=0),cases=[],scores=real_scores,artifact_id=210,url=runs[1]['url']+'/artifacts/210',created_at=time))
+latest_scores=json.loads(json.dumps(real_scores))
+latest_scores[0]['delivery'] = 'failed'
+latest_scores[0]['metrics'][0]['value'] = None
+runs[1]['tests'].insert(0,dict(name='real-e2e-results',layer='e2e',status='available',counts=dict(tests=9,passed=9,failed=0,skipped=0,flaky=0),cases=[],scores=latest_scores,artifact_id=210,url=runs[1]['url']+'/artifacts/210',created_at=time))
+runs[1]['tests'][0]['counts'].update(passed=8, failed=1)
 class GH:
     def get_text_file(self,*args): return '{"scripts":{"test":"node --test"}}'
     def paginate(self,*args,**kwargs): return []
@@ -71,9 +75,14 @@ for day,shift in ((4,-0.03),(6,-0.024),(8,-0.021),(10,-0.012),(12,-0.015),(14,-0
                 metric['value']=round(value,4)
     if day==17:
         scores[-1]['metrics'][-1].update(value=None,status='error')
+    if day==4:
+        scores[-2]['delivery']='failed'
+        scores[-2]['metrics'][0]['value']=None
     historical.append(dict(id=800+day,attempt=1,created_at=when,url=base+f'/actions/runs/{800+day}',tests=[
         dict(name='real-e2e-results',url=base+f'/actions/runs/{800+day}/artifacts/{900+day}',scores=scores)]))
 tests['score_history']=score_history([runs[1],*historical])
+tests['score_runs']=[dict(run_id=r['id'],attempt=r['attempt'],created_at=r['created_at'],url=r['url'],
+    conclusion=r.get('conclusion','success'),duration_s=r.get('duration_s'),artifact_status='available') for r in [runs[1],*reversed(historical)]]
 node_totals=dict(lines=dict(covered=48878,total=58864,percentage=83.04),branches=dict(covered=13987,total=17548,percentage=79.71),functions=dict(covered=3928,total=4701,percentage=83.56))
 python_totals=dict(lines=dict(covered=5845,total=8932,percentage=65.44),branches=dict(covered=1507,total=3086,percentage=48.83))
 # Per-file totals in nested directories exercise the coverage tree.

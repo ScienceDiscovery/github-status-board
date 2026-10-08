@@ -272,7 +272,14 @@ a.ci-run:hover, a.ci-run:focus-visible { outline: 2px solid var(--ink); outline-
 .score-chart { width: 100%; height: auto; display: block; }
 .score-chart .score-grid { stroke: var(--grid); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .score-chart .score-line { fill: none; stroke: var(--s1); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.score-chart .score-line.carried { stroke-dasharray: 5 4; }
 .score-chart .score-dot { fill: var(--surface); stroke: var(--s1); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+.score-chart .score-dot.carried { stroke-dasharray: 3 2; }
+.score-chart .score-failed { fill: var(--bad, #c73131); font-size: 20px; font-weight: 700; }
+.score-run-summary { margin: 0 0 12px; }
+.score-run-row { margin-top: 5px; font-variant-numeric: tabular-nums; }
+.score-run-row .bad { color: var(--bad, #c73131); font-weight: 700; }
+.score-run-row .good { color: var(--good, #108237); font-weight: 700; }
 .score-series.duration .score-line { stroke: var(--s2); }
 .score-series.duration .score-dot { stroke: var(--s2); }
 .score-chart text { fill: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }

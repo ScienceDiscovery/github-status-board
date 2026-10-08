@@ -704,6 +704,8 @@
     if (metric.unit === 'ratio') return value.toFixed(4);
     return n(value);
   };
+  const scoreSource = (metric) => metric.source === 'carried' ? '（沿用上次实测）'
+    : metric.source === 'baseline' ? '（无历史，按 0 展示）' : '';
   const scoreTick = (value, unit) => unit === 'percent' ? `${value.toFixed(1)}%`
     : unit === 'score100' ? value.toFixed(1) : unit === 'ratio' ? value.toFixed(3)
       : unit === 'duration_ms' ? dur(value / 1000) : n(value);
@@ -725,7 +727,9 @@
     const pad = Math.max((high - low) * .18, metric.unit === 'ratio' ? .005 : metric.unit === 'duration_ms' ? 60000 : 1);
     const floor = metric.unit === 'ratio' || metric.unit === 'percent' || metric.unit === 'score100' || metric.unit === 'duration_ms' ? 0 : -Infinity;
     const ceiling = metric.unit === 'ratio' ? 1 : metric.unit === 'percent' || metric.unit === 'score100' ? 100 : Infinity;
-    const yMin = Math.min(low, Math.max(floor, low - pad)), yMax = Math.max(high, Math.min(ceiling, high + pad));
+    const yMin = Math.min(low, Math.max(floor, low - pad));
+    const yMax = low === 0 && high === 0 && Number.isFinite(ceiling)
+      ? ceiling : Math.max(high, Math.min(ceiling, high + pad));
     const range = yMax - yMin || 1;
     const timeMin = Date.parse(`${selectedRange.start}T00:00:00+08:00`);
     const xAt = (index) => left + ((Date.parse(points[index].created_at) - timeMin) / (7 * 86400000)) * (w - left - right);
@@ -734,19 +738,19 @@
       const y = yAt(value).toFixed(1);
       return `<line class="score-grid" x1="${left}" x2="${w - right}" y1="${y}" y2="${y}"></line><text x="${left - 8}" y="${(Number(y) + 4).toFixed(1)}" text-anchor="end">${esc(scoreTick(value, metric.unit))}</text>`;
     }).join('');
-    const segments = [];
-    let current = [];
-    values.forEach((value, index) => {
-      if (value == null) { if (current.length) segments.push(current); current = []; }
-      else current.push([xAt(index), yAt(value)]);
-    });
-    if (current.length) segments.push(current);
-    const lines = segments.filter((part) => part.length > 1).map((part) => `<path class="score-line" d="${part.map(([x, y], index) => `${index ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ')}"></path>`).join('');
+    const sourceAt = (index) => (points[index].metrics || []).find((item) => `${item.label}\u0000${item.unit}` === key)?.source;
+    const lines = values.map((value, index) => {
+      if (!index || value == null || values[index - 1] == null) return '';
+      const carried = metric.unit !== 'duration_ms' && [sourceAt(index - 1), sourceAt(index)].some((source) => source === 'carried' || source === 'baseline');
+      return `<path class="score-line${carried ? ' carried' : ''}" d="M${xAt(index - 1).toFixed(1)},${yAt(values[index - 1]).toFixed(1)} L${xAt(index).toFixed(1)},${yAt(value).toFixed(1)}"></path>`;
+    }).join('');
     const dots = values.map((value, index) => {
       if (value == null) return '';
       const point = points[index];
-      const label = `${date(point.created_at)} · ${metric.label} ${scoreTick(value, metric.unit)}\nrun ${point.run_id} · 第 ${point.attempt} 次 · 交付 ${point.delivery || '未知'} · 评分 ${point.quality_status || '未知'}`;
-      return `<circle class="score-dot" cx="${xAt(index).toFixed(1)}" cy="${yAt(value).toFixed(1)}" r="4"${tip(label)}><title>${esc(label)}</title></circle>`;
+      const source = metric.unit === 'duration_ms' ? '' : sourceAt(index);
+      const label = `${date(point.created_at)} · ${metric.label} ${scoreTick(value, metric.unit)}${source === 'carried' ? '（沿用上次实测）' : source === 'baseline' ? '（无历史，按 0 展示）' : ''}\nrun ${point.run_id} · 第 ${point.attempt} 次 · 交付 ${point.delivery || '未知'} · 评分 ${point.quality_status || '未知'}`;
+      if (point.delivery === 'failed' && metric.unit !== 'duration_ms') return `<text class="score-failed" x="${xAt(index).toFixed(1)}" y="${(yAt(value) + 5).toFixed(1)}" text-anchor="middle"${tip(label)}>×<title>${esc(label)}</title></text>`;
+      return `<circle class="score-dot${source === 'carried' || source === 'baseline' ? ' carried' : ''}" cx="${xAt(index).toFixed(1)}" cy="${yAt(value).toFixed(1)}" r="4"${tip(label)}><title>${esc(label)}</title></circle>`;
     }).join('');
     const axis = Array.from({ length: 7 }, (_, index) => `<text x="${(left + (index + .5) * (w - left - right) / 7).toFixed(1)}" y="${h - 6}" text-anchor="middle">${dayLabel(addDays(selectedRange.start, index))}</text>`).join('');
     return `<svg class="score-chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(metric.label)}变化趋势">${grid}${lines}${dots}${axis}</svg>`;
@@ -770,18 +774,19 @@
     const toolbar = selectedRange ? `<div class="score-week-toolbar"><button class="btn small" data-score-week="older"${STATE.scoreWeekOffset >= selectedRange.maxOffset ? ' disabled' : ''}>‹ 上一周</button><strong>${selectedRange.recent ? '最新 · ' : ''}${dayLabel(selectedRange.start)}–${dayLabel(selectedRange.end)}</strong><button class="btn small" data-score-week="newer"${STATE.scoreWeekOffset === 0 ? ' disabled' : ''}>下一周 ›</button><button class="btn small" data-score-week="latest"${STATE.scoreWeekOffset === 0 ? ' disabled' : ''}>最新</button></div>` : '';
     const charts = visible.length ? [...metrics.values()].map((metric) => `<section class="score-series"><h3>${esc(metric.label)} <span class="muted">${esc(metric.unit === 'score100' ? '/ 100' : metric.unit === 'percent' ? '%' : metric.unit === 'ratio' ? '比值' : '')}</span></h3>${scoreTrendChart(visible, metric, selectedRange)}</section>`).join('') : '';
     const durationChart = visible.length ? `<section class="score-series duration"><h3>运行耗时 <span class="muted">每次运行</span></h3>${scoreTrendChart(visible, { label: '运行耗时', unit: 'duration_ms' }, selectedRange)}</section>` : '';
-    dialog.innerHTML = `<div class="score-dialog-head"><div><h2 id="score-trend-title">${esc(caseName)} · 分数与耗时趋势</h2><p class="muted">按北京时间展示最近 7 天，历史按自然周查看；共保留 ${points.length} 次记录。${data.mock_real_e2e ? '当前为本地模拟记录。' : ''}各指标使用自己的纵轴，分数仅供观察，不改变 CI 结论。</p></div><form method="dialog"><button class="btn small" aria-label="关闭分数趋势">关闭</button></form></div>${toolbar}${!visible.length && selectedRange ? empty('该周没有此用例的运行记录') : ''}${visible.length === 1 ? '<p class="muted">该范围目前只有一次记录，后续运行后会形成曲线。</p>' : ''}${charts}${durationChart}${visible.length ? `<div class="score-run-links">${data.mock_real_e2e ? '本地模拟历史数据，仅用于预览。' : `来源：${visible.slice(-5).reverse().map((point) => link(point.url, `run ${esc(point.run_id)}${point.attempt > 1 ? ` · 第 ${point.attempt} 次` : ''}`)).join(' · ')}`}</div>` : ''}`;
+    dialog.innerHTML = `<div class="score-dialog-head"><div><h2 id="score-trend-title">${esc(caseName)} · 分数与耗时趋势</h2><p class="muted">按北京时间展示最近 7 天，历史按自然周查看；共保留 ${points.length} 个已读取的逐用例点。${data.mock_real_e2e ? '当前为本地模拟记录。' : ''}× 仅表示该用例交付失败，分数沿用上次实测；无历史分数按 0 展示。测试通过但评分缺失时留空。耗时只显示实测值。分数不改变 CI 结论。</p></div><form method="dialog"><button class="btn small" aria-label="关闭分数趋势">关闭</button></form></div>${toolbar}${!visible.length && selectedRange ? empty('该范围没有可读取的此用例结果') : ''}${visible.length === 1 ? '<p class="muted">该范围目前只有一次逐用例记录，后续有可读产物时才会形成曲线。</p>' : ''}${charts}${durationChart}${visible.length ? `<div class="score-run-links">${data.mock_real_e2e ? '本地模拟历史数据，仅用于预览。' : `来源：${visible.slice(-5).reverse().map((point) => link(point.url, `run ${esc(point.run_id)}${point.attempt > 1 ? ` · 第 ${point.attempt} 次` : ''}`)).join(' · ')}`}</div>` : ''}`;
     if (!dialog.open) dialog.showModal();
   }
   const deliveryBadge = (value) => badge(value === 'passed' ? '通过' : value === 'failed' ? '失败' : value || '未知', value === 'passed' ? 'good' : value === 'failed' ? 'bad' : 'warn');
-  function realScoresSection(executed, mockPreview = false) {
-    const report = executed.find((entry) => entry.artifact.startsWith('real-e2e-results') && entry.scores?.length);
-    let html = sectionHead('Real E2E 质量评分', mockPreview ? '本地模拟评分与耗时，仅用于预览；不代表 CI 实测结果' : '质量分数仅作观察，不设置通过门槛；交付结果单独显示');
-    if (!report) return html + `<div class="banner warn"><span class="icon">▲</span><div><div class="title">尚未读取到 Real E2E 评分</div><div>Nightly 需要上传 <code>real-e2e-results</code>，其中保留四类用例现有的 metrics JSON；看板只公开分数、状态和耗时，不公开 prompt、模型响应或凭据。</div></div></div>`;
+  function realScoresSection(executed, history = {}, scoreRuns = [], mockPreview = false, localArtifactPreview = false, scoreReport = null) {
+    const report = scoreReport || executed.find((entry) => entry.artifact.startsWith('real-e2e-results') && entry.scores?.length);
+    let html = sectionHead('Real E2E 质量评分', localArtifactPreview ? '本地导入的真实历史产物；逐用例结果请以来源运行和日期为准' : mockPreview ? '本地模拟评分与耗时，仅用于预览；不代表 CI 实测结果' : '质量分数仅作观察，不设置通过门槛；交付结果单独显示');
+    if (scoreRuns.length) html += `<div class="card score-run-summary"><b>${localArtifactPreview ? '最近两次主仓 Nightly（下方展示本地导入的历史报告）' : '最近两天的 Nightly'}</b><div class="muted">按北京时间，同一天优先使用手动或触发式运行。</div>${scoreRuns.slice(0, 2).map((run) => `<div class="score-run-row"><span class="${run.conclusion === 'success' ? 'good' : run.conclusion === 'cancelled' ? 'muted' : 'bad'}">${run.conclusion === 'success' ? '✓' : run.conclusion === 'cancelled' ? '−' : '×'}</span> ${esc(scoreDay(run.created_at))} · ${run.event === 'workflow_dispatch' ? (run.branch === 'main' ? '手动' : '触发式') : '定时'} · ${link(run.url, `run ${esc(run.run_id)}`)} · 整次运行${run.conclusion === 'success' ? '成功' : run.conclusion === 'cancelled' ? '取消' : '失败'} · 耗时 ${dur(run.duration_s)} · 产物${run.artifact_status === 'available' ? '已读取' : run.artifact_status === 'unreadable' ? '解析失败' : '缺失'}</div>`).join('')}<div class="muted">产物未读到时，逐用例分数和耗时未知；整次失败不代表每个用例失败。</div></div>`;
+    if (!report) return html + `<div class="banner warn"><span class="icon">▲</span><div><div class="title">尚未读取到 Real E2E 评分</div><div>需要可解析的 <code>real-e2e-results</code> 产物，才能显示逐用例分数、失败标记和耗时。</div></div></div>`;
     const scores = report.scores;
     const passed = scores.filter((row) => row.delivery === 'passed').length;
     const scored = scores.filter((row) => row.metrics.some((metric) => metric.value != null)).length;
-    html += `<div class="muted" style="margin:-4px 0 8px">${mockPreview ? `本地模拟运行 · ${date(report.created_at)}` : `来源 ${link(report.url, `run ${esc(report.run_id)}`)} · <code>${esc(report.branch)}</code> · ${ago(report.created_at)}`} · 此处保留各评分器的原始量纲。</div>`;
+    html += `<div class="muted" style="margin:-4px 0 8px">${mockPreview ? `本地模拟运行 · ${date(report.created_at)}` : `最近一次可读取的逐用例报告：${link(report.url, `run ${esc(report.run_id)}`)} · <code>${esc(report.branch)}</code> · ${date(report.created_at)}`} · 此处保留各评分器的原始量纲。</div>`;
     html += tiles([
       { label: 'Real E2E 用例', value: n(scores.length), sub: `${new Set(scores.map((row) => row.family)).size} 类评分` },
       { label: '交付通过', value: `${n(passed)}<small>/ ${n(scores.length)}</small>`, sub: '仅表示测试流程与最终交付成功', tone: passed === scores.length ? 'good' : 'warn' },
@@ -792,7 +797,7 @@
       { key: 'case', label: '用例', render: (row) => `<code>${esc(row.case)}</code>` },
       { key: 'family', label: '评分体系', render: (row) => esc(REAL_FAMILY_NAME[row.family] || row.family) },
       { key: 'delivery', label: '交付', render: (row) => deliveryBadge(row.delivery), sort: (row) => row.delivery },
-      { key: 'metrics', label: '质量结果', sortable: false, render: (row) => `${row.metrics.length ? row.metrics.map((metric) => `<div><span class="muted">${esc(metric.label)}</span> <span class="num">${scoreValue(metric)}</span></div>`).join('') : '<span class="muted">不可用</span>'}<button type="button" class="score-trend-trigger" data-score-case="${esc(row.case)}" aria-label="查看 ${esc(row.case)} 的分数趋势">查看趋势 ↗</button>` },
+      { key: 'metrics', label: '质量结果', sortable: false, render: (row) => { const latest = (history[row.case] || []).findLast((point) => point.run_id === report.run_id); const metrics = latest?.metrics || row.metrics; return `${['error', 'failed'].includes(row.quality_status) ? '<span class="badge warn">评分异常</span>' : ''}${metrics.length ? metrics.map((metric) => `<div><span class="muted">${esc(metric.label)}</span> <span class="num">${scoreValue(metric)}</span> <span class="muted">${scoreSource(metric)}</span></div>`).join('') : '<span class="muted">不可用</span>'}<button type="button" class="score-trend-trigger" data-score-case="${esc(row.case)}" aria-label="查看 ${esc(row.case)} 的分数趋势">查看趋势 ↗</button>`; } },
       { key: 'duration_ms', label: '耗时', num: true, render: (row) => dur(row.duration_ms == null ? null : row.duration_ms / 1000) },
     ], scores, { defaultSort: { key: 'case', dir: 'asc' } })}</div>`;
     return html;
@@ -945,7 +950,7 @@
       { label: 'CI 最近 E2E 用例', value: n(e2e?.totals?.tests), sub: e2e?.totals ? `${e2e.totals.passed} 通过 · ${e2e.totals.failed} 失败/超时 · ${e2e.totals.skipped} 跳过 · ${e2e.totals.flaky} 重试通过` : e2e ? '产物存在但没有解析出用例数' : '无产物', tone: e2e?.totals?.failed ? 'bad' : e2e?.totals ? 'good' : '' },
     ]);
     html += e2eRecordsSection();
-    html += realScoresSection(d.executed, d.mock_real_e2e);
+    html += realScoresSection(d.executed, d.score_history, d.score_runs, d.mock_real_e2e, d.local_artifact_preview, d.score_report);
     html += taggedSection(d.tagged, line);
 
     // Distribution ----------------------------------------------------------

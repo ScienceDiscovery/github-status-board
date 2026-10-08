@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 import json
 import re
+from datetime import datetime, timedelta, timezone
 
 from .board import BoardStore
 from .collectors import collect_ci, _coverage_probe, _tree_paths, OPS_BLOCKS
@@ -54,8 +55,8 @@ def public_ops(ctx):
     return out
 
 
-def score_history(runs, limit=30):
-    """Bounded, public per-case score points from each run's latest attempt."""
+def daily_score_runs(runs, limit=30):
+    """Use one attempt per Beijing day; a manual dispatch supersedes a schedule."""
     latest = {}
     for run in runs:
         ident = run.get('id')
@@ -63,26 +64,77 @@ def score_history(runs, limit=30):
             continue
         if run.get('attempt', 1) > latest.get(ident, {}).get('attempt', 0):
             latest[ident] = run
+    selected = {}
+    for run in latest.values():
+        timestamp = run.get('created_at') or run.get('updated_at') or next(
+            (report.get('created_at') for report in run.get('tests', []) if report.get('created_at')), None)
+        try:
+            when = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            day = (when if when.tzinfo else when.replace(tzinfo=timezone.utc)).astimezone(
+                timezone(timedelta(hours=8))).date().isoformat()
+        except (AttributeError, ValueError):
+            continue
+        rank = (run.get('event') == 'workflow_dispatch', timestamp, run.get('id') or 0)
+        if day not in selected or rank > selected[day][0]:
+            selected[day] = (rank, run)
+    return sorted((entry[1] for entry in selected.values()),
+                  key=lambda run: (run.get('created_at') or run.get('updated_at') or '', run.get('id') or 0), reverse=True)[:limit]
+
+
+def score_history(runs, limit=30):
+    """Bounded per-case observations; label carried values separately from measurements."""
     points = defaultdict(list)
-    for run in sorted(latest.values(), key=lambda row: (row.get('created_at') or '', row.get('id') or 0), reverse=True):
+    previous = defaultdict(dict)
+    for run in reversed(daily_score_runs(runs, limit)):
         seen = set()
         for report in run.get('tests', []):
             if not report.get('name', '').startswith('real-e2e-results'):
                 continue
             for score in report.get('scores', []):
                 case = score.get('case')
-                if not isinstance(case, str) or not case or case in seen or len(points[case]) >= limit:
+                if not isinstance(case, str) or not case or case in seen:
                     continue
                 seen.add(case)
+                failed = score.get('delivery') == 'failed'
+                metrics = []
+                observed = score.get('metrics', [])
+                if failed:
+                    observed = [*observed, *(dict(label=label, unit=unit, value=None)
+                        for label, unit in previous[case] if (label, unit) not in
+                        {(m.get('label'), m.get('unit')) for m in observed})]
+                for metric in observed:
+                    key = (metric.get('label'), metric.get('unit'))
+                    value = metric.get('value')
+                    usable = isinstance(value, (int, float)) and not isinstance(value, bool)
+                    if usable and not failed:
+                        previous[case][key] = value
+                        metrics.append({**metric, 'source': 'measured'})
+                    elif failed:
+                        prior = previous[case].get(key)
+                        metrics.append({**metric, 'value': prior if prior is not None else 0,
+                                        'source': 'carried' if prior is not None else 'baseline'})
+                    else:
+                        metrics.append({**metric, 'source': 'unavailable'})
                 points[case].append({
                     'run_id': run['id'], 'attempt': run.get('attempt', 1),
-                    'created_at': run.get('created_at') or report.get('created_at'),
+                    'created_at': run.get('created_at') or report.get('created_at') or run.get('updated_at'),
                     'url': report.get('url') or run.get('url'),
                     'delivery': score.get('delivery'), 'quality_status': score.get('quality_status'),
                     'duration_ms': score.get('duration_ms'),
-                    'metrics': score.get('metrics', []),
+                    'metrics': metrics,
                 })
-    return {case: list(reversed(rows)) for case, rows in points.items()}
+    return {case: rows[-limit:] for case, rows in points.items()}
+
+
+def latest_score_report(runs):
+    """Keep the newest readable Real E2E scores when newer artifacts cannot be parsed."""
+    for run in sorted(runs, key=lambda row: (row.get('created_at') or '', row.get('id') or 0), reverse=True):
+        for report in run.get('tests', []):
+            if report.get('name', '').startswith('real-e2e-results') and report.get('scores'):
+                return {'artifact': report['name'], 'run_id': run['id'], 'attempt': run.get('attempt', 1),
+                        'branch': run.get('branch'), 'created_at': report.get('created_at') or run.get('updated_at'),
+                        'url': report.get('url') or run.get('url'), 'scores': report['scores']}
+    return None
 
 
 def public_tests(ctx, runs, owns=None):
@@ -180,7 +232,7 @@ def public_tests(ctx, runs, owns=None):
     return {'notes': notes, 'tree_source': source, 'tree': {k: v for k, v in tree.items() if k != 'inventory'} if tree else None,
             'inventory': [{**row, 'ci_cases': package_counts.get(row['package'], {}).get('tests'), 'ci_failed': package_counts.get(row['package'], {}).get('failed')} for row in (tree or {}).get('inventory', [])],
             'test_scripts': scripts, 'artifacts_recent': artifacts[:30], 'executed': executed,
-            'score_history': score_history(runs), 'coverage': coverage}
+            'score_history': score_history(runs), 'score_report': latest_score_report(runs), 'coverage': coverage}
 
 
 def extend_project(doc, ctx):

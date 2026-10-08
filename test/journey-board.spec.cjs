@@ -333,8 +333,11 @@ test('real E2E scores open per-case trends without crowding the table', async ({
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText('DRB-59 · 分数与耗时趋势');
   await expect(dialog.locator('.score-chart')).toHaveCount(4);
-  await expect(dialog.locator('.score-series').first().locator('.score-dot')).toHaveCount(7);
+  await expect(dialog.locator('.score-series').first().locator('.score-dot')).toHaveCount(6);
+  await expect(dialog.locator('.score-series').first().locator('.score-failed')).toHaveCount(1);
+  await expect(dialog.locator('.score-series.duration .score-failed')).toHaveCount(0);
   await expect(dialog.locator('.score-series.duration .score-dot')).toHaveCount(7);
+  await expect(dialog).toContainText('分数沿用上次实测');
   await expect(dialog.locator('.score-week-toolbar strong')).toHaveText('最新 · 9/14–9/20');
   await expect(dialog.locator('.score-run-links a')).toHaveCount(5);
   await dialog.getByRole('button', { name: '上一周' }).click();
@@ -357,6 +360,7 @@ test('real E2E scores open per-case trends without crowding the table', async ({
   await tab.getByRole('button', { name: '查看 PUCT-COMPRESS 的分数趋势' }).click();
   await expect(dialog.locator('.score-chart')).toHaveCount(3);
   await expect(dialog.locator('.score-series:not(.duration)').last().locator('.score-dot')).toHaveCount(6);
+  await expect(dialog.locator('.score-series:not(.duration)').last().locator('.score-dot.carried')).toHaveCount(0);
   await expect(dialog.locator('.score-series.duration .score-dot')).toHaveCount(7);
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();

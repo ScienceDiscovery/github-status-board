@@ -47,7 +47,7 @@ def _metric(label, value, unit, status=None):
     return row
 
 
-def research_score(doc):
+def research_score(doc, source_path=""):
     """Return only public, bounded score fields from one real-E2E metrics document."""
     if not isinstance(doc, dict):
         return None
@@ -56,35 +56,37 @@ def research_score(doc):
     case = doc.get("case")
     family = None
     delivery = doc.get("integration_status") or doc.get("integration")
+    failed = _status(delivery) == "failed"
+    fallback_status = evaluation.get("status") or ("failed" if failed else None)
 
     if case == "TC-E2E-01":
         family = "research-team"
-        metrics.append(_metric("Judge total", evaluation.get("total_score"), "score100", evaluation.get("status")))
+        metrics.append(_metric("Judge total", evaluation.get("total_score"), "score100", fallback_status))
     elif case == "PUCT-COMPRESS":
         family = "evolve-compression"
         metrics.extend([
-            _metric("Held-out test", evaluation.get("score"), "ratio", evaluation.get("status")),
+            _metric("Held-out test", evaluation.get("score"), "ratio", fallback_status),
             _metric("Baseline gate", evaluation.get("baseline_gate_score"), "ratio"),
             _metric("Best gate", evaluation.get("best_gate_score"), "ratio"),
         ])
         llm = doc.get("llm_evaluation")
         if isinstance(llm, dict):
             metrics.append(_metric("LLM judge", llm.get("total_score"), "score100", llm.get("status")))
-    elif "case_id" in doc and ("race" in evaluation or "fact" in evaluation):
+    elif "case_id" in doc and ("race" in evaluation or "fact" in evaluation or "deepresearchbench" in source_path.lower()):
         family = "deepresearchbench"
         case = f"DRB-{str(doc.get('case_id'))[:80]}"
         race = evaluation.get("race") if isinstance(evaluation.get("race"), dict) else {}
         fact = evaluation.get("fact") if isinstance(evaluation.get("fact"), dict) else {}
         metrics.extend([
-            _metric("RACE", race.get("overall_score"), "ratio", race.get("status")),
-            _metric("Citation accuracy", fact.get("citation_accuracy"), "percent", fact.get("status")),
-            _metric("Verification coverage", fact.get("verification_coverage"), "percent", fact.get("status")),
+            _metric("RACE", race.get("overall_score"), "ratio", race.get("status") or fallback_status),
+            _metric("Citation accuracy", fact.get("citation_accuracy"), "percent", fact.get("status") or fallback_status),
+            _metric("Verification coverage", fact.get("verification_coverage"), "percent", fact.get("status") or fallback_status),
             _metric("Effective citations", fact.get("effective_citations"), "count"),
         ])
-    elif "case_id" in doc and "score" in evaluation:
+    elif "case_id" in doc and ("score" in evaluation or "biomnibench" in source_path.lower()):
         family = "biomnibench"
         case = f"BiomniBench-{str(doc.get('case_id'))[:80]}"
-        metrics.append(_metric("Rubric", evaluation.get("score"), "score100", evaluation.get("status")))
+        metrics.append(_metric("Rubric", evaluation.get("score"), "score100", fallback_status))
     if not family or not isinstance(case, str) or not case.strip():
         return None
     metrics = [metric for metric in metrics if metric is not None]
@@ -188,7 +190,7 @@ def parse_report_zip(blob):
             text = archive.read(item).decode("utf-8", "replace")
             try:
                 if SCORE_FILE_RE.search(name):
-                    score = research_score(json.loads(text))
+                    score = research_score(json.loads(text), item.filename)
                     if score:
                         scores.append(score)
                     continue
