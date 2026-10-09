@@ -16,7 +16,7 @@ test('all existing pages render; only static requests and no promotional copy', 
   await expect(page.locator('#tab-overview .tile').filter({hasText:'PR 门禁'})).toContainText('耗时 18m 44s');
   await expect(page.locator('#tab-overview .tile').filter({hasText:'主干门禁用例'})).toContainText('324');
   await expect(page.locator('#tab-overview .tile').filter({hasText:'整仓行覆盖率'})).toContainText('80.7%');
-  await expect(page.locator('#tab-overview .ci-lane-row:not(.ci-axis)')).toHaveCount(4);
+  await expect(page.locator('#tab-overview .ci-lane-row:not(.ci-axis)')).toHaveCount(7);
   await expect(page.locator('#tab-overview .ci-lane-row[data-lane="pr"] .ci-lane-day')).toHaveCount(14);
   await expect(page.locator('#tab-overview')).toContainText('v1.0');
   await expect(page.locator('#meta')).toContainText('20:00');
@@ -159,10 +159,10 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await expect(page.locator('#tab-ci')).toContainText('Coverage');
   const lanes = page.locator('#tab-ci .ci-lanes');
   const lane = (key) => lanes.locator(`.ci-lane-row[data-lane="${key}"]`);
-  await expect(lanes.locator('.ci-lane-row:not(.ci-axis)')).toHaveCount(4);
-  for (const key of ['pr','main','daily','release']) await expect(lane(key).locator('.ci-lane-day')).toHaveCount(30);
+  await expect(lanes.locator('.ci-lane-row:not(.ci-axis)')).toHaveCount(7);
+  for (const key of ['pr','main','daily','release','called','other','unknown']) await expect(lane(key).locator('.ci-lane-day')).toHaveCount(30);
   // One shared day axis: the newest column starts at the same x in every lane.
-  const newestX = await Promise.all(['pr','main','daily','release'].map(async (key) => Math.round((await lane(key).locator('.ci-lane-day').last().boundingBox()).x)));
+  const newestX = await Promise.all(['pr','main','daily','release','called','other','unknown'].map(async (key) => Math.round((await lane(key).locator('.ci-lane-day').last().boundingBox()).x)));
   expect(new Set(newestX).size).toBe(1);
   const today = lane('pr').locator('.ci-lane-day').last().locator('.ci-run');
   await expect(today).toHaveCount(13);
@@ -182,7 +182,9 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await expect(lane('release').locator('.ci-run')).toHaveCount(0);
   await expect(lane('release')).toContainText('窗口内没有 run');
   await expect(lane('release')).not.toContainText('失败 1');
-  await expect(page.locator('#tab-ci .ci-lane-notes')).toContainText('1 次由其他工作流调用的 CI 子 run 已并入调用方');
+  await expect(lane('called').locator('.ci-run')).toHaveAttribute('href', /\/runs\/399$/);
+  await expect(lane('other').locator('.ci-run')).toHaveAttribute('href', /\/runs\/398$/);
+  await expect(page.locator('#tab-ci .ci-lane-notes')).not.toContainText('已并入调用方');
   await page.mouse.move(0, 0);
   await page.locator('#tab-ci .card:has(.ci-lanes)').screenshot({path:shot('ci-lanes-desktop')});
   // Every finished run prints its time in its cell; a running one has none yet.
@@ -193,7 +195,7 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   const scroller = page.locator('#tab-ci .ci-lanes-scroll');
   // The day axis scrolls inside the card and opens on the newest day.
   await expect.poll(() => scroller.evaluate((el) => el.scrollWidth > el.clientWidth && el.scrollLeft + el.clientWidth >= el.scrollWidth - 2)).toBeTruthy();
-  const heads = await Promise.all(['pr','main','daily','release'].map(async (key) => (await lane(key).locator('.ci-lane-head').boundingBox())));
+  const heads = await Promise.all(['pr','main','daily','release','called','other','unknown'].map(async (key) => (await lane(key).locator('.ci-lane-head').boundingBox())));
   for (const [i, box] of heads.entries()) {
     expect(box.x).toBeGreaterThanOrEqual(0);
     if (i) expect(box.y).toBeGreaterThan(heads[i - 1].y + 20);
@@ -658,21 +660,22 @@ test('CI, tests and coverage switch between main, legacy and release without mix
   const switchOf = (tab) => page.locator(`#tab-${tab} .line-switch`);
   await expect(switchOf('ci').locator('button')).toHaveText(['main', 'legacy', 'releases/v0.3.0.beta']);
   await expect(switchOf('ci').locator('button.on')).toHaveText('main');
-  await expect(rows).toHaveCount(4);
+  await expect(rows).toHaveCount(7);
   await expect(ci.locator('.ci-lanes')).not.toContainText('legacy');
   await expect(ci.locator('.ci-lanes .ci-run[href$="/runs/602"]')).toHaveCount(0);
   await switchOf('ci').getByRole('button', { name: 'legacy' }).click();
-  await expect(rows).toHaveCount(2);
+  await expect(rows).toHaveCount(7);
   await expect(rows.nth(1).locator('.ci-lane-head b')).toHaveText('legacy');
   await expect(rows.nth(1).locator('.ci-run')).toHaveAttribute('href', /\/runs\/610$/);
+  await expect(rows.filter({has: page.locator('[href$="/runs/611"]')})).toHaveAttribute('data-lane', 'daily');
   await expect(ci.locator('.ci-lanes .ci-run[href$="/runs/602"]')).toHaveCount(0);
   await page.locator('[data-tab="tests"]').click();
   await expect(switchOf('tests').locator('button.on')).toHaveText('legacy');
   await expect(page.locator('#tab-tests')).not.toContainText('323 个用例');
   await page.locator('[data-tab="ci"]').click();
   await switchOf('ci').getByRole('button', { name: 'releases/v0.3.0.beta' }).click();
-  // The release line has PR and branch lanes only: no Nightly or Release runs there.
-  await expect(rows).toHaveCount(2);
+  // Nightly and reusable-workflow run IDs stay visible on this branch line.
+  await expect(rows).toHaveCount(7);
   await expect(rows.nth(1).locator('.ci-lane-head b')).toHaveText('releases/v0.3.0.beta');
   await expect(rows.nth(1).locator('.ci-lane-head')).toContainText('CI · releases/v0.3.0.beta push / 手动');
   await expect(rows.first().locator('.ci-run')).toHaveCount(2);
@@ -680,9 +683,16 @@ test('CI, tests and coverage switch between main, legacy and release without mix
   await expect(ci.locator('.ci-lanes .ci-run[href$="/runs/500"]')).toHaveCount(0);
   await expect(ci.locator('.tile').first()).toContainText('releases/v0.3.0.beta 分支成功率');
   await expect(ci).toContainText('Run unit tests');
-  await expect(ci.locator('.ci-lane-notes')).not.toContainText('Nightly');
+  const nightly = ci.locator('[data-lane="daily"] .ci-run');
+  await expect(nightly).toHaveAttribute('href', /\/runs\/37845266203$/);
+  await expect(nightly).toHaveAttribute('target', '_blank');
+  await nightly.focus();
+  await expect(page.locator('#tooltip')).toContainText('Nightly · workflow_dispatch · 手动');
+  await expect(ci.locator('[data-lane="called"] .ci-run')).toHaveAttribute('href', /\/runs\/603$/);
+  await expect(ci.locator('[data-lane="other"] .ci-run')).toHaveAttribute('href', /\/runs\/604$/);
+  await expect(ci.locator('.ci-lane-notes')).not.toContainText('未画入');
   const recent = ci.locator('th[data-table="ci-runs"]').first().locator('xpath=ancestor::table').locator('tbody tr');
-  await expect(recent).toHaveCount(3);
+  await expect(recent).toHaveCount(6);
   await page.mouse.move(0, 0);
   await page.screenshot({ path: shot('line-ci-release-desktop') });
   // The choice holds on the test and coverage pages and across a reload.
@@ -718,13 +728,13 @@ test('CI, tests and coverage switch between main, legacy and release without mix
   expect(await branchHead.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && el.getBoundingClientRect().right <= el.closest('.ci-lane-head').getBoundingClientRect().right + 1)).toBeTruthy();
   await page.locator('#tab-ci .card:has(.ci-lanes)').screenshot({ path: shot('line-ci-release-narrow') });
   await switchOf('ci').getByRole('button', { name: 'main' }).click();
-  await expect(rows).toHaveCount(4);
+  await expect(rows).toHaveCount(7);
   await page.locator('[data-tab="tests"]').click();
   await expect(page.locator('#tab-tests')).toContainText('349 个用例');
   // The overview stays on main and still surfaces the failing release run.
   await page.locator('[data-tab="overview"]').click();
   await expect(page.locator('#tab-overview .health')).toContainText('releases/v0.3.0.beta 分支最近一次运行失败');
-  await expect(page.locator('#tab-overview .ci-lane-row:not(.ci-axis)')).toHaveCount(4);
+  await expect(page.locator('#tab-overview .ci-lane-row:not(.ci-axis)')).toHaveCount(7);
 });
 
 test('release evidence matches SHA; no evidence remains unknown',async({page})=>{

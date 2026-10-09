@@ -94,9 +94,12 @@ class SnapshotTests(unittest.TestCase):
             doc = build_snapshot(sync)
         self.assertEqual([(line["key"], line["default"]) for line in doc["lines"]], [("main", True), ("jiuwen", False)])
         main, swarm = doc["sections"]["ci"]["data"], doc["line_sections"]["jiuwen"]["ci"]["data"]
-        self.assertEqual({lane["key"]: points(lane) for lane in main["lanes"]["lanes"]}, {"pr": [1], "main": [2, 5], "daily": [3], "release": [4]})
-        self.assertEqual({lane["key"]: points(lane) for lane in swarm["lanes"]["lanes"]}, {"pr": [6, 7], "main": [8, 9]})
-        self.assertEqual([lane["label"] for lane in swarm["lanes"]["lanes"]], ["PR", "feat/jiuwenswarm"])
+        self.assertEqual({lane["key"]: points(lane) for lane in main["lanes"]["lanes"]},
+                         {"pr": [1], "main": [2, 5], "daily": [3], "release": [4], "called": [], "other": [], "unknown": []})
+        self.assertEqual({lane["key"]: points(lane) for lane in swarm["lanes"]["lanes"]},
+                         {"pr": [6, 7], "main": [8, 9], "daily": [], "release": [], "called": [], "other": [], "unknown": []})
+        self.assertEqual([lane["label"] for lane in swarm["lanes"]["lanes"]],
+                         ["PR", "feat/jiuwenswarm", "Daily", "版本", "工作流调用", "其他工作流", "未知触发"])
         self.assertEqual((swarm["default_branch"], swarm["lanes"]["branch"]), ("feat/jiuwenswarm", "feat/jiuwenswarm"))
         self.assertEqual((main["pull_request"]["total"], swarm["pull_request"]["total"], swarm["main"]["total"]), (1, 2, 2))
         self.assertEqual(sorted(calls["main"][0]), [1, 2, 3, 4, 5])
@@ -128,6 +131,47 @@ class SnapshotTests(unittest.TestCase):
         doc, built = build({"branch_lines": LINES}, False)
         self.assertEqual((sorted(doc["line_sections"]), built), (["jiuwen"], 2))
 
+    def test_all_lines_keep_daily_called_and_other_runs_when_rebuilding_old_lanes(self):
+        source = self.source()
+        source.runs += [
+            {**source.runs[2], "id": 37845266203, "event": "workflow_dispatch", "head_branch": "releases/v0.3.0.beta"},
+            {**source.runs[1], "id": 11, "event": "workflow_call", "head_branch": "releases/v0.3.0.beta"},
+            {**source.runs[1], "id": 12, "name": "Maintenance", "head_branch": "releases/v0.3.0.beta"},
+            {**source.runs[1], "id": 13, "name": "Maintenance", "head_branch": "feat/jiuwenswarm"},
+        ]
+        settings = {"workflows": RULES, "branch_lines": RENAMED_LINES}
+        sync = Sync(source, self.root, REPO, settings=settings, now=NOW).collect()
+        with patch("gsb.incremental_project.public_ops", return_value={}), patch("gsb.incremental_project.public_tests", return_value={}):
+            doc = build_snapshot(sync)
+        views = {"main": doc["sections"], **doc["line_sections"]}
+        expected = {
+            "main": {"pr": [6, 7], "main": [8, 9], "release": [4], "other": [13]},
+            "legacy": {"pr": [1], "main": [2, 5], "daily": [3]},
+            "release": {"daily": [37845266203], "called": [11], "other": [12]},
+        }
+        def check(snapshot):
+            for key, sections in {"main": snapshot["sections"], **snapshot["line_sections"]}.items():
+                lanes = sections["ci"]["data"]["lanes"]
+                self.assertEqual({lane["key"]: points(lane) for lane in lanes["lanes"] if points(lane)}, expected[key])
+                self.assertEqual(lanes["excluded"], {})
+        check(doc)
+        # A previously published two-lane branch view must be rebuilt even if
+        # the default line is current and no new records arrive in this poll.
+        for key in ("legacy", "release"):
+            lanes = views[key]["ci"]["data"]["lanes"]
+            lanes["lanes"] = [lane for lane in lanes["lanes"] if lane["key"] in ("pr", "main")]
+            lanes["excluded"] = {"daily": 1}
+        for name, content in {**sync.files(), "site/data/snapshot.json": json.dumps(doc)}.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        sync = Sync(source, self.root, REPO, settings=settings, now=NOW)
+        sync.meta = sync.gh.get("/repos/" + REPO)
+        self.assertFalse(sync.history.changed)
+        with patch("gsb.incremental_project.public_ops", return_value={}), patch("gsb.incremental_project.public_tests", return_value={}) as tests:
+            check(build_snapshot(sync))
+        tests.assert_not_called()
+
     def test_renamed_branches_project_historical_runs_into_their_current_lines(self):
         source = self.source()
         created = (NOW - timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
@@ -146,7 +190,7 @@ class SnapshotTests(unittest.TestCase):
                          {"pr": [6, 7], "main": [8, 9, 10], "release": [4]})
         legacy = doc["line_sections"]["legacy"]["ci"]["data"]
         self.assertEqual({lane["key"]: points(lane) for lane in legacy["lanes"]["lanes"]},
-                         {"pr": [1], "main": [2, 5]})
+                         {"pr": [1], "main": [2, 5], "daily": [3], "release": [], "called": [], "other": [], "unknown": []})
         self.assertEqual(sorted(calls["legacy"][0]), [1, 2, 3, 5])
         self.assertEqual(sorted(calls["main"][0]), [4, 6, 7, 8, 9, 10])
         old_main = {"run_id": 2, "branch": "main", "created_at": "2026-09-22T11:20:00Z"}

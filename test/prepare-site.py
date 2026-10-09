@@ -131,28 +131,32 @@ rate=dict(success_rate=50,total=2,success=1,failure=1,cancelled=0,median_duratio
 ci=dict(default_branch='main',main=rate,pull_request=rate,red_streak_main=1,failures_7d=2,runs_sampled=3,job_history_runs=2,main_timeline=runs,latest_main=dict(run=runs[0],jobs=runs[0]['jobs']),workflows=[dict(name='CI',url=runs[0]['url'],path='.github/workflows/ci.yml',state='active',all=rate,main=rate,pull_request=rate,failures_7d=2,last_run=runs[0])],job_health=[dict(name='E2E',success_rate=50,runs=2,success=1,failure=1,cancelled=0,median_duration_s=120,last=runs[0],top_failed_steps=[dict(step='Run browser journeys',count=1)]),dict(name='Coverage',success_rate=100,runs=1,success=1,failure=0,cancelled=0,median_duration_s=385,last=runs[0],top_failed_steps=[])],recent_runs=runs)
 # CI lanes: 13 PR runs on the newest day (more than one column shows), manual and push
 # runs on main, one nightly per evening, a Nightly-called CI child and no release.
-from gsb.ci_lanes import build_lanes
+from gsb.ci_lanes import LANES, build_lanes
 def lane_run(ident,name,event,created,branch,conclusion='success',pull_requests=()):
     # Finished runs take between 3 and 28 minutes; a running one has no time yet.
-    return dict(id=ident,attempt=1,name=name,workflow_id={'CI':1,'Nightly':2}[name],event=event,status='in_progress' if conclusion is None else 'completed',conclusion=conclusion,branch=branch,sha=f'{ident:040x}',created_at=created,url=f'{base}/actions/runs/{ident}',pull_requests=list(pull_requests),title=f'{name} run {ident}',duration_s=None if conclusion is None else 180+(ident*37)%1500)
+    return dict(id=ident,attempt=1,name=name,workflow_id={'CI':1,'Nightly':2}.get(name,3),event=event,status='in_progress' if conclusion is None else 'completed',conclusion=conclusion,branch=branch,sha=f'{ident:040x}',created_at=created,url=f'{base}/actions/runs/{ident}',pull_requests=list(pull_requests),title=f'{name} run {ident}',duration_s=None if conclusion is None else 180+(ident*37)%1500)
 outcomes=['success','failure','cancelled','timed_out',None,'success','failure','success','action_required','success','failure','success','success']
 lane_runs=[lane_run(500+i,'CI','pull_request',f'2026-09-19T{16+i//4:02d}:{(i%4)*15+10:02d}:00Z','fix-timeout',c,pull_requests=[3] if i%2 else []) for i,c in enumerate(outcomes)]
 lane_runs+=[lane_run(480,'CI','pull_request','2026-09-17T03:00:00Z','fix-timeout','failure'),lane_run(481,'CI','pull_request','2026-09-17T05:30:00Z','fix-timeout')]
 lane_runs+=[lane_run(470,'CI','push','2026-09-18T02:00:00Z','main'),lane_run(471,'CI','workflow_dispatch','2026-09-20T01:00:00Z','main','failure')]
 lane_runs+=[lane_run(400+d,'Nightly','schedule',f'2026-09-{d:02d}T18:00:00Z','main','failure' if d==16 else 'success') for d in range(12,20)]
 lane_runs.append(lane_run(399,'CI','workflow_call','2026-09-19T18:00:05Z','main'))
+lane_runs.append(lane_run(398,'Maintenance','push','2026-09-19T18:00:06Z','main'))
 lanes=build_lanes(lane_runs,default_branch='main',now=datetime(2026,9,20,12,tzinfo=timezone.utc),rules=json.loads((root/'board-config.json').read_text())['workflows'],prs=[pr])
 ci['lanes']=lanes
-# Release branch line: PRs into it and a failing manual run.
+# Release branch line: PRs, a failing manual gate, Nightly and separate called/other runs.
 swarm_runs=[lane_run(600,'CI','pull_request','2026-09-19T09:00:00Z','swarm-fix','success',pull_requests=[8]),lane_run(601,'CI','pull_request','2026-09-20T02:00:00Z','swarm-fix','failure',pull_requests=[8]),
             lane_run(602,'CI','workflow_dispatch','2026-09-20T03:00:00Z','releases/v0.3.0.beta','failure')]
+swarm_runs += [lane_run(37845266203,'Nightly','workflow_dispatch','2026-09-20T04:00:00Z','releases/v0.3.0.beta'),
+               lane_run(603,'CI','workflow_call','2026-09-20T04:01:00Z','releases/v0.3.0.beta'),
+               lane_run(604,'Maintenance','push','2026-09-20T04:02:00Z','releases/v0.3.0.beta')]
 swarm_rate=dict(success_rate=0,total=1,success=0,failure=1,cancelled=0,median_duration_s=300)
 swarm_recent=[dict(r,title=r['title'],created_at=r['created_at'],duration_s=300,actor='maintainer') for r in swarm_runs]
-swarm_ci=dict(default_branch='releases/v0.3.0.beta',main=swarm_rate,pull_request=dict(swarm_rate,success_rate=50,total=2,success=1),red_streak_main=1,failures_7d=2,runs_sampled=3,job_history_runs=1,
-              main_timeline=swarm_recent[2:],latest_main=dict(run=swarm_recent[2],jobs=[dict(name='UT',conclusion='failure',url=base+'/actions/runs/602',duration_s=300,failed_steps=['Run unit tests'])]),
+swarm_ci=dict(default_branch='releases/v0.3.0.beta',main=swarm_rate,pull_request=dict(swarm_rate,success_rate=50,total=2,success=1),red_streak_main=1,failures_7d=2,runs_sampled=6,job_history_runs=1,
+              main_timeline=[swarm_recent[2]],latest_main=dict(run=swarm_recent[2],jobs=[dict(name='UT',conclusion='failure',url=base+'/actions/runs/602',duration_s=300,failed_steps=['Run unit tests'])]),
               workflows=[dict(name='CI',url=base+'/actions/workflows/ci.yml',path='.github/workflows/ci.yml',state='active',all=swarm_rate,main=swarm_rate,pull_request=swarm_rate,failures_7d=2,last_run=swarm_recent[2])],
               job_health=[],recent_runs=swarm_recent,
-              lanes=build_lanes(swarm_runs,default_branch='releases/v0.3.0.beta',now=datetime(2026,9,20,12,tzinfo=timezone.utc),rules=json.loads((root/'board-config.json').read_text())['workflows'],prs=[pr],lanes=(('pr','PR'),('main','releases/v0.3.0.beta'))))
+              lanes=build_lanes(swarm_runs,default_branch='releases/v0.3.0.beta',now=datetime(2026,9,20,12,tzinfo=timezone.utc),rules=json.loads((root/'board-config.json').read_text())['workflows'],prs=[pr],lanes=tuple((key,'releases/v0.3.0.beta' if key=='main' else label) for key,label in LANES)))
 # Its summaries predate per-file totals: groups only, the newest one from a later commit.
 swarm_cov=json.loads(json.dumps(tests['coverage']))
 for dataset in swarm_cov['languages'].values():
@@ -169,8 +173,8 @@ legacy_ci=dict(default_branch='legacy',main=legacy_rate,pull_request=dict(legacy
                workflows=[dict(name='CI',url=base+'/actions/workflows/ci.yml',path='.github/workflows/ci.yml',state='active',
                                all=legacy_rate,main=legacy_rate,pull_request=legacy_rate,failures_7d=0,last_run=legacy_recent)],
                job_health=[],recent_runs=[legacy_recent],
-               lanes=build_lanes([legacy_run],default_branch='legacy',now=datetime(2026,9,20,12,tzinfo=timezone.utc),
-                                 rules=json.loads((root/'board-config.json').read_text())['workflows'],lanes=(('pr','PR'),('main','legacy'))))
+               lanes=build_lanes([legacy_run,lane_run(611,'Nightly','schedule','2026-09-19T18:00:00Z','legacy')],default_branch='legacy',now=datetime(2026,9,20,12,tzinfo=timezone.utc),
+                                 rules=json.loads((root/'board-config.json').read_text())['workflows'],lanes=tuple((key,'legacy' if key=='main' else label) for key,label in LANES)))
 legacy_tests=dict(json.loads(json.dumps(tests)),tagged=None,executed=[],coverage=dict(source=None,value=None,languages={},attempts=[]))
 ops=dict(releases=dict(latest=None,count=0,items=[],tags=[],total_downloads=0,cadence_days=None,unreleased=None),branches=dict(default='main',protection=dict(enabled=True,required_reviews=1,required_checks=['E2E']),rulesets=[],items=[],count=1,stale=[]),public_advisories=[],community=dict(health_percentage=75,missing=['contributing'],files=dict(readme=True,contributing=False)),activity=dict(weeks=[dict(week=1789819200,total=10)],commits_4w=10,commits_52w=10),recent_commits=[],commits_7d=3,stale_automation=dict(workflow=None))
 wrap=lambda value:dict(status='ok',data=value,notes=[],error=None)
