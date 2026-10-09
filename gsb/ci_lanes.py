@@ -1,4 +1,4 @@
-"""CI history lanes: PR, default branch, daily and release runs on one calendar.
+"""All collected CI runs grouped by trigger on one calendar.
 
 Each lane follows how the source repository triggers its Actions. All lanes
 share the same day axis in one fixed display zone; runs of one day stay in
@@ -14,7 +14,8 @@ import re
 WINDOW_DAYS = 30
 # The team reads the board in Asia/Shanghai, which has no daylight saving.
 DISPLAY_ZONE = timezone(timedelta(hours=8), "UTC+8")
-LANES = (("pr", "PR"), ("main", "主干"), ("daily", "Daily"), ("release", "版本"))
+LANES = (("pr", "PR"), ("main", "主干"), ("daily", "Daily"), ("release", "版本"),
+         ("called", "工作流调用"), ("other", "其他工作流"), ("unknown", "未知触发"))
 # Mirrors board-config.json so a site without that section still classifies runs.
 DEFAULT_RULES = {"gate": ["^CI$"], "daily": ["nightly", "daily", "每日"], "release": ["release", "version", "版本"]}
 PR_EVENTS = ("pull_request", "pull_request_target")
@@ -74,7 +75,7 @@ def lane_of(run, rules=None, default_branch="main"):
     matches = lambda kind: any(re.search(pattern, name, re.I) for pattern in rules[kind])
     if event == "workflow_call":
         return "called"
-    # Nightly and Release call CI; their own runs already represent that work.
+    # Workflow names determine the category independently of the branch line.
     if matches("release"):
         return "release"
     if matches("daily"):
@@ -124,7 +125,8 @@ def build_lanes(runs, *, default_branch, now, rules=None, prs=(), days=WINDOW_DA
     """Group the latest attempt of each run into lanes aligned on one day axis.
 
     ``default_branch`` is the branch whose pushes form the "main" lane; a branch
-    line passes its own branch and only the lanes it has."""
+    line passes its own branch and labels its push / manual lane with that ref.
+    Called and unclassified runs remain visible as distinct run IDs."""
     first = now.astimezone(zone).date() - timedelta(days=days - 1)
     axis = [first + timedelta(days=offset) for offset in range(days)]
     position = {day: index for index, day in enumerate(axis)}

@@ -146,13 +146,19 @@ def build_snapshot(sync):
     # deployment. Daily aging and health metadata still get a regular refresh.
     cache_upgrade = supplements.get("tests_version") != SUPPLEMENT_TESTS_VERSION
     # Snapshots published before the CI lanes, tagged tests, the current
-    # branch lines or run times on the lanes are rebuilt once.
+    # branch lines, complete lane set or run times on the lanes are rebuilt once.
     old_ci = ((old.get("sections") or {}).get("ci") or {}).get("data") or {}
     old_tests = ((old.get("sections") or {}).get("tests") or {}).get("data")
     cache_upgrade = (cache_upgrade or "lanes" not in old_ci or (isinstance(old_tests, dict) and "tagged" not in old_tests)
                      or old.get("lines") != lines
                      or any("median_duration_s" not in lane.get("summary", {}) for lane in old_ci["lanes"].get("lanes", [])))
-    if (not history.changed and not sync.tagged.changed and not cache_upgrade and old.get("sync") == progress
+    lanes_upgrade = False
+    for line in lines:
+        sections = old.get("sections", {}) if line["default"] else old.get("line_sections", {}).get(line["key"], {})
+        view = ((sections.get("ci") or {}).get("data") or {}).get("lanes") or {}
+        lanes_upgrade = lanes_upgrade or {lane["key"] for lane in view.get("lanes", [])} != {key for key, _ in LANES}
+    # Reprojecting stored run categories must not invalidate test-artifact caches.
+    if (not history.changed and not sync.tagged.changed and not cache_upgrade and not lanes_upgrade and old.get("sync") == progress
             and old.get("generated_at", "")[:10] == stamp(midnight)[:10]):
         return old
     cfg = sync.cfg
@@ -237,12 +243,13 @@ def build_snapshot(sync):
         line_index = {ident: project_run(row) for ident, row in index.items() if run_line[ident] == key}
         ci = collect_ci(Context(_stored_ci(history, line_index), cfg, midnight, line_meta))
         # Lanes read complete records (event, linked PRs, head repository) for the
-        # displayed window only, plus the PRs that were open during it. Nightly
-        # and releases run on the default branch only.
+        # displayed window only, plus the PRs that were open during it. Every
+        # line keeps all run categories, including manually dispatched Nightly.
         lane_runs = [project_run(history.get("runs", history_key(row)) or index[row["id"]]) for row in line_index.values() if (row.get("created_at") or "") >= start]
         ci["lanes"] = build_lanes(lane_runs, default_branch=line["ref"], now=sync.now,
                                   rules=sync.settings.get("workflows"), prs=[pr for pr in lane_prs if pr],
-                                  lanes=LANES if line["default"] else (LANES[0], ("main", line["ref"])),
+                                  lanes=tuple((key, line["ref"] if key == "main" and not line["default"] else label)
+                                              for key, label in LANES),
                                   collected_since=None if progress["backfill"].get("runs", {}).get("complete")
                                   else min((row["created_at"] for row in index.values()), default=None))
         runs = [project_run(row) for row in history.select("runs", lambda r, key=key: run_line.get(r["id"]) == key and r["attempt"] == index[r["id"]]["attempt"], limit=100)]

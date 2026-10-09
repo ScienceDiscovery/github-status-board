@@ -58,17 +58,30 @@ class LaneClassificationTests(unittest.TestCase):
         self.assertEqual(lane_of(dict(name='CI', event=None, branch='main'), RULES, 'main'), 'unknown')
         self.assertEqual(lane_of(dict(name='CI', branch='main'), None, 'main'), 'unknown')
 
-    def test_workflow_call_children_are_not_counted_twice(self):
+    def test_all_run_ids_are_visible_including_called_other_and_unknown(self):
         nightly = run(1, 'Nightly', 'schedule', '2026-09-21T18:00:00Z', 'main')
         release = run(2, 'Release', 'push', '2026-09-21T09:00:00Z', '0.3.0')
         children = [run(3, 'CI', 'workflow_call', '2026-09-21T18:00:05Z', 'main'),
                     run(4, 'CI', 'schedule', '2026-09-21T18:00:06Z', 'main'),
                     run(5, 'CI', 'push', '2026-09-21T09:00:04Z', '0.3.0')]
-        doc, by_key = lanes([nightly, release, *children])
+        unknown = run(6, event=None, branch='main')
+        doc, by_key = lanes([nightly, release, *children, unknown, dict(children[0], attempt=2)])
         self.assertEqual(points(by_key['pr']) + points(by_key['main']), [])
         self.assertEqual(points(by_key['daily']), [1])
         self.assertEqual(points(by_key['release']), [2])
-        self.assertEqual(doc['excluded'], {'called': 2, 'other': 1})
+        self.assertEqual(points(by_key['called']), [3, 4])
+        self.assertEqual(points(by_key['other']), [5])
+        self.assertEqual(points(by_key['unknown']), [6])
+        self.assertEqual(doc['excluded'], {})
+        self.assertEqual(sorted(ident for lane in by_key.values() for ident in points(lane)), list(range(1, 7)))
+
+    def test_release_branch_keeps_manually_dispatched_nightly_in_daily(self):
+        doc = build_lanes([run(37845266203, 'Nightly', 'workflow_dispatch', branch='releases/v0.3.0.beta')],
+                          default_branch='releases/v0.3.0.beta', now=NOW, rules=RULES)
+        daily = next(lane for lane in doc['lanes'] if lane['key'] == 'daily')
+        self.assertEqual(points(daily), [37845266203])
+        self.assertTrue(daily['days'][-1][0]['manual'])
+        self.assertEqual(doc['excluded'], {})
 
     def test_path_named_startup_failure_stays_with_its_workflow(self):
         # GitHub names a run after its file when the workflow does not parse.
@@ -218,7 +231,8 @@ class SnapshotLaneTests(unittest.TestCase):
         sync = Sync(self.source(), self.root, REPO, settings={'workflows': RULES}, now=NOW).collect()
         ci = self.snapshot(sync)['sections']['ci']['data']
         lanes_by_key = {lane['key']: lane for lane in ci['lanes']['lanes']}
-        self.assertEqual({k: points(v) for k, v in lanes_by_key.items()}, {'pr': [1], 'main': [2, 5], 'daily': [3], 'release': [4]})
+        self.assertEqual({k: points(v) for k, v in lanes_by_key.items()},
+                         {'pr': [1], 'main': [2, 5], 'daily': [3], 'release': [4], 'called': [], 'other': [], 'unknown': []})
         self.assertEqual(lanes_by_key['pr']['days'][-1][0]['pr'], 7)
         self.assertEqual(ci['pull_request']['total'], 1)
         for name, content in sync.files().items():

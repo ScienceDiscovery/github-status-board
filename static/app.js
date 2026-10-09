@@ -205,7 +205,7 @@
   };
   // CI history lanes: one row per trigger lane, one column per day on a shared axis.
   // The collector buckets days and orders runs, so a column simply stacks them top-down.
-  const LANE_SOURCE = { pr: 'CI · pull_request', main: 'CI · 默认分支 push / 手动', daily: 'Nightly · 定时 / 手动', release: 'Release · 版本 tag' };
+  const LANE_SOURCE = { pr: 'CI · pull_request', main: 'CI · 默认分支 push / 手动', daily: 'Nightly · 定时 / 手动', release: 'Release · 版本运行', called: 'workflow_call / CI 调用事件', other: '其他工作流 / 分支事件', unknown: '缺少触发事件' };
   const laneSource = (L, key) => (key === 'main' && L.branch ? `CI · ${L.branch} push / 手动` : LANE_SOURCE[key] || '');
   const LANE_OUTCOMES = [['success', '成功'], ['failure', '失败/超时'], ['cancelled', '取消'], ['running', '运行中'], ['other', '其他（待批准等）']];
   const LANE_EVENT = { schedule: 'schedule · 定时', workflow_dispatch: 'workflow_dispatch · 手动' };
@@ -247,14 +247,10 @@
       return `<div class="ci-lane-row" role="row" data-lane="${esc(lane.key)}">${head}${days}</div>`;
     }).join('');
     const axis = L.days.map((day, i) => `<div class="ci-axis-day" role="columnheader">${i === 0 || day.endsWith('-01') ? laneDay(day) : Number(day.slice(8))}</div>`).join('');
-    const ex = L.excluded || {}, daily = L.lanes.some((lane) => lane.key === 'daily');
     const notes = [
       '成功率 = 成功 ÷（成功 + 失败/超时），取消、运行中与其他不计入；重跑按最后一次尝试着色，仍放在 run 创建的那天。',
       '耗时为最后一次尝试从开始到结束的时间；中位耗时只统计成功与失败的运行，运行中的没有耗时。',
-      daily ? 'Nightly / Release 通过 workflow_call 调用的 CI 不单独成点，只计入调用方所在的 Daily / 版本层。' : '',
-      ex.other ? `另有 ${ex.other} 次 run 不属于这${'一两三四'[L.lanes.length - 1] || ` ${L.lanes.length} `}层（其他工作流或${L.branch ? ` ${L.branch} 以外分支的` : '非默认分支'} push），未画入。` : '',
-      ex.called ? `${ex.called} 次由其他工作流调用的 CI 子 run 已并入调用方。` : '',
-      ex.unknown ? `${ex.unknown} 次 run 缺少触发事件，无法分层。` : '',
+      '按 run ID 展示该分支线窗口内的全部已采集运行；workflow_call 子 run 单列在工作流调用层，其他工作流和未知触发事件也各自成点。',
       L.collected_since ? `${laneDay(L.collected_since)} 之前的日期尚未采集（斜纹），不代表没有运行。` : '',
     ].filter(Boolean);
     const legendItems = LANE_OUTCOMES.map(([key, name]) => `<span><i class="ci-run ${key}"></i>${esc(name)}</span>`).join('') + (L.collected_since ? '<span><i class="ci-lane-day uncollected"></i>未采集</span>' : '');
@@ -282,7 +278,7 @@
     const lines = snap.lines || [], line = currentLine(snap);
     if (lines.length < 2) return '';
     return `<div class="line-bar"><div class="seg line-switch" role="group" aria-label="分支线"><span class="seg-label">分支线</span>${lines.map((l) => `<button type="button" class="${l.key === line.key ? 'on' : ''}" data-line="${esc(l.key)}" aria-pressed="${l.key === line.key}">${esc(l.ref)}</button>`).join('')}</div>`
-      + `<span class="muted">当前 <code>${esc(line.ref)}</code>：${line.default ? '默认分支的 push、定时、版本运行，以及目标为它的 PR' : '该分支的 push / 手动运行，以及目标为它的 PR'}；各分支线的数据互不混合。</span></div>`;
+      + `<span class="muted">当前 <code>${esc(line.ref)}</code>：按运行分支及 PR 目标分支归类，包含 Daily 和其他工作流；各分支线的数据互不混合。</span></div>`;
   };
   // The word for a line's own branch runs: 主干 on the default branch, the full branch name elsewhere.
   const trunkName = (line) => (line.default ? '主干' : ` ${line.ref} 分支`);

@@ -2,18 +2,21 @@
 
 ## 功能
 
-CI 页的「CI 分层历史」替代原来的单条「主干时间线」。四层与源仓 Actions 的触发方式一致，所有层共用一条日期横轴：
+CI 页的「CI 分层历史」按触发方式展示该分支线窗口内的全部已采集 Actions run，七层共用一条日期横轴：
 
 | 层 | 归入的 run |
 | --- | --- |
 | PR | 门禁工作流（默认名称 `^CI$`）的 `pull_request` / `pull_request_target` |
-| 主干 | 门禁工作流在默认分支的 `push`，以及它自己的 `workflow_dispatch`（提示中标“手动”） |
+| 主干 / 完整分支名 | 门禁工作流在该分支线上的 `push`，以及它自己的 `workflow_dispatch`（提示中标“手动”） |
 | Daily | 名称匹配 daily 规则（Nightly）的 run，包括 `schedule` 和手动 `workflow_dispatch` |
-| 版本 | 名称匹配 release 规则（Release）的 run，即版本 tag 推送 |
+| 版本 | 名称匹配 release 规则（Release）的 run，包括版本 tag 推送或手动运行 |
+| 工作流调用 | `event=workflow_call` 的 run，以及门禁工作流带有其他调用事件（如 `schedule`）的 run |
+| 其他工作流 | 不匹配上述名称规则的工作流，以及归入该线但不匹配其门禁层的分支事件 |
+| 未知触发 | 缺少触发事件、且无法通过关联 PR 归类的门禁 run |
 
-[分支线](branch-lines.md)的其他分支只画 PR（目标为该分支）与该分支 push / 手动两层，层名为分支线名称。
+[分支线](branch-lines.md)的每条线都有上述完整分层。非默认分支的 push / 手动门禁层使用完整分支名；例如在 `releases/v0.3.0.beta` 手动运行 Nightly，会出现在该分支线的 Daily 层。
 
-名称规则取 `board-config.json` 的 `workflows.gate` / `daily` / `release`，缺省时使用相同默认值。Nightly 与 Release 通过 `workflow_call` 调用 CI，被调用的 job 属于调用方的 run，只在 Daily / 版本层计一次。若出现 `event=workflow_call` 的 run，或门禁工作流带有自身没有的触发事件（如 `schedule`），均视为被调用的子 run，不在任何层画点，只在图下计数。其他工作流、门禁工作流在非默认分支的 push 计为“其他”，同样不画入。
+名称规则取 `board-config.json` 的 `workflows.gate` / `daily` / `release`，缺省时使用相同默认值。分层不会排除其他类别：若 GitHub 返回独立的 `workflow_call` 子 run，就按其 run ID 在工作流调用层单独画点。仅属于父 run 的 job 不会被虚构成新 run；同一 run 的重试仍只展示最后一次尝试。其他工作流和无法判断触发方式的旧记录也各有显示层，不再只留脚注计数。
 
 ## 使用
 
@@ -31,8 +34,8 @@ CI 页的「CI 分层历史」替代原来的单条「主干时间线」。四�
 - `gsb/ci_lanes.py`：`lane_of` 分层，`pr_number` 取 PR 号，`duration` 取每次 run 的耗时（记录中的 `duration_s`，否则为开始到最后更新的时间），`build_lanes` 生成 `sections.ci.data.lanes`，每格带 `duration_s`，每层摘要带 `median_duration_s`。`days` 是共同日期轴，每层 `days[i]` 与之对齐，格内已按时间排序。前端 `static/app.js` 的 `ciLanes` 只负责渲染。
 - PR 号优先使用 run 的 `pull_requests`。fork PR 的该字段为空，改为按 head 分支匹配当时开放的 PR，再用 head 仓库、SHA、标题排除歧义；仍不唯一时不显示号码。推断出的号码在提示中标“按分支推断”。
 - 增量模式（`incremental_project.build_snapshot`）只为窗口内的 run 读取完整记录，并只读取窗口内开放过的 PR。兼容模式（`project.build_project`）使用本次读取的 run 页。
-- run 与 PR 记录新增 `head_repo`，历史搜索索引新增 `event`。旧索引行缺少 `event` 时，快照从对应记录重建该行一次，不改记录、不删除历史；新字段随增量采集与每周对账补齐。既无触发事件又无关联 PR 的 run 计为“无法分层”。
-- 已发布快照没有 `lanes` 时，下一轮采集会重建一次快照。
+- run 与 PR 记录新增 `head_repo`，历史搜索索引新增 `event`。旧索引行缺少 `event` 时，快照从对应记录重建该行一次，不改记录、不删除历史；新字段随增量采集与每周对账补齐。既无触发事件又无关联 PR 的门禁 run 显示在“未知触发”。
+- 已发布快照没有 `lanes`，或任一分支线缺少完整分层时，下一次构建从已有记录重建快照；不改变 Actions 查询，也不重新下载产物。
 
 ## 边界
 
@@ -48,4 +51,4 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_ci_lane
 node .e2e/node_modules/playwright/cli.js test --config test/playwright.config.cjs -g "CI trends"
 ```
 
-单元测试覆盖分层归类（PR、主干 push、Nightly 定时与手动、Release tag、`workflow_call` 不重复计数）、同一天多次 run 的纵向顺序、各层日期对齐、PR 号推断以及旧索引缺字段降级。浏览器用例检查四层与 30 列对齐、同日纵向顺序、提示内容、空层、窄屏滚动与标签固定。
+单元测试覆盖完整分层（PR、分支 push、Nightly 定时与手动、Release tag、独立 `workflow_call`、其他工作流、未知触发）、run ID 去重、同一天多次 run 的纵向顺序、各层日期对齐、PR 号推断以及旧索引缺字段降级。浏览器用例检查七层与 30 列对齐、同日纵向顺序、提示和链接、空层、窄屏滚动与标签固定。
