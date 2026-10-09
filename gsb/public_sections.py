@@ -9,6 +9,14 @@ from .board import BoardStore
 from .collectors import collect_ci, _coverage_probe, _tree_paths, OPS_BLOCKS
 from .github import GitHubError
 from .testparse import summarize_tree, package_of
+from .real_e2e_definitions import definition as real_e2e_definition
+
+
+def _score_with_definition(score):
+    if score.get('journey'):
+        return score
+    details = real_e2e_definition(score.get('case'), score.get('family'))
+    return {**score, 'journey': details} if details else score
 
 
 def envelope(fn):
@@ -91,6 +99,7 @@ def score_history(runs, limit=30):
             if not report.get('name', '').startswith('real-e2e-results'):
                 continue
             for score in report.get('scores', []):
+                score = _score_with_definition(score)
                 case = score.get('case')
                 if not isinstance(case, str) or not case or case in seen:
                     continue
@@ -121,6 +130,8 @@ def score_history(runs, limit=30):
                     'url': report.get('url') or run.get('url'),
                     'delivery': score.get('delivery'), 'quality_status': score.get('quality_status'),
                     'duration_ms': score.get('duration_ms'),
+                    **({'journey': score['journey']} if score.get('journey') else {}),
+                    **({'model': score['model']} if score.get('model') else {}),
                     'metrics': metrics,
                 })
     return {case: rows[-limit:] for case, rows in points.items()}
@@ -133,7 +144,8 @@ def latest_score_report(runs):
             if report.get('name', '').startswith('real-e2e-results') and report.get('scores'):
                 return {'artifact': report['name'], 'run_id': run['id'], 'attempt': run.get('attempt', 1),
                         'branch': run.get('branch'), 'created_at': report.get('created_at') or run.get('updated_at'),
-                        'url': report.get('url') or run.get('url'), 'scores': report['scores']}
+                        'url': report.get('url') or run.get('url'),
+                        'scores': [_score_with_definition(score) for score in report['scores']]}
     return None
 
 

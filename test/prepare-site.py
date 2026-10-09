@@ -48,6 +48,12 @@ real_scores += [
 latest_scores=json.loads(json.dumps(real_scores))
 latest_scores[0]['delivery'] = 'failed'
 latest_scores[0]['metrics'][0]['value'] = None
+latest_scores[0]['journey'] = dict(source='run-report',
+    goal='Research DRB-59 and evaluate both delivery and report quality.',
+    preconditions=['live generator', 'isolated Swarm stack', 'configured judges and source access'],
+    step_summary='本次报告没有记录独立的用户步骤。', steps=[],
+    metadata=dict(type='real', model='Live generator and configurable judges',
+                  credentials='E2E_API_TOKEN（仅变量名）', cost_side_effects='Billable research and Judge calls'))
 runs[1]['tests'].insert(0,dict(name='real-e2e-results',layer='e2e',status='available',counts=dict(tests=9,passed=9,failed=0,skipped=0,flaky=0),cases=[],scores=latest_scores,artifact_id=210,url=runs[1]['url']+'/artifacts/210',created_at=time))
 runs[1]['tests'][0]['counts'].update(passed=8, failed=1)
 class GH:

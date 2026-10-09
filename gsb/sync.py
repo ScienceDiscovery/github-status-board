@@ -16,7 +16,7 @@ from .tagged import TaggedStore
 
 # 2: tagged catalogs and harness summaries are read from results artifacts.
 # 3: Real E2E metrics are reduced to public score summaries.
-PARSER_VERSION = 3
+PARSER_VERSION = 4
 
 
 def stamp(value):

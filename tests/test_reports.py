@@ -52,6 +52,36 @@ class ReportsTests(unittest.TestCase):
         self.assertEqual(len(parsed['scores']), 4)
         self.assertEqual({row['family'] for row in parsed['scores']}, {'deepresearchbench', 'biomnibench', 'research-team', 'evolve-compression'})
         self.assertEqual(next(row for row in parsed['scores'] if row['case'] == 'PUCT-COMPRESS')['duration_ms'], 60000)
+        drb = next(row for row in parsed['scores'] if row['case'] == 'DRB-59')
+        self.assertEqual(drb['journey']['source'], 'source-definition')
+        self.assertIn('DRB-59', drb['journey']['goal'])
+        self.assertEqual(drb['journey']['metadata']['type'], 'real')
+        self.assertNotIn('PRIVATE', json.dumps(parsed))
+
+    def test_real_e2e_journey_report_attaches_public_fields_to_matching_score(self):
+        report = '''<h1>旅程报告 · DRB-58 Swarm research integration</h1>
+        <table><tr><th>用例</th><td>DRB-58 Swarm research integration</td></tr></table>
+        <h2>场景目标</h2><p>Research DRB-58 and evaluate delivery.</p>
+        <h2>前置条件</h2><ul><li>live generator</li><li>isolated Swarm stack</li></ul>
+        <h2>步骤总览</h2><p>本次运行未记录用户步骤。</p>
+        <h2>运行元数据（来自 E2E-META）</h2><table>
+        <tr><th>类型</th><td>real</td></tr><tr><th>模型</th><td>Live generator</td></tr>
+        <tr><th>凭据</th><td>E2E_API_TOKEN</td></tr></table>
+        <h2>关键日志</h2><pre>PRIVATE LOG</pre>'''
+        parsed = parse_report_zip(archive({
+            'e2e-real/test-results/DRB-58/benchmark-metrics.json': json.dumps({
+                'case_id': 58, 'integration_status': 'passed', 'generator_model': 'example-model',
+                'evaluation': {'status': 'scored', 'race': {'overall_score': .7}}, 'prompt': 'PRIVATE PROMPT'}),
+            'e2e-real/journey-reports/deepresearchbench-swarm/DRB-58/report.html': report,
+            'e2e-real/journey-reports/deepresearchbench-swarm/DRB-59/report.html':
+                report.replace('DRB-58', 'DRB-59'),
+        }))
+        score = parsed['scores'][0]
+        self.assertEqual(score['case'], 'DRB-58')
+        self.assertEqual(score['model'], 'example-model')
+        self.assertEqual(score['journey']['goal'], 'Research DRB-58 and evaluate delivery.')
+        self.assertEqual(score['journey']['preconditions'], ['live generator', 'isolated Swarm stack'])
+        self.assertEqual(score['journey']['metadata']['credentials'], 'E2E_API_TOKEN')
         self.assertNotIn('PRIVATE', json.dumps(parsed))
 
     def test_archive_limit(self):

@@ -16,7 +16,8 @@ from gsb.github import GitHub, GitHubError, discover_token
 from gsb.project import REPO_RE, build_project
 
 ROOT = Path(__file__).resolve().parent
-STATIC_FILES = ("index.html", "app.js", "style.css", "board.js", "board-local.js", "gitcode-sync.js")
+STATIC_FILES = ("index.html", "app.js", "style.css", "board.js", "board-local.js", "gitcode-sync.js",
+                "real-e2e.html", "real-e2e.js", "e2e-report.html")
 # Written only when the collect workflow fetched GitCode sync records from the bot.
 SYNC_DATA = "data/gitcode-sync.json"
 

@@ -7,13 +7,88 @@ import math
 import re
 import zipfile
 from datetime import datetime
+from html.parser import HTMLParser
 from xml.etree import ElementTree as ET
 
 from .tagged import extract as extract_tagged
 from .testparse import parse_run_log, COVERAGE_FILE_RE, parse_coverage_file
+from .real_e2e_definitions import combine
 
 FIELDS = ("passed", "failed", "skipped", "flaky")
 SCORE_FILE_RE = re.compile(r"(?:^|/)(benchmark-metrics|team-metrics|evolve-metrics)\.json$", re.I)
+JOURNEY_CASE_RE = re.compile(r"\b(?:DRB-[0-9]+|BiomniBench-[A-Za-z0-9-]+|TC-E2E-01|PUCT-COMPRESS)\b")
+
+
+def _short(value, limit=300):
+    return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
+
+
+class _JourneySummary(HTMLParser):
+    """Read only the report header, scenario, steps and declared metadata."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.section = None
+        self.capture = None
+        self.parts = []
+        self.row = None
+        self.title = ""
+        self.goal = ""
+        self.preconditions = []
+        self.step_summary = ""
+        self.steps = []
+        self.metadata = {}
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("h1", "h2") or tag in ("p", "li") and self.section in ("场景目标", "前置条件", "步骤总览"):
+            self.capture, self.parts = tag, []
+        elif tag == "tr":
+            self.row = []
+        elif tag in ("th", "td") and self.row is not None:
+            self.capture, self.parts = tag, []
+
+    def handle_data(self, data):
+        if self.capture:
+            self.parts.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == self.capture:
+            value = _short("".join(self.parts), 400)
+            if tag == "h1":
+                self.title = value
+            elif tag == "h2":
+                self.section = value
+            elif tag == "p" and self.section == "场景目标":
+                self.goal = value
+            elif tag == "p" and self.section == "步骤总览":
+                self.step_summary = value
+            elif tag == "li" and self.section == "前置条件" and len(self.preconditions) < 8:
+                self.preconditions.append(value[:200])
+            elif tag in ("th", "td") and self.row is not None:
+                self.row.append(value)
+            self.capture, self.parts = None, []
+        if tag == "tr" and self.row:
+            if self.section is None and self.row[0] == "用例" and len(self.row) > 1:
+                self.title = self.row[1]
+            elif self.section == "步骤总览" and self.row[0].isdigit() and len(self.row) >= 5 and len(self.steps) < 12:
+                self.steps.append({"title": self.row[1][:160], "expected": self.row[2][:200],
+                                   "result": self.row[3][:80], "duration": self.row[4][:40]})
+            elif self.section and self.section.startswith("运行元数据") and len(self.row) > 1:
+                names = {"类型": "type", "模型": "model", "凭据": "credentials", "成本与副作用": "cost_side_effects"}
+                if self.row[0] in names and self.row[1] not in ("-", "—", ""):
+                    self.metadata[names[self.row[0]]] = self.row[1][:300]
+            self.row = None
+
+
+def journey_summary(html):
+    parser = _JourneySummary()
+    parser.feed(html)
+    case = JOURNEY_CASE_RE.search(parser.title)
+    if not case:
+        return None
+    return case.group(0), {"source": "run-report", "goal": parser.goal[:300], "preconditions": parser.preconditions,
+                           "step_summary": parser.step_summary[:300], "steps": parser.steps,
+                           "metadata": parser.metadata}
 
 
 def _number(value):
@@ -90,9 +165,13 @@ def research_score(doc, source_path=""):
     if not family or not isinstance(case, str) or not case.strip():
         return None
     metrics = [metric for metric in metrics if metric is not None]
-    return {"case": case.strip()[:100], "family": family, "delivery": _status(delivery),
+    result = {"case": case.strip()[:100], "family": family, "delivery": _status(delivery),
             "quality_status": _status(evaluation.get("status"), "not_scored"),
             "duration_ms": _duration_ms(doc), "metrics": metrics}
+    model = doc.get("generator_model")
+    if isinstance(model, str) and model.strip():
+        result["model"] = _short(model, 120)
+    return result
 
 
 def totals(cases):
@@ -180,10 +259,18 @@ def parse_report_zip(blob):
         if len(entries) > 3000 or sum(e.file_size for e in entries) > 160 * 1024 * 1024:
             raise ValueError("report archive exceeds extraction budget")
         reports = {"playwright": [], "tagged": [], "junit": [], "summary": [], "log": []}
-        coverage, scores = [], []
+        coverage, scores, journeys = [], [], {}
         for item in entries:
             name = item.filename.lower()
             if item.is_dir() or item.file_size > 20 * 1024 * 1024:
+                continue
+            if "/journey-reports/" in "/" + name and name.endswith("/report.html") and item.file_size <= 256 * 1024:
+                try:
+                    summary = journey_summary(archive.read(item).decode("utf-8", "replace"))
+                    if summary:
+                        journeys[summary[0]] = summary[1]
+                except (ValueError, TypeError):
+                    pass
                 continue
             if not (name.endswith(("results.json", "report.json", ".xml", "run.log", "dashboard-summary.json")) or COVERAGE_FILE_RE.search(name) or SCORE_FILE_RE.search(name)):
                 continue
@@ -235,6 +322,10 @@ def parse_report_zip(blob):
             if planned is not None and passed is not None and passed + skipped <= planned:
                 reports["tagged"].append({"tests": planned, "passed": passed, "failed": planned - passed - skipped,
                                           "skipped": skipped, "flaky": 0, "cases": []})
+        for score in scores:
+            details = combine(score["case"], score["family"], journeys.get(score["case"]))
+            if details:
+                score["journey"] = details
         for family in ("summary", "playwright", "tagged", "junit", "log"):
             if reports[family]:
                 counts = {k: sum(r.get(k, 0) for r in reports[family]) for k in ("tests", *FIELDS)}

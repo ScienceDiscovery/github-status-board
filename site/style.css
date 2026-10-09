@@ -280,6 +280,9 @@ a.ci-run:hover, a.ci-run:focus-visible { outline: 2px solid var(--ink); outline-
 .score-run-row { margin-top: 5px; font-variant-numeric: tabular-nums; }
 .score-run-row .bad { color: var(--bad, #c73131); font-weight: 700; }
 .score-run-row .good { color: var(--good, #108237); font-weight: 700; }
+.real-case-link { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.real-case-link code { color: inherit; }
+.real-case-link:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
 .score-series.duration .score-line { stroke: var(--s2); }
 .score-series.duration .score-dot { stroke: var(--s2); }
 .score-chart text { fill: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }

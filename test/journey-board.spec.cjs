@@ -380,6 +380,36 @@ test('real E2E scores open per-case trends without crowding the table', async ({
   await page.keyboard.press('Escape');
 });
 
+test('Real E2E case names open branch-specific run details', async ({ page }) => {
+  await page.goto('/github-status-board/#tests');
+  await page.getByRole('link', { name: '查看 DRB-59 的 Real E2E 详情' }).click();
+  await expect(page).toHaveURL(/real-e2e\.html\?line=main&case=DRB-59$/);
+  await expect(page.getByRole('heading', { name: '旅程报告 · DRB-59', exact: true })).toBeVisible();
+  await expect(page.locator('.history-table .real-history-row')).toHaveCount(12);
+  await expect(page.locator('.history-table .badge.failed')).toHaveCount(1);
+  await expect(page.locator('.metric-table thead')).toContainText('最新');
+  await expect(page.locator('.metric-table thead')).toContainText('平均（实测）');
+  await expect(page.locator('.metric-table tbody tr').first()).toContainText('沿用上次实测');
+  await expect(page.locator('.real-run-card')).toHaveCount(0);
+  for (const heading of ['场景目标', '前置条件', '步骤总览', '运行元数据']) {
+    await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+  }
+  await expect(page.getByText('Research DRB-59 and evaluate both delivery and report quality.')).toBeVisible();
+  await expect(page.getByText('isolated Swarm stack', { exact: true })).toBeVisible();
+  await expect(page.getByText('本次报告没有记录独立的用户步骤。')).toBeVisible();
+  await expect(page.locator('.report-meta').last()).toContainText('E2E_API_TOKEN（仅变量名）');
+  await page.getByRole('link', { name: '← 返回测试看板' }).click();
+  await expect(page.locator('#tab-tests')).toBeVisible();
+  await expect(page.locator('#tab-tests .line-switch [data-line="main"]')).toHaveClass(/on/);
+  const caseLink = page.getByRole('link', { name: '查看 DRB-59 的 Real E2E 详情' });
+  await expect.poll(() => caseLink.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.top >= 0 && rect.bottom <= innerHeight;
+  })).toBeTruthy();
+  await page.getByRole('button', { name: '查看 DRB-59 的分数趋势' }).click();
+  await expect(page.locator('#score-trend-dialog')).toContainText('共保留 12 个已读取的逐用例点');
+});
+
 const wakeTitle = '后台执行完成后显示运行时提示而不是伪装成用户消息，并且保留项目保存结果和完整的任务执行记录供后续查看';
 const wakeCase = page => page.locator('[data-e2e-slice="mocked-standard"] .e2e-case')
   .filter({ has: page.getByRole('heading', { name: wakeTitle, exact: true }) })
@@ -443,15 +473,21 @@ test('E2E run records show categories and case timelines without opening runs', 
   await expect(points.nth(3).locator('a')).toHaveCount(0); // fork's HTML is not hosted
   await expect(records.locator('a[href*="/index.html"]')).toHaveCount(0);
   const report = points.first().locator('a');
-  await expect(report).toHaveAttribute('href', './e2e/7001/mocked-standard/data/40072e79cd3d0cda7a79c6bad7501851b4babf54.html');
+  const reportUrl = new URL(await report.getAttribute('href'), page.url());
+  expect(reportUrl.pathname).toBe('/github-status-board/e2e-report.html');
+  expect(reportUrl.searchParams.get('src')).toBe('e2e/7001/mocked-standard/data/40072e79cd3d0cda7a79c6bad7501851b4babf54.html');
+  expect(reportUrl.searchParams.get('line')).toBe('main');
   const [tab] = await Promise.all([page.waitForEvent('popup'), report.click()]);
-  await expect(tab.locator('h1')).toHaveText('后台执行完成后显示运行时提示');
-  await expect(tab.locator('img')).toHaveCount(3);
-  await expect.poll(() => tab.locator('img').evaluateAll(imgs => imgs.every(img => img.complete && img.naturalWidth > 0))).toBeTruthy();
-  for (const src of await tab.locator('img').evaluateAll(imgs => imgs.map(img => img.src))) {
+  const detail = tab.frameLocator('#report-frame');
+  await expect(detail.locator('h1')).toHaveText('后台执行完成后显示运行时提示');
+  await expect(detail.locator('img')).toHaveCount(3);
+  await expect.poll(() => detail.locator('img').evaluateAll(imgs => imgs.every(img => img.complete && img.naturalWidth > 0))).toBeTruthy();
+  for (const src of await detail.locator('img').evaluateAll(imgs => imgs.map(img => img.src))) {
     expect(decodeURI(src)).toContain('/journey-reports/issue-77-wake-notice/');
     expect((await page.request.get(src)).status()).toBe(200);
   }
+  await tab.getByRole('link', { name: '返回测试看板' }).click();
+  await expect(tab.locator('#tab-tests .e2e-case').filter({ has: tab.locator('h4', { hasText: '后台执行完成后显示运行时提示' }) }).first()).toBeInViewport();
   await tab.close();
   await expect(records.locator('.e2e-case-details, .e2e-attempt, .e2e-error, .e2e-steps')).toHaveCount(0);
   await expect(records).not.toContainText('步骤与错误摘要');

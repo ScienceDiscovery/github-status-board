@@ -53,6 +53,9 @@
   const loadLine = () => { try { return localStorage.getItem(LINE_KEY); } catch (e) { return null; } };
   const loadCovSort = () => { try { return localStorage.getItem(COV_SORT_KEY) === 'lines' ? 'lines' : 'name'; } catch (e) { return 'name'; } };
   const STATE = { snap: null, status: null, tab: 'overview', views: loadViews(), line: loadLine(), covOpen: new Set(), covSort: loadCovSort(), sort: {}, filters: { issueQ: '', issueLabel: '', issueAssignee: '', runBranch: '' }, coverageWeekOffset: 0, scoreWeekOffset: 0, scoreCase: null, e2e: null, e2eSteps: {}, e2eFilter: { status: '', q: '' }, e2eLoading: new Set(), e2eErrors: new Set(), e2eCollapsed: new Set(), pollTimer: null };
+  const returnParams = new URLSearchParams(location.search);
+  const returnFocus = { line: returnParams.get('returnLine'), caseName: returnParams.get('returnCase'), pending: !!returnParams.get('returnCase'),
+    e2eKey: returnParams.get('returnE2E'), e2ePending: !!returnParams.get('returnE2E') };
 
   // ------------------------------------------------------------ components
   const badge = (text, tone = '', extra = '') => `<span class="badge ${tone}"${extra}>${esc(text)}</span>`;
@@ -702,6 +705,7 @@
   };
   const scoreSource = (metric) => metric.source === 'carried' ? '（沿用上次实测）'
     : metric.source === 'baseline' ? '（无历史，按 0 展示）' : '';
+  const realCaseHref = (caseName) => `./real-e2e.html?line=${encodeURIComponent(currentLine(STATE.snap).key)}&case=${encodeURIComponent(caseName)}`;
   const scoreTick = (value, unit) => unit === 'percent' ? `${value.toFixed(1)}%`
     : unit === 'score100' ? value.toFixed(1) : unit === 'ratio' ? value.toFixed(3)
       : unit === 'duration_ms' ? dur(value / 1000) : n(value);
@@ -790,7 +794,7 @@
       { label: '质量门槛', value: '无', sub: '不根据分数改变 CI 结论' },
     ]);
     html += `<div class="card" style="margin-top:12px">${table('real-e2e-scores', [
-      { key: 'case', label: '用例', render: (row) => `<code>${esc(row.case)}</code>` },
+      { key: 'case', label: '用例', render: (row) => `<a class="real-case-link" data-real-case="${esc(row.case)}" href="${esc(realCaseHref(row.case))}" aria-label="查看 ${esc(row.case)} 的 Real E2E 详情"><code>${esc(row.case)}</code></a>` },
       { key: 'family', label: '评分体系', render: (row) => esc(REAL_FAMILY_NAME[row.family] || row.family) },
       { key: 'delivery', label: '交付', render: (row) => deliveryBadge(row.delivery), sort: (row) => row.delivery },
       { key: 'metrics', label: '质量结果', sortable: false, render: (row) => { const latest = (history[row.case] || []).findLast((point) => point.run_id === report.run_id); const metrics = latest?.metrics || row.metrics; return `${['error', 'failed'].includes(row.quality_status) ? '<span class="badge warn">评分异常</span>' : ''}${metrics.length ? metrics.map((metric) => `<div><span class="muted">${esc(metric.label)}</span> <span class="num">${scoreValue(metric)}</span> <span class="muted">${scoreSource(metric)}</span></div>`).join('') : '<span class="muted">不可用</span>'}<button type="button" class="score-trend-trigger" data-score-case="${esc(row.case)}" aria-label="查看 ${esc(row.case)} 的分数趋势">查看趋势 ↗</button>`; } },
@@ -858,10 +862,11 @@
     const latest = item.history.at(-1).c;
     const points = item.history.map(({record, c}) => {
       const href = caseHTMLPath(c, record, item.slice);
+      const viewer = href ? `./e2e-report.html?${new URLSearchParams({ src: href.slice(2), line: currentLine(STATE.snap).key, case: item.key })}` : '';
       const description = `${date(record.created_at)} · ${E2E_NAME[c.status]} · 耗时 ${msText(c.duration_ms)} · ${record.title || 'run'} ${record.run_id}${c.project ? ` · ${c.project}` : ''}${href ? ' · 打开执行记录 HTML' : ''}`;
       const content = `<span class="e2e-status-mark ${esc(c.status)}" aria-hidden="true">${E2E_MARK[c.status]}</span>`;
       return `<li class="e2e-history-point ${esc(c.status)}" data-e2e-artifact="${esc(record.artifact_id)}">${href
-        ? `<a class="e2e-point e2e-case-html" href="${esc(href)}" target="_blank" rel="noopener"${tip(description)} aria-label="${esc(description)}">${content}</a>`
+        ? `<a class="e2e-point e2e-case-html" href="${esc(viewer)}" target="_blank" rel="noopener"${tip(description)} aria-label="${esc(description)}">${content}</a>`
         : `<span class="e2e-point" tabindex="0" role="img"${tip(description)} aria-label="${esc(description)}">${content}</span>`}</li>`;
     }).join('');
     return `<article class="e2e-case" data-e2e-case="${esc(item.key)}"><header class="e2e-case-head"><h4 class="e2e-case-title">${esc(item.title)}</h4><span class="sub">${n(item.history.length)} 次执行 · 最新 ${badge(E2E_NAME[latest.status], E2E_TONE[latest.status])}</span></header>
@@ -898,6 +903,20 @@
     if (!box) return;
     const focus = document.activeElement, key = focus?.dataset?.e2eFilter, pos = focus?.selectionStart;
     box.innerHTML = e2eHistoryContent();
+    if (returnFocus.e2ePending && STATE.tab === 'tests') {
+      const target = [...box.querySelectorAll('[data-e2e-case]')]
+        .find((item) => item.dataset.e2eCase === returnFocus.e2eKey);
+      if (target) {
+        returnFocus.e2ePending = false;
+        requestAnimationFrame(() => {
+          target.scrollIntoView({ block: 'center' });
+          const url = new URL(location.href);
+          url.searchParams.delete('returnLine');
+          url.searchParams.delete('returnE2E');
+          history.replaceState(history.state, '', url);
+        });
+      }
+    }
     if (key) {
       const el = $(`[data-e2e-filter="${key}"]`, box);
       el?.focus({preventScroll: true});
@@ -1220,6 +1239,20 @@
     pinLanes(keep);
     try { if (window.GSBBoard) window.GSBBoard.onSnapshot(snap); } catch (err) { console.error(err); }
     mountBoard();
+    if (returnFocus.pending && STATE.tab === 'tests') {
+      const target = [...document.querySelectorAll('#tab-tests [data-real-case]')]
+        .find((item) => item.dataset.realCase === returnFocus.caseName);
+      if (target) {
+        returnFocus.pending = false;
+        requestAnimationFrame(() => {
+          target.scrollIntoView({ block: 'center' });
+          const url = new URL(location.href);
+          url.searchParams.delete('returnLine');
+          url.searchParams.delete('returnCase');
+          history.replaceState(history.state, '', url);
+        });
+      }
+    }
   }
 
   function renderAll() { renderShell(); renderTabs(); }
@@ -1245,6 +1278,7 @@
       const doc = await fetchJson('./data/snapshot.json?ts='+Date.now());
       if(!doc.sections || !doc.board)throw new Error('快照格式尚未更新，请稍后刷新');
       STATE.snap=doc;STATE.status={refreshing:false};
+      if ((returnFocus.pending || returnFocus.e2ePending) && (doc.lines || []).some((line) => line.key === returnFocus.line)) STATE.line = returnFocus.line;
       window.GSBLocalBoard?.setSnapshot(doc);
       STATE.clientError = null;
       // Run records are optional: a missing index only hides that section.
