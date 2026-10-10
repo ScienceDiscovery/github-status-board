@@ -150,7 +150,7 @@
     const values = slots.filter((slot) => slot.row?.totals?.lines?.percentage != null)
       .map((slot) => Number(slot.row.totals.lines.percentage));
     if (!values.length) {
-      return `<div class="coverage-week-empty">${slots.map((slot) => `<span>${dayLabel(slot.day)}</span>`).join('')}<strong>该周没有成功的完整覆盖率结果</strong></div>`;
+      return `<div class="coverage-week-empty">${slots.map((slot) => `<span>${dayLabel(slot.day)}</span>`).join('')}<strong>该周没有完整覆盖率结果</strong></div>`;
     }
     const rawMin = Math.min(...values), rawMax = Math.max(...values);
     const margin = Math.max((rawMax - rawMin) * 0.18, 0.5);
@@ -1102,7 +1102,7 @@
       body += tiles(metricTiles);
       const history = (dataset.history || []).filter((row) => row.totals?.lines?.percentage != null);
       body += `<div class="grid wide" style="margin-top:12px">
-        ${card(`${label} 每日完整行覆盖率`, history.length ? coverageTrend(history, selectedRange?.start) : empty('下一次完整运行后会形成趋势'), { sub: `默认展示最新数据窗口；历史按自然周查看。每天取北京时间最后一个成功的 ${line.default ? 'main push / nightly' : `${esc(line.ref)} 手动 / push`} 完整结果；不混入 PR 结果` })}
+        ${card(`${label} 每日完整行覆盖率`, history.length ? coverageTrend(history, selectedRange?.start) : empty('下一次完整运行后会形成趋势'), { sub: `默认展示最新数据窗口；历史按自然周查看。每天取北京时间最后一个完整覆盖率结果：Nightly 须 UT、ST、Coverage 成功（不受 real E2E 影响），${line.default ? 'main push' : `${esc(line.ref)} push / 手动`} 须 CI 成功；不混入 PR 结果` })}
         ${card(`${label} 数据身份`, kv([
           ['当前', `${badge(kind, tone)} ${esc(dataset.source)}`],
           ['完整基线', baseline ? `${date(baseline.created_at)} · <code>${esc((baseline.sha || '').slice(0, 12))}</code>` : '尚无'],

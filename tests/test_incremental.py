@@ -11,7 +11,7 @@ from gsb.sync import Sync, BudgetExhausted, stamp, date
 from gsb.project import run_details, slim_run
 from gsb.config import Config
 from gsb.github import GitHubError
-from gsb.incremental_project import build_snapshot, _executed, _persist_coverage_summaries, _daily_coverage_history
+from gsb.incremental_project import build_snapshot, _executed, _persist_coverage_summaries, _daily_coverage_history, _coverage_artifact_eligible
 from publish import publish_batch
 from test_reports import archive
 
@@ -161,16 +161,32 @@ class SyncTests(unittest.TestCase):
 
     def test_coverage_summaries_persist_on_runs_and_keep_latest_result_per_beijing_day(self):
         history=History(self.root)
-        for number in (1,2,3):
+        for number in (1,2,3,4,5):
             raw=run(number)
+            if number == 3:
+                # The UT/ST coverage can be complete even when a later E2E
+                # job makes the overall Nightly run fail.
+                raw.update(name='Nightly', event='schedule', conclusion='failure')
+            if number == 4:
+                raw.update(conclusion='failure')
+            if number == 5:
+                raw.update(name='Nightly', event='schedule', conclusion='failure')
             raw['run_started_at']=stamp(NOW+timedelta(hours=number-1))
             raw['created_at']=raw['run_started_at'];raw['updated_at']=stamp(NOW+timedelta(hours=number))
-            history.put('runs',slim_run(raw,{}))
+            record=slim_run(raw,{})
+            if number in (3,5):
+                record['jobs']=[{'name':f'Gate / {name}',
+                                 'conclusion':'failure' if number == 5 and name == 'ST' else 'success'}
+                                for name in ('UT','ST','Coverage')]
+                record['jobs'].append({'name':'Gate / E2E (real, daily only)','conclusion':'failure'})
+            history.put('runs',record)
         metric=lambda value:{'lines':{'covered':value,'total':100,'percentage':value}}
         entries=[
             dict(artifact='node-coverage-summary-push-one',run_id=1,created_at=stamp(NOW+timedelta(minutes=30)),sha='1'*40,kind='main full',totals=metric(80)),
             dict(artifact='node-coverage-summary-push-two',run_id=2,created_at=stamp(NOW+timedelta(hours=1,minutes=30)),sha='2'*40,kind='main full',totals=metric(82)),
             dict(artifact='node-coverage-summary-nightly-three',run_id=3,created_at=stamp(NOW+timedelta(hours=12,minutes=30)),sha='3'*40,kind='nightly',totals=metric(83)),
+            dict(artifact='node-coverage-summary-push-four',run_id=4,created_at=stamp(NOW+timedelta(hours=13,minutes=30)),sha='4'*40,kind='main full',totals=metric(84)),
+            dict(artifact='node-coverage-summary-nightly-five',run_id=5,created_at=stamp(NOW+timedelta(hours=14,minutes=30)),sha='5'*40,kind='nightly',totals=metric(85)),
         ]
         coverage={'languages':{'node':{'history':entries}}}
 
@@ -184,6 +200,12 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(daily[1]['day'],'2026-09-23')
         self.assertEqual(daily[1]['kind'],'nightly')
         self.assertEqual(history.get('runs','2-1')['coverage_summaries'][0]['artifact'],entries[1]['artifact'])
+        self.assertFalse(history.get('runs','4-1').get('coverage_summaries'))
+        self.assertFalse(history.get('runs','5-1').get('coverage_summaries'))
+        for entry in entries:
+            self.assertEqual(_coverage_artifact_eligible({'name':entry['artifact'],'run_id':entry['run_id']},
+                                                         history.get('runs',f"{entry['run_id']}-1")),
+                             entry['run_id'] not in (4,5))
 
         for name,content in history.files().items():
             path=self.root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(content)

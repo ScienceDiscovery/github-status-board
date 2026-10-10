@@ -14,8 +14,15 @@ from .public_sections import public_ops, public_tests, score_history, daily_scor
 from .sync import stamp, date
 
 
-SUPPLEMENT_TESTS_VERSION = 4
+SUPPLEMENT_TESTS_VERSION = 6
 COVERAGE_TIMEZONE = ZoneInfo("Asia/Shanghai")
+COVERAGE_GATE_JOBS = ("Gate / UT", "Gate / ST", "Gate / Coverage")
+
+
+def _coverage_jobs_passed(run):
+    """Require successful UT, ST and Coverage jobs from the same attempt."""
+    conclusions = {job.get("name"): job.get("conclusion") for job in run.get("jobs", [])}
+    return all(conclusions.get(name) == "success" for name in COVERAGE_GATE_JOBS)
 
 
 def _tests_revision(runs):
@@ -49,11 +56,16 @@ def _persist_coverage_summaries(history, coverage, line, lines):
             if not matched:
                 continue
             key, index = matched
-            if (index.get("event") in PR_EVENTS or index.get("conclusion") != "success"
+            # Real E2E can fail independently of a complete Nightly coverage gate.
+            # Main push/manual CI still needs to pass as a whole.
+            if (index.get("event") in PR_EVENTS
                     or line_of(index.get("branch"), lines, index.get("created_at")) != line["key"]):
                 continue
             record = history.get("runs", key)
             if not record:
+                continue
+            if (not _coverage_jobs_passed(record) if item.get("kind") == "nightly"
+                    else record.get("conclusion") != "success"):
                 continue
             summary = {k: item.get(k) for k in ("artifact", "run_id", "created_at", "sha", "kind", "totals")}
             summary["language"] = language
@@ -66,14 +78,17 @@ def _persist_coverage_summaries(history, coverage, line, lines):
 
 
 def _daily_coverage_history(history, line, lines):
-    """Latest successful complete result per Beijing calendar day and language."""
+    """Latest complete coverage result per Beijing calendar day and language."""
     daily = {}
     for key, index in history.rows("runs"):
-        if (index.get("event") in PR_EVENTS or index.get("conclusion") != "success"
+        if (index.get("event") in PR_EVENTS
                 or line_of(index.get("branch"), lines, index.get("created_at")) != line["key"]):
             continue
         record = history.get("runs", key)
         for item in (record or {}).get("coverage_summaries", []):
+            if (not _coverage_jobs_passed(record) if item.get("kind") == "nightly"
+                    else record.get("conclusion") != "success"):
+                continue
             created_at, language = item.get("created_at"), item.get("language")
             if not created_at or language not in ("node", "python"):
                 continue
@@ -87,6 +102,18 @@ def _daily_coverage_history(history, line, lines):
         language: sorted((row for (lang, _), row in daily.items() if lang == language), key=lambda row: row["day"])
         for language in ("node", "python")
     }
+
+
+def _coverage_artifact_eligible(artifact, owner):
+    """Nightly coverage can survive an unrelated failure; main CI must pass."""
+    name = artifact.get("name") or ""
+    if not name.startswith(("node-coverage-summary-", "python-coverage-summary-")):
+        return True
+    if (owner and owner.get("event") in PR_EVENTS) or "-pr-" in name:
+        return True
+    if "-nightly-" in name:
+        return bool(owner and _coverage_jobs_passed(owner))
+    return bool(owner and owner.get("conclusion") == "success")
 
 
 class _SharedListings:
@@ -222,6 +249,10 @@ def build_snapshot(sync):
         # Artifacts of runs older than the history fall back to their branch.
         return destination
 
+    def coverage_owner(artifact):
+        matched = _coverage_run(history, artifact.get("run_id"), artifact.get("created_at"))
+        return history.get("runs", matched[0]) if matched else None
+
     wrap = lambda data: {"status": "ok", "data": data, "notes": [], "error": None}
     day = stamp(midnight)[:10]
     day_changed = supplements.get("day") != day
@@ -263,7 +294,9 @@ def build_snapshot(sync):
             # Actions artifacts are live evidence: refresh when the line's run set
             # changes, while retaining the daily fallback for repository-tree data.
             fresh = envelope(lambda: public_tests(Context(gh, cfg, midnight, line_meta, coverage_store=store), runs,
-                                                  owns=lambda artifact, key=key: artifact_line(artifact) == key))
+                                                  owns=lambda artifact, key=key: artifact_line(artifact) == key,
+                                                  coverage_eligible=lambda artifact: _coverage_artifact_eligible(
+                                                      artifact, coverage_owner(artifact))))
             # A failed read (e.g. an exhausted API quota) keeps the last good
             # evidence and is retried by the next build.
             if fresh["status"] != "error" or (cache.get("tests") or {}).get("status") in (None, "error"):
