@@ -130,6 +130,8 @@ def score_history(runs, limit=30):
                     'url': report.get('url') or run.get('url'),
                     'delivery': score.get('delivery'), 'quality_status': score.get('quality_status'),
                     'duration_ms': score.get('duration_ms'),
+                    # Lets the page group cases that have left the latest report.
+                    **({'family': score['family']} if score.get('family') else {}),
                     **({'journey': score['journey']} if score.get('journey') else {}),
                     **({'model': score['model']} if score.get('model') else {}),
                     'metrics': metrics,

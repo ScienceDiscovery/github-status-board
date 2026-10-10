@@ -111,6 +111,7 @@ class PublicSectionsTests(unittest.TestCase):
         self.assertEqual(doc['executed'][0]['scores'], [score])
         self.assertEqual(doc['executed'][0]['url'], report['url'])
         self.assertEqual(len(doc['score_history']['TC-E2E-01']), 1)
+        self.assertEqual(doc['score_history']['TC-E2E-01'][0]['family'], 'research-team')
 
     def test_score_history_uses_latest_attempt_and_keeps_native_metric_values(self):
         def run(ident, attempt, day, value):

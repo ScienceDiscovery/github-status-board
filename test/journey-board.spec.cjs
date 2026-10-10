@@ -325,59 +325,82 @@ test('tagged dimensions, profile combinations and never-covered cases', async ({
   await tab.locator('.card:has(.tag-matrix)').screenshot({ path: shot('tagged-matrix-narrow') });
 });
 
-test('real E2E scores open per-case trends without crowding the table', async ({ page }) => {
+test('Real E2E cases show run marks and score curves inline like the E2E run records', async ({ page }) => {
   await page.goto('/github-status-board/#tests');
   const tab = page.locator('#tab-tests');
-  await expect(tab.locator('[data-score-case]')).toHaveCount(9);
-  await expect(page.locator('#score-trend-dialog')).not.toBeVisible();
-  await tab.getByRole('button', { name: '查看 DRB-59 的分数趋势' }).click();
-  const dialog = page.locator('#score-trend-dialog');
-  await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText('DRB-59 · 分数与耗时趋势');
-  await expect(dialog.locator('.score-chart')).toHaveCount(4);
-  await expect(dialog.locator('.score-series').first().locator('.score-dot')).toHaveCount(6);
-  await expect(dialog.locator('.score-series').first().locator('.score-failed')).toHaveCount(1);
-  await expect(dialog.locator('.score-series.duration .score-failed')).toHaveCount(0);
-  await expect(dialog.locator('.score-series.duration .score-dot')).toHaveCount(7);
-  await expect(dialog).toContainText('分数沿用上次实测');
-  await expect(dialog.locator('.score-week-toolbar strong')).toHaveText('最新 · 9/14–9/20');
-  await expect(dialog.locator('.score-run-links a')).toHaveCount(5);
-  await dialog.getByRole('button', { name: '上一周' }).click();
-  await expect(dialog.locator('.score-week-toolbar strong')).toHaveText('9/7–9/13');
-  await expect(dialog.locator('.score-series.duration .score-dot')).toHaveCount(3);
-  await dialog.getByRole('button', { name: '上一周' }).click();
-  await expect(dialog.locator('.score-week-toolbar strong')).toHaveText('8/31–9/6');
-  await expect(dialog.locator('.score-series.duration .score-dot')).toHaveCount(2);
-  await expect(dialog.getByRole('button', { name: '上一周' })).toBeDisabled();
-  await dialog.getByRole('button', { name: '最新', exact: true }).click();
-  await expect(dialog.locator('.score-series.duration .score-dot')).toHaveCount(7);
-  await dialog.getByRole('button', { name: '关闭分数趋势' }).click();
-  await expect(dialog).not.toBeVisible();
-  await tab.getByRole('button', { name: '查看 DRB-59 的分数趋势' }).click();
-  await dialog.getByRole('heading', { name: 'DRB-59 · 分数与耗时趋势' }).click();
-  await expect(dialog).toBeVisible();
-  await page.mouse.click(2, 2);
-  await expect(dialog).not.toBeVisible();
-  await expect(tab).toBeVisible();
-  await tab.getByRole('button', { name: '查看 PUCT-COMPRESS 的分数趋势' }).click();
-  await expect(dialog.locator('.score-chart')).toHaveCount(3);
-  await expect(dialog.locator('.score-series:not(.duration)').last().locator('.score-dot')).toHaveCount(6);
-  await expect(dialog.locator('.score-series:not(.duration)').last().locator('.score-dot.carried')).toHaveCount(0);
-  await expect(dialog.locator('.score-series.duration .score-dot')).toHaveCount(7);
-  await page.keyboard.press('Escape');
-  await expect(dialog).not.toBeVisible();
-  await tab.getByRole('button', { name: '查看 BiomniBench-da-14-1 的分数趋势' }).click();
-  const rubric = dialog.locator('.score-series').first().locator('svg');
+  // Same layout as the mocked run records: category → case → one mark per run; no dialog to open.
+  const families = tab.locator('[data-real-family]');
+  await expect(families).toHaveCount(4);
+  await expect(families.locator('.e2e-category-toggle')).toHaveText([/DeepResearchBench\s*5 个用例/, /BiomniBench\s*2 个用例/, /Research Team\s*1 个用例/, /PUCT Compression\s*1 个用例/]);
+  await expect(tab.locator('[data-real-item]')).toHaveCount(9);
+  await expect(page.locator('#score-trend-dialog')).toHaveCount(0);
+  await expect(tab.locator('[data-score-case]')).toHaveCount(0);
+  const realCase = (name) => tab.locator(`[data-real-item="${name}"]`);
+
+  const drb = realCase('DRB-59');
+  await expect(drb.locator('.e2e-case-head')).toContainText('12 次执行');
+  await expect(drb.locator('.e2e-case-head .badge')).toHaveText('失败');
+  await expect(drb.locator('.e2e-case-file')).toHaveText('test/deepresearchbench-swarm.spec.ts');
+  await expect(drb.locator('.e2e-history-point')).toHaveCount(12);
+  await expect(drb.locator('.e2e-history-point.passed .e2e-status-mark')).toHaveText(Array(11).fill('✓'));
+  await expect(drb.locator('.e2e-history-point.failed .e2e-status-mark')).toHaveText(['×']);
+  // Marks run oldest → newest; each links to its run and names date, result, scores and time.
+  const last = drb.locator('.e2e-history-point').last().locator('a');
+  await expect(last).toHaveAttribute('href', /\/actions\/runs\/\d+\/artifacts\/210$/);
+  await expect(last).toHaveAttribute('aria-label', /交付失败 · .*RACE 0\.\d{4}（沿用上次实测）.*耗时/);
+  await last.hover();
+  await expect(page.locator('#tooltip')).toContainText('交付失败');
+
+  // Every metric plus the run time is a curve under the case, with its latest value.
+  const trends = drb.locator('.real-trend');
+  await expect(trends.locator('figcaption > span:first-child')).toHaveText(['RACE', 'Citation accuracy', 'Verification coverage', '运行耗时']);
+  await expect(trends.first().locator('figcaption')).toContainText('（沿用上次实测）');
+  await expect(trends.first().locator('.score-dot')).toHaveCount(11);
+  await expect(trends.first().locator('.score-failed')).toHaveCount(1);
+  await expect(trends.first().locator('.score-line.carried')).toHaveCount(1);
+  await expect(trends.last().locator('.score-dot')).toHaveCount(12);
+  await expect(trends.last().locator('.score-failed')).toHaveCount(0);
+
+  // A failed first run has no score to carry: it is drawn at 0 and says so.
+  const team = realCase('TC-E2E-01');
+  await expect(team.locator('.e2e-history-point').first()).toHaveClass(/failed/);
+  await expect(team.locator('.real-trend').first().locator('.score-failed title')).toContainText('无历史按 0');
+  // A missing score leaves a gap instead of a zero.
+  const puct = realCase('PUCT-COMPRESS');
+  await expect(puct.locator('.real-trend')).toHaveCount(3);
+  await expect(puct.locator('.real-trend').nth(1).locator('.score-dot')).toHaveCount(11);
+  await expect(puct.locator('.real-trend').nth(1).locator('.score-line')).toHaveCount(9);
+
+  // Scores stay inside each chart's own scale.
+  const rubric = realCase('BiomniBench-da-14-1').locator('.real-trend').first().locator('svg');
   const plotted = await rubric.evaluate((svg) => ({
     height: svg.viewBox.baseVal.height,
-    dots: [...svg.querySelectorAll('circle')].map((dot) => ({
-      y: Number(dot.getAttribute('cy')),
-      score: Number(dot.querySelector('title').textContent.match(/Rubric ([\d.]+)/)[1]),
-    })),
+    dots: [...svg.querySelectorAll('circle')].map((dot) => ({ y: Number(dot.getAttribute('cy')), score: Number(dot.querySelector('title').textContent.match(/Rubric ([\d.]+)/)[1]) })),
   }));
-  expect(plotted.dots).toHaveLength(7);
-  expect(plotted.dots.every((dot) => Number.isFinite(dot.score) && dot.score >= 0 && dot.score <= 100 && dot.y >= 0 && dot.y <= plotted.height)).toBeTruthy();
-  await page.keyboard.press('Escape');
+  expect(plotted.dots).toHaveLength(12);
+  expect(plotted.dots.every((dot) => dot.score >= 0 && dot.score <= 100 && dot.y >= 0 && dot.y <= plotted.height)).toBeTruthy();
+
+  // Families collapse like run-record categories, and stay collapsed when the page refreshes its data.
+  const biomni = families.nth(1).locator('.e2e-category-toggle');
+  await biomni.click();
+  await expect(biomni).toHaveAttribute('aria-expanded', 'false');
+  await expect(realCase('BiomniBench-da-13-3')).toBeHidden();
+  await page.locator('#refresh-btn').click();
+  await expect(page.locator('#refresh-btn')).toBeEnabled();
+  await expect(families.nth(1).locator('.e2e-category-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await families.nth(1).locator('.e2e-category-toggle').click();
+  await expect(realCase('BiomniBench-da-13-3')).toBeVisible();
+
+  await page.mouse.move(0, 0);
+  await drb.screenshot({ path: shot('real-e2e-case-desktop') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  await expectTimelineFits(page, drb.locator('.e2e-timeline'));
+  expect(await drb.locator('.real-trend svg').evaluateAll((charts) => charts.every((svg) => {
+    const box = svg.getBoundingClientRect();
+    return box.width > 200 && box.right <= innerWidth;
+  }))).toBeTruthy();
+  await drb.screenshot({ path: shot('real-e2e-case-narrow') });
 });
 
 test('Real E2E case names open branch-specific run details', async ({ page }) => {
@@ -406,8 +429,7 @@ test('Real E2E case names open branch-specific run details', async ({ page }) =>
     const rect = element.getBoundingClientRect();
     return rect.top >= 0 && rect.bottom <= innerHeight;
   })).toBeTruthy();
-  await page.getByRole('button', { name: '查看 DRB-59 的分数趋势' }).click();
-  await expect(page.locator('#score-trend-dialog')).toContainText('共保留 12 个已读取的逐用例点');
+  await expect(page.locator('[data-real-item="DRB-59"] .e2e-history-point')).toHaveCount(12);
 });
 
 const wakeTitle = '后台执行完成后显示运行时提示而不是伪装成用户消息，并且保留项目保存结果和完整的任务执行记录供后续查看';

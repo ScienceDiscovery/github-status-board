@@ -52,10 +52,11 @@ class PublishingTests(unittest.TestCase):
         self.assertEqual(len(versions),5)
         self.assertEqual(len(set(versions)),1)
         self.assertNotIn('20260930.1', versions)
-    def test_export_keeps_settings_and_scores_dialogs_but_no_e2e_dialog(self):
+    def test_export_keeps_settings_dialog_but_no_e2e_or_score_dialog(self):
         html=(self.site/'index.html').read_text(encoding='utf-8')
         self.assertNotIn('id="e2e-dialog"', html)
-        self.assertIn('id="score-trend-dialog"', html)
+        # Real E2E trends are drawn inline under each case.
+        self.assertNotIn('id="score-trend-dialog"', html)
         self.assertIn('id="board-settings"', html)
     def test_only_public_files_are_committed_atomically(self):
         calls=[]
