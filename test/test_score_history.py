@@ -36,6 +36,20 @@ class ScoreHistoryTest(unittest.TestCase):
         self.assertIsNone(point['metrics'][0]['value'])
         self.assertEqual(point['metrics'][0]['source'], 'unavailable')
 
+    def test_unfinished_manual_run_does_not_hide_the_days_readable_scores(self):
+        scheduled = run(1, '2026-10-09T20:44:00Z', 'schedule', 80)
+        running = dict(id=2, attempt=1, created_at='2026-10-10T09:26:00Z', event='workflow_dispatch', tests=[])
+        # The Nightly summary still reports the manual run as the day's run.
+        self.assertEqual([r['id'] for r in daily_score_runs([scheduled, running])], [2])
+        points = score_history([scheduled, running])['case-a']
+        self.assertEqual([p['run_id'] for p in points], [1])
+        self.assertEqual(points[0]['metrics'][0]['source'], 'measured')
+
+    def test_rerun_without_scores_does_not_fall_back_to_its_earlier_attempt(self):
+        first = run(1, '2026-10-09T20:44:00Z', 'schedule', 80)
+        rerun = dict(first, attempt=2, tests=[])
+        self.assertEqual(score_history([first, rerun]), {})
+
     def test_latest_readable_report_survives_newer_unreadable_run(self):
         scored = run(1, '2026-10-05T22:00:00Z', 'schedule', 82)
         scored['branch'] = 'releases/v0.3.0.beta'

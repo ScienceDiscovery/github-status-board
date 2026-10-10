@@ -63,8 +63,11 @@ def public_ops(ctx):
     return out
 
 
-def daily_score_runs(runs, limit=30):
-    """Use one attempt per Beijing day; a manual dispatch supersedes a schedule."""
+def daily_score_runs(runs, limit=30, usable=None):
+    """Use one attempt per Beijing day; a manual dispatch supersedes a schedule.
+
+    With `usable`, only runs whose latest attempt passes it compete for a day.
+    """
     latest = {}
     for run in runs:
         ident = run.get('id')
@@ -74,6 +77,8 @@ def daily_score_runs(runs, limit=30):
             latest[ident] = run
     selected = {}
     for run in latest.values():
+        if usable and not usable(run):
+            continue
         timestamp = run.get('created_at') or run.get('updated_at') or next(
             (report.get('created_at') for report in run.get('tests', []) if report.get('created_at')), None)
         try:
@@ -89,11 +94,20 @@ def daily_score_runs(runs, limit=30):
                   key=lambda run: (run.get('created_at') or run.get('updated_at') or '', run.get('id') or 0), reverse=True)[:limit]
 
 
+def _has_scores(run):
+    return any(report.get('name', '').startswith('real-e2e-results') and report.get('scores')
+               for report in run.get('tests', []))
+
+
 def score_history(runs, limit=30):
-    """Bounded per-case observations; label carried values separately from measurements."""
+    """Bounded per-case observations; label carried values separately from measurements.
+
+    A day's point comes from its preferred run that has readable scores, so a manual run
+    still in progress, or one whose artifact is unreadable, does not hide an earlier one.
+    """
     points = defaultdict(list)
     previous = defaultdict(dict)
-    for run in reversed(daily_score_runs(runs, limit)):
+    for run in reversed(daily_score_runs(runs, limit, _has_scores)):
         seen = set()
         for report in run.get('tests', []):
             if not report.get('name', '').startswith('real-e2e-results'):
