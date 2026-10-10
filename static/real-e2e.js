@@ -88,7 +88,7 @@
       return;
     }
     const latest = history.at(-1);
-    const family = scoredCase?.family || '';
+    const family = scoredCase?.family || latest.family || '';
     const newerUnreadable = (data.score_runs || []).filter((run) =>
       run.artifact_status !== 'available' && Date.parse(run.created_at) > Date.parse(latest.created_at));
     document.title = `旅程报告 · ${wantedCase}`;
