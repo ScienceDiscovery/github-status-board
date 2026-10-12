@@ -87,7 +87,7 @@ class SnapshotTests(unittest.TestCase):
     def test_each_line_gets_its_own_ci_tests_and_coverage_evidence(self):
         sync = Sync(self.source(), self.root, REPO, settings={"workflows": RULES, "branch_lines": LINES}, now=NOW).collect()
         calls = {}
-        def tests(ctx, runs, owns=None):
+        def tests(ctx, runs, owns=None, coverage_eligible=None):
             calls[ctx.default_branch] = ([run["id"] for run in runs], owns)
             return {"executed": [], "coverage": {}}
         with patch("gsb.incremental_project.public_ops", return_value={}), patch("gsb.incremental_project.public_tests", side_effect=tests):
@@ -180,7 +180,7 @@ class SnapshotTests(unittest.TestCase):
                             "html_url": f"https://github.com/{REPO}/actions/runs/10"})
         sync = Sync(source, self.root, REPO, settings={"workflows": RULES, "branch_lines": RENAMED_LINES}, now=NOW).collect()
         calls = {}
-        def tests(ctx, runs, owns=None):
+        def tests(ctx, runs, owns=None, coverage_eligible=None):
             calls[ctx.default_branch] = ([row["id"] for row in runs], owns)
             return {"executed": [], "coverage": {}}
         with patch("gsb.incremental_project.public_ops", return_value={}), patch("gsb.incremental_project.public_tests", side_effect=tests):

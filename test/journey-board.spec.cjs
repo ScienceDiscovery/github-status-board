@@ -708,7 +708,8 @@ test('E2E run records reuse published JSON and refresh changed versions', async 
   expect(reads).toBe(1);
   upgraded = true;
   await page.locator('#refresh-btn').click();
-  await expect(point.locator('a')).toHaveAttribute('href', /\/data\/40072e79cd3d0cda7a79c6bad7501851b4babf54\.html$/);
+  // The upgraded record's point opens its HTML report through the report viewer.
+  await expect(point.locator('a')).toHaveAttribute('href', /^\.\/e2e-report\.html\?src=e2e%2F7001%2Fmocked-standard%2Fdata%2F40072e79cd3d0cda7a79c6bad7501851b4babf54\.html&/);
   expect(reads).toBe(2);
 });
 
