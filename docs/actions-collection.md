@@ -18,7 +18,7 @@ Worker 校验 GitHub OIDC 签名、issuer、audience、不可变仓库与组织 
 
 App 的 Actions 写权限在 App 注册页 **Permissions & events → Repository permissions → Actions → Read and write** 设置，并由目标组织在安装页批准更新；仅修改注册页不等于既有 installation 已获授权。即使两个看板仓同属一个组织，也要分别批准正式与测试 App 各自的 installation；测试 App 的安装范围须覆盖实验源仓及测试看板仓，也可以包含其他仓库。两套 App 的安装范围可以重叠；各 Bot 通过源仓过滤、看板目标映射和 OIDC 信任配置隔离业务，范围外 Webhook 仍归档，不触发业务。临时令牌只授予当前配置中的源仓读取或目标看板写入权限，不随 App 安装范围扩大。仓库 Settings → Actions 的默认 `GITHUB_TOKEN` 权限继续保持只读；触发所需的 App Actions 写权限与此设置不同。
 
-工作流接受 `workflow_dispatch`。Bot 只在 Issue、PR 新建或关闭时立即触发，其余变化（CI 运行、评审、发布、重新打开等）由 Bot 每 8 小时一次的空闲刷新带上；看板仓自己每天 UTC 02:17 定时运行一次，只作 Bot 停止触发时的兜底；固定 checkout main，禁止 checkout 输入指定的任意分支。输入 `source_repository` 可省略，填写时必须匹配本站源仓；`request_id` 为诊断用刷新编号，不包含原始 Webhook、私钥或安装令牌。可在 Actions 的 **Collect dashboard data** 手动执行，也可以由 Bot 调用 GitHub workflow dispatch API。
+工作流接受 `workflow_dispatch`。Bot 只在 Issue、PR 新建、重新打开或关闭时立即触发，其余变化（CI 运行、评审、发布等）由 Bot 每 8 小时一次的空闲刷新带上；看板仓自己每天 UTC 02:17 定时运行一次，只作 Bot 停止触发时的兜底；固定 checkout main，禁止 checkout 输入指定的任意分支。输入 `source_repository` 可省略，填写时必须匹配本站源仓；`request_id` 为诊断用刷新编号，不包含原始 Webhook、私钥或安装令牌。可在 Actions 的 **Collect dashboard data** 手动执行，也可以由 Bot 调用 GitHub workflow dispatch API。
 
 `collect-on-push.yml` 在 `main` 收到包含 `site/`、`.sync/` 以外文件改动的推送时，自动派发 `collect.yml` 的 `workflow_dispatch`，固定 `ref=main`，`request_id=push-<完整提交 SHA>`，不传 `source_repository`。它使用本仓 `GITHUB_TOKEN`，仅声明 `contents: read` 和 `actions: write`；不在 PR 上运行，也不取消正在执行的采集。`paths-ignore` 排除 `site/**` 与 `.sync/**`，因此只修改这两个目录的采集提交不会再次派发；源码与数据混合的推送仍会触发。定时、手动及 Bot 触发保持不变，Pages 仍由 `site/` 的提交触发。
 
