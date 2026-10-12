@@ -442,6 +442,114 @@
     }).join('')}</div>`;
   }
 
+  // Issue / PR daily flow. Daily counts and the number still open differ in scale, so they get
+  // two charts on one shared time axis rather than two y-axes. The series come precomputed in the
+  // snapshot; the charts are drawn after the tab is in the page so they can use its real width.
+  const TREND_SERIES = {
+    issues: [{ key: 'opened', label: '新增', color: 's1' }, { key: 'closed', label: '关闭', color: 's2' }, { key: 'open', label: '存量', color: 's4' }],
+    prs: [{ key: 'opened', label: '新增', color: 's1' }, { key: 'merged', label: '合入', color: 's3' }, { key: 'closed', label: '关闭未合入', color: 's2' }, { key: 'open', label: '存量', color: 's4' }],
+  };
+  const TREND_RANGES = [[7, '近 7 天'], [30, '近 30 天'], [90, '近 90 天'], ['all', '全部']];
+  // Range and hidden series live in memory per tab: a reload starts again at the last 30 days.
+  STATE.trend = { issues: { range: 30, from: '', to: '', hidden: new Set() }, prs: { range: 30, from: '', to: '', hidden: new Set() } };
+  const trendData = (kind) => STATE.snap?.sections?.[kind]?.data?.trend || null;
+  const trendSection = (kind) => `<section class="card trend-card" data-trend-card="${kind}"><div class="trend-head"><h3>${kind === 'prs' ? 'PR' : 'Issue'} 每日趋势</h3></div><div class="trend-body" data-trend-body="${kind}"></div></section>`;
+  // Inclusive index window [lo, hi] into the trend's days for the current range.
+  function trendWindow(trend, view) {
+    const last = trend.open.length - 1;
+    const at = (day) => Math.max(0, Math.min(last, Math.round((dayDate(day) - dayDate(trend.start)) / 86400000)));
+    if (view.range === 'custom' && view.from && view.to) {
+      const [lo, hi] = [at(view.from), at(view.to)].sort((a, b) => a - b);
+      return [lo, hi];
+    }
+    return view.range === 'all' ? [0, last] : [Math.max(0, last - view.range + 1), last];
+  }
+  // Whole-number axis for counts: a 1/2/5 × 10ⁿ tick step with at most four steps above zero.
+  const countScale = (value) => {
+    if (value <= 4) return { max: Math.max(1, Math.ceil(value)), step: 1 };
+    const power = 10 ** Math.floor(Math.log10(value / 4)), step = [1, 2, 5, 10].map((unit) => unit * power).find((size) => value / size <= 4);
+    return { max: Math.ceil(value / step) * step, step };
+  };
+  // One chart: lines for `series` over days lo..hi, sharing `geom` so both charts line up.
+  function trendSvg(trend, series, lo, hi, geom, height, title) {
+    const { width, left, right } = geom, top = 10, bottom = 24, count = hi - lo + 1;
+    const { max, step: tick } = countScale(Math.max(0, ...series.flatMap((item) => trend[item.key].slice(lo, hi + 1))));
+    const step = count > 1 ? (width - left - right) / (count - 1) : 0;
+    const xAt = (index) => count > 1 ? left + (index - lo) * step : (left + width - right) / 2;
+    const yAt = (value) => top + (1 - value / max) * (height - top - bottom);
+    const grid = Array.from({ length: max / tick + 1 }, (_, index) => index * tick).map((value) => `<line class="trend-grid" x1="${left}" x2="${width - right}" y1="${yAt(value).toFixed(1)}" y2="${yAt(value).toFixed(1)}"></line><text class="trend-tick" x="${left - 6}" y="${(yAt(value) + 4).toFixed(1)}" text-anchor="end">${n(value)}</text>`).join('');
+    // About one date label per 56 px, always ending on the last day of the range.
+    const every = Math.max(1, Math.ceil(count * 56 / Math.max(1, width - left - right)));
+    const ticks = [];
+    for (let index = hi; index >= lo; index -= every) ticks.push(index);
+    const axis = ticks.map((index) => `<text class="trend-tick" x="${xAt(index).toFixed(1)}" y="${height - 6}" text-anchor="middle">${dayLabel(addDays(trend.start, index))}</text>`).join('');
+    const lines = series.map((item) => {
+      const points = trend[item.key].slice(lo, hi + 1).map((value, offset) => `${xAt(lo + offset).toFixed(1)},${yAt(value).toFixed(1)}`);
+      const dots = step >= 12 || count === 1 ? points.map((point) => { const [x, y] = point.split(','); return `<circle class="trend-dot" cx="${x}" cy="${y}" r="3" style="--c: var(--${item.color})"></circle>`; }).join('') : '';
+      return `<polyline class="trend-line" points="${points.join(' ')}" style="--c: var(--${item.color})"></polyline>${dots}`;
+    }).join('');
+    const marks = series.map((item) => `<circle class="trend-focus" r="4.5" style="--c: var(--${item.color})" data-trend-mark="${item.key}"></circle>`).join('');
+    return `<svg class="trend-svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(title)}">${grid}${axis}${lines}<line class="trend-cross" y1="${top}" y2="${height - bottom}"></line>${marks}<rect class="trend-hit" x="${left}" y="0" width="${Math.max(1, width - left - right)}" height="${height}" tabindex="0" data-trend-hit aria-label="${esc(title)}：用左右方向键逐日查看"></rect></svg>`;
+  }
+  function drawTrend(kind) {
+    const body = document.querySelector(`[data-trend-body="${kind}"]`);
+    if (!body) return;
+    const trend = trendData(kind), view = STATE.trend[kind];
+    if (!trend || !trend.open?.length) { body.innerHTML = empty('还没有可用的历史数据：需要看板仓的增量采集先记录 Issue／PR。'); return; }
+    const [lo, hi] = trendWindow(trend, view), day = (index) => addDays(trend.start, index);
+    const all = TREND_SERIES[kind], shown = all.filter((item) => !view.hidden.has(item.key));
+    const flow = shown.filter((item) => item.key !== 'open'), stock = shown.filter((item) => item.key === 'open');
+    const controls = `<div class="trend-controls" data-trend-kind="${kind}"><div class="seg" role="group" aria-label="时间范围">${TREND_RANGES.map(([range, label]) => `<button type="button" class="${view.range === range ? 'on' : ''}" data-trend-range="${range}" aria-pressed="${view.range === range}">${label}</button>`).join('')}</div>
+      <label class="trend-dates">从 <input type="date" data-trend-from value="${day(lo)}" min="${trend.start}" max="${trend.end}" aria-label="开始日期"></label><label class="trend-dates">到 <input type="date" data-trend-to value="${day(hi)}" min="${trend.start}" max="${trend.end}" aria-label="结束日期"></label></div>
+      <div class="trend-legend" data-trend-kind="${kind}" role="group" aria-label="显示的数据">${all.map((item) => `<button type="button" class="trend-toggle" data-trend-series="${item.key}" aria-pressed="${!view.hidden.has(item.key)}"><span class="trend-key" style="--c: var(--${item.color})"></span>${item.label}</button>`).join('')}</div>`;
+    const width = Math.max(280, Math.floor(body.clientWidth || 760));
+    // Shared left margin for the longest tick label of either chart, so the days line up.
+    const labelWidth = (series) => series.length ? String(n(countScale(Math.max(0, ...series.flatMap((item) => trend[item.key].slice(lo, hi + 1)))).max)).length : 1;
+    const geom = { width, left: Math.max(labelWidth(flow), labelWidth(stock)) * 7 + 14, right: 14 };
+    const chart = (series, height, title) => `<figure class="trend-chart"><figcaption>${title}</figcaption>${trendSvg(trend, series, lo, hi, geom, height, title)}</figure>`;
+    const charts = (flow.length ? chart(flow, 180, '每日数量') : '') + (stock.length ? chart(stock, 140, '存量（当天结束时仍开放）') : '')
+      || `<div class="muted trend-none">所有数据都已关闭显示，点上方的按钮重新打开。</div>`;
+    const rows = Array.from({ length: hi - lo + 1 }, (_, offset) => hi - offset).map((index) => `<tr><td>${day(index)}</td>${all.map((item) => `<td class="num">${n(trend[item.key][index])}</td>`).join('')}</tr>`).join('');
+    const note = `按 UTC 日期统计。存量按每个 ${kind === 'prs' ? 'PR' : 'Issue'} 当前的创建和关闭时间回推，关闭后又重开的从创建起都算开放${kind === 'prs' ? '；合入的 PR 不计入“关闭未合入”' : ''}。${trend.complete ? '' : ' 历史仍在回填，较早日期的数量可能偏少。'}`;
+    body.innerHTML = `${controls}${charts}<p class="muted trend-note">${note}</p><details class="trend-table"><summary>按日数据（${n(hi - lo + 1)} 天）</summary><div class="table-wrap"><table><thead><tr><th>日期（UTC）</th>${all.map((item) => `<th class="num">${item.label}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div></details>`;
+    // Hover or arrow keys pick a day; every chart shows the crosshair and the tooltip lists the shown series.
+    const pick = (index, hit) => {
+      index = Math.max(lo, Math.min(hi, index));
+      body.dataset.trendIndex = index;
+      const count = hi - lo + 1, x = count > 1 ? geom.left + (index - lo) * (width - geom.left - geom.right) / (count - 1) : (geom.left + width - geom.right) / 2;
+      body.querySelectorAll('.trend-svg').forEach((svg) => {
+        const cross = svg.querySelector('.trend-cross');
+        cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.classList.add('on');
+        svg.querySelectorAll('[data-trend-mark]').forEach((mark) => {
+          const line = [...svg.querySelectorAll('.trend-line')][[...svg.querySelectorAll('[data-trend-mark]')].indexOf(mark)];
+          const point = line.getAttribute('points').split(' ')[index - lo].split(',');
+          mark.setAttribute('cx', point[0]); mark.setAttribute('cy', point[1]); mark.classList.add('on');
+        });
+      });
+      hit.dataset.tip = [`${day(index)}（UTC）`, ...shown.map((item) => `${n(trend[item.key][index])}  ${item.label}`)].join('\n');
+    };
+    // SVG ignores the hidden attribute, so visibility is a class.
+    const clear = () => body.querySelectorAll('.trend-cross, [data-trend-mark]').forEach((el) => el.classList.remove('on'));
+    body.querySelectorAll('[data-trend-hit]').forEach((hit) => {
+      hit.addEventListener('mousemove', (ev) => {
+        const box = hit.getBoundingClientRect(), count = hi - lo + 1;
+        pick(lo + Math.round((ev.clientX - box.left) / Math.max(1, box.width) * Math.max(0, count - 1)), hit);
+      });
+      hit.addEventListener('mouseleave', clear);
+      hit.addEventListener('focus', () => { pick(Number(body.dataset.trendIndex ?? hi), hit); showTip(hit); });
+      hit.addEventListener('blur', clear);
+      hit.addEventListener('keydown', (ev) => {
+        const move = { ArrowLeft: -1, ArrowRight: 1, Home: -Infinity, End: Infinity }[ev.key];
+        if (move == null) return;
+        ev.preventDefault();
+        const current = Number(body.dataset.trendIndex ?? hi);
+        pick(Number.isFinite(move) ? current + move : move < 0 ? lo : hi, hit);
+        showTip(hit);
+      });
+    });
+  }
+  const drawTrends = () => ['issues', 'prs'].forEach(drawTrend);
+
   function renderIssues(sec) {
     const d = sec?.data;
     let html = sectionState(sec, 'Issue');
@@ -457,6 +565,7 @@
       { label: '零回复', value: n(d.no_response_count) },
       { label: '中位年龄', value: days(d.median_age_days), sub: `最老 ${days(d.oldest_age_days)}` },
     ]);
+    html += trendSection('issues');
     const issueRow = (i) => `<span class="title">${link(i.url, `#${i.number} ${esc(i.title)}`)}</span><span class="sub">${esc(i.author)} · ${labelChips(i.labels)}</span>`;
     html += `<div class="grid">
       ${card('标签分布', bars(d.labels.map((l) => ({ label: l.name, labelHtml: `<span class="label-chip"><span class="sw" style="background:#${esc(l.color || '999')}"></span>${esc(l.name)}</span>`, value: l.count })), { emptyText: '开放 Issue 都没有标签' }) + (d.unused_labels.length ? `<div class="muted" style="margin-top:8px">仓库另有 ${d.unused_labels.length} 个标签未用于任何开放 Issue：${esc(d.unused_labels.join('、'))}</div>` : ''), { sub: '按开放 Issue 计数' })}
@@ -518,6 +627,7 @@
       { label: '合并时长中位（全部）', value: hours(d.median_time_to_merge_h), sub: `P90 ${hours(d.p90_time_to_merge_h)} · 含 bot 同步 PR` },
       { label: '合并时长中位（人工 PR）', value: hours(d.median_time_to_merge_h_human), sub: d.merged_human_count ? `样本 ${d.merged_human_count} 个非 bot PR` : '暂无非 bot PR 样本' },
     ]);
+    html += trendSection('prs');
     const DECISION = { APPROVED: ['已批准', 'good'], CHANGES_REQUESTED: ['需修改', 'bad'], REVIEW_REQUIRED: ['待评审', 'warn'], NONE: ['无评审', ''] };
     const MERGEABLE = { MERGEABLE: ['可合并', 'good'], CONFLICTING: ['有冲突', 'bad'], UNKNOWN: ['计算中', ''] };
     const ciCell = (p) => {
@@ -1270,6 +1380,7 @@
     pinLanes(keep);
     try { if (window.GSBBoard) window.GSBBoard.onSnapshot(snap); } catch (err) { console.error(err); }
     mountBoard();
+    drawTrends();
     if (returnFocus.pending && STATE.tab === 'tests') {
       const target = [...document.querySelectorAll('#tab-tests [data-real-case]')]
         .find((item) => item.dataset.realCase === returnFocus.caseName);
@@ -1430,9 +1541,18 @@
   $('#refresh-btn').addEventListener('click', refresh);
   // Browsers throttle timers in background tabs; re-sync as soon as the tab is visible again.
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { clearTimeout(STATE.pollTimer); load(); } });
-  window.addEventListener('hashchange', () => { STATE.tab = location.hash.slice(1) || 'overview'; renderShell(); mountBoard(); document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${STATE.tab}`)); pinLanes(); loadE2EHistory(); });
+  window.addEventListener('hashchange', () => { STATE.tab = location.hash.slice(1) || 'overview'; renderShell(); mountBoard(); document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${STATE.tab}`)); pinLanes(); drawTrends(); loadE2EHistory(); });
   // Tooltip layer: any element with data-tip.
   const tipEl = $('#tooltip');
+  // Beside an element (for keyboard focus); a trend chart anchors it to its crosshair instead.
+  function showTip(el) {
+    if (!el.dataset.tip) return;
+    tipEl.textContent = el.dataset.tip;
+    tipEl.classList.remove('hidden');
+    const cross = el.closest('svg')?.querySelector('.trend-cross.on'), box = (cross || el).getBoundingClientRect();
+    tipEl.style.left = `${Math.max(8, Math.min(box.right + 8, window.innerWidth - tipEl.offsetWidth - 8))}px`;
+    tipEl.style.top = `${Math.max(8, Math.min((cross ? box.top : box.bottom) + 6, window.innerHeight - tipEl.offsetHeight - 8))}px`;
+  }
   document.addEventListener('mousemove', (ev) => {
     const el = ev.target.closest('[data-tip]');
     if (!el) { tipEl.classList.add('hidden'); return; }
@@ -1445,19 +1565,32 @@
   // Keyboard focus shows the same details beside the focused mark.
   document.addEventListener('focusin', (ev) => {
     const el = ev.target.closest?.('[data-tip]');
-    if (!el) return;
-    tipEl.textContent = el.dataset.tip;
-    tipEl.classList.remove('hidden');
-    const box = el.getBoundingClientRect();
-    tipEl.style.left = `${Math.max(8, Math.min(box.right + 8, window.innerWidth - tipEl.offsetWidth - 8))}px`;
-    tipEl.style.top = `${Math.max(8, Math.min(box.bottom + 6, window.innerHeight - tipEl.offsetHeight - 8))}px`;
+    if (el) showTip(el);
   });
   document.addEventListener('focusout', () => tipEl.classList.add('hidden'));
   document.addEventListener('scroll', (ev) => {
     const el = ev.target;
     if (el.classList?.contains('ci-lanes-scroll')) el.dataset.away = el.scrollLeft + el.clientWidth < el.scrollWidth - 2 ? '1' : '';
   }, true);
-  window.addEventListener('resize', () => pinLanes());
+  let trendResize = null;
+  window.addEventListener('resize', () => { pinLanes(); clearTimeout(trendResize); trendResize = setTimeout(drawTrends, 150); });
+  // Trend controls: range presets, custom dates and series toggles redraw only that chart.
+  document.addEventListener('click', (ev) => {
+    const control = ev.target.closest('[data-trend-kind] button');
+    if (!control) return;
+    const kind = control.closest('[data-trend-kind]').dataset.trendKind, view = STATE.trend[kind];
+    if (control.dataset.trendRange) { const range = control.dataset.trendRange; view.range = range === 'all' ? 'all' : Number(range); }
+    if (control.dataset.trendSeries) { const key = control.dataset.trendSeries; if (view.hidden.has(key)) view.hidden.delete(key); else view.hidden.add(key); }
+    drawTrend(kind);
+    document.querySelector(`[data-trend-kind="${kind}"] [data-trend-${control.dataset.trendRange ? 'range' : 'series'}="${control.dataset.trendRange || control.dataset.trendSeries}"]`)?.focus();
+  });
+  document.addEventListener('change', (ev) => {
+    const input = ev.target.closest('[data-trend-from], [data-trend-to]');
+    if (!input || !input.value) return;
+    const kind = input.closest('[data-trend-kind]').dataset.trendKind, box = input.closest('[data-trend-kind]');
+    Object.assign(STATE.trend[kind], { range: 'custom', from: box.querySelector('[data-trend-from]').value, to: box.querySelector('[data-trend-to]').value });
+    drawTrend(kind);
+  });
   // Remember expanded coverage directories across the periodic refresh.
   document.addEventListener('toggle', (ev) => {
     const dir = ev.target;

@@ -32,6 +32,19 @@ pr.update(state='open',created_at=time,comments=1,idle_days=4,body='Fixes #1',he
 issues=doc['issues']; issues.update(unlabeled_count=0,no_response_count=1,median_age_days=4,oldest_age_days=4,stale_days_threshold=30,labels=[dict(name='bug',color='aa3333',count=1)],unused_labels=[],aging=[dict(bucket='0–7 天',count=1)],assignee_load=[],milestones=[dict(name='v1.0',count=1)],recent=[item],stale=[],oldest=[item],closed_recent=[])
 issues['counts'].update(closed_total=3,opened_7d=1,closed_7d=0)
 prs=doc['prs'];prs.update(review_sla_days=3,ci_states={'failure':1},review_decisions={'CHANGES_REQUESTED':1},closed_unmerged_30d=0,p90_time_to_merge_h=5,median_time_to_merge_h_human=3,merged_human_count=2,reviewer_load=[dict(login='reviewer',count=1)],authors=[dict(login='maintainer',count=1)],recent_merged=[],recent_closed_unmerged=[])
+# 120 days of synthetic Issue / PR flow, turned into series by the collector's own trend code.
+from datetime import date, timedelta
+from gsb.work_trend import daily_trend
+flow={}
+for i in range(120):
+    day=(date(2026,5,24)+timedelta(days=i)).isoformat()
+    merged=[1,1,0,2,1,1,0][(i+4)%7]
+    for key,value in (('issues:created_at',[0,1,2,3,1,0,4][i%7]+(i%11==0)),('issues:closed_at',[1,0,1,2,0,1,1][i%7]),
+                      ('prs:created_at',[2,1,0,3,2,1,1][i%7]),('prs:merged_at',merged),('prs:closed_at',merged+(i%9==0))):
+        if value: flow[f'{key}:{day}']=value
+issues['trend']=daily_trend(flow,'issues','2026-09-20')
+prs['trend']=daily_trend(flow,'prs','2026-09-20',complete=False)
+assert min(issues['trend']['open'])>=0 and min(prs['trend']['open'])>=0
 for r in runs:
     r.update(title=r['name'],created_at=time,duration_s=120,actor='maintainer')
     r['jobs'][0].update(duration_s=120)

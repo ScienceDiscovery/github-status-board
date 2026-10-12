@@ -544,3 +544,35 @@ tr.sync-error td { background: rgba(208, 59, 59, .07); }
   .sync-detail { min-width: 0; }
 }
 td.nowrap { white-space: nowrap; }
+
+/* Issue / PR daily trend: one control row, then the daily-count and open-count charts on a shared time axis. */
+.trend-card { margin-top: 12px; }
+.trend-head h3 { margin: 0 0 10px; font-size: 14px; }
+.trend-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.trend-controls .seg { max-width: 100%; overflow-x: auto; }
+.trend-dates { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+.trend-dates input { font: inherit; font-size: 12.5px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); }
+.trend-legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.trend-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer; }
+.trend-toggle[aria-pressed="false"] { color: var(--muted); background: transparent; border-style: dashed; }
+.trend-toggle[aria-pressed="false"] .trend-key { opacity: .25; }
+.trend-toggle:focus-visible, .trend-hit:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.trend-key { width: 16px; height: 0; border-top: 2px solid var(--c); border-radius: 2px; }
+.trend-chart { margin: 10px 0 0; min-width: 0; }
+.trend-chart figcaption { font-size: 12px; color: var(--ink-2); margin-bottom: 2px; }
+.trend-svg { display: block; max-width: 100%; height: auto; overflow: visible; }
+.trend-grid { stroke: var(--grid); stroke-width: 1; }
+.trend-tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.trend-line { fill: none; stroke: var(--c); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.trend-dot { fill: var(--c); stroke: var(--surface); stroke-width: 1.5; }
+.trend-focus { fill: var(--c); stroke: var(--surface); stroke-width: 2; pointer-events: none; visibility: hidden; }
+.trend-cross { stroke: var(--ink-2); stroke-width: 1; pointer-events: none; visibility: hidden; }
+.trend-focus.on, .trend-cross.on { visibility: visible; }
+.trend-hit { fill: transparent; cursor: crosshair; outline: none; }
+.trend-note { margin: 8px 0 0; font-size: 12px; }
+.trend-none { padding: 24px 0; }
+.trend-table { margin-top: 8px; font-size: 12.5px; }
+.trend-table summary { cursor: pointer; color: var(--ink-2); }
+.trend-table .table-wrap { max-height: 280px; overflow: auto; margin-top: 6px; }
+.trend-table th, .trend-table td { padding: 3px 10px; text-align: left; }
+.trend-table .num { text-align: right; font-variant-numeric: tabular-nums; }
