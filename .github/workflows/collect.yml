@@ -1,7 +1,7 @@
 name: Collect dashboard data
 run-name: Collect dashboard (${{ inputs.request_id || github.event_name }})
 on:
-  # The bot dispatches collection when an Issue or PR is opened or closed, and every
+  # The bot dispatches collection when an Issue or PR is opened, reopened or closed, and every
   # eight hours otherwise. This daily run only covers a bot that has stopped dispatching.
   schedule:
     - cron: '17 2 * * *'
