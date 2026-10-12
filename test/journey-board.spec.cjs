@@ -20,7 +20,7 @@ test('all existing pages render; only static requests and no promotional copy', 
   await expect(page.locator('#tab-overview .ci-lane-row[data-lane="pr"] .ci-lane-day')).toHaveCount(14);
   await expect(page.locator('#tab-overview')).toContainText('v1.0');
   await expect(page.locator('#meta')).toContainText('20:00');
-  await expect(page.locator('#global-banner')).toContainText('超过两小时');
+  await expect(page.locator('#global-banner')).toContainText('超过 36 小时未更新');
   await expect(page.locator('body')).not.toContainText('把进展与风险放在同一页');
   await page.screenshot({path:shot('overview-desktop'),fullPage:true});
   await expect(page.locator('.topbar #tabs a')).toHaveCount(9);
