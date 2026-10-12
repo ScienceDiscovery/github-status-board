@@ -229,7 +229,7 @@ class SnapshotTests(unittest.TestCase):
 
     def test_a_failed_refresh_keeps_the_last_good_evidence_and_is_retried(self):
         gh = Source(runs=1)
-        def good(ctx, runs, owns=None):
+        def good(ctx, runs, owns=None, coverage_eligible=None):
             self.assertIsInstance(ctx.coverage_store, CoverageStore)
             return {"executed": [], "coverage": {"source": "Actions coverage summaries", "value": {"lines_pct": 80}}}
         doc, supplements = self.build(gh, good)
