@@ -17,7 +17,7 @@ Issue / PR 的开放及关闭记录不设保留条数上限。Actions 保存 run
 - `.sync/tagged.json`：按分支保存的最新标签化测试目录（按标签签名压缩）、各组合最近运行的选择器与结果、标签词表；见[标签化测试](tagged-tests.md)。
 - `site/data/history/records/<类型>/<编号段>.json`：完整记录或小型指标。Issue/PR 每 100 个编号一段；run 按稳定 ID 段保存，每个 attempt 独立键。
 - `site/data/history/index/`：对应分片的搜索摘要，run 摘要含触发事件、关联 PR、目标分支和 head 仓库，PR 摘要含 head / base 分支（早期索引行缺少时从记录重建一次）；`catalog/` 合并相邻稀疏索引，避免每几个 run 发起一次 HTTP 请求。manifest 给出类型、计数和内容版本。只重写变化分片和对应目录。
-- `site/data/snapshot.json`：当前汇总及轻量页面预览。
+- `site/data/snapshot.json`：当前汇总及轻量页面预览。Issue／PR 区块的 `trend` 是每日趋势：从第一个创建日到当天的连续 UTC 日期，`opened`、`closed`、`open`（PR 另有 `merged`，`closed` 为关闭未合入），以及该类历史是否已回填完成的 `complete`。
 
 进度和数据以同一准确 checkout HEAD 为父提交，使用 Git Data API 非强制更新 main。GitHub 限制每小时的内容创建请求数，因此 256 KiB 以下的文件（单次合计不超过 2 MiB）直接放在建树请求里，只有大文件单独上传 blob；一次提交通常只需三到五个写请求。中断或提交冲突不会发布半套进度；重新运行从最新 main 重新取数，幂等 upsert 不重计。`.sync/` 不在 Pages 上传目录，但仓库公开，因此其中所有内容同样必须可公开。禁止写入本机路径、令牌或私有数据。
 
@@ -30,6 +30,8 @@ Issue / PR 的开放及关闭记录不设保留条数上限。Actions 保存 run
 Issue 按 updated 的 since 水位增量读取；PR 按 updated 倒序读到上一水位，均重叠一小时。历史按创建顺序逐页补齐。每周开始一轮小批量全表对账，修复翻页期间顺序变化、旧 PR 更新及旧构建重跑；对账也有持久游标。旧已完成 run 的重新运行最迟由对账发现；新建运行与已知在途运行优先处理。
 
 Actions 历史按固定 created 时间窗遍历，遇到 GitHub 每次筛选查询 1,000 条的限制，将窗口递归切成不重叠秒区间。极端情况下同一秒仍超过 1,000 条会显式记录 `time_window_saturated` 并保持未完成，不静默丢弃；需再细分到工作流后重试。
+
+每日趋势不扫描记录：`gsb/work_trend.py` 只读 `aggregate.json` 中 `<类型>:created_at|closed_at|merged_at:<日>` 的计数，存量为截至当天的新增减关闭，计算量随天数增长，与 Issue／PR 数量无关。记录变化时 `History.put` 先撤销旧贡献再加入新值，所以关闭、重开、合入都会立即反映到对应日期。首次部署时，没有 `trend` 的旧快照会重建一次。
 
 重试按类别保存，403、404、限流或暂时故障不能删除已有数据；没有看到对象也不自动当作删除。记录目前长期保留，不同步物理删除。待补详情与失败数在历史页显示。定时任务更新日期相关统计；旧状态修正时先撤销旧贡献，再加入新值。
 

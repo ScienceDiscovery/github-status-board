@@ -10,6 +10,7 @@ from .collectors import Context, collect_ci, summarize_issues, summarize_prs, da
 from .coverage_store import CoverageStore
 from .history import read_json, encode
 from .lines import canonical_branch, configured_lines, line_of, target_of
+from .work_trend import daily_trend
 from .public_sections import public_ops, public_tests, score_history, daily_score_runs, latest_score_report, envelope
 from .sync import stamp, date
 
@@ -179,13 +180,16 @@ def build_snapshot(sync):
     cache_upgrade = (cache_upgrade or "lanes" not in old_ci or (isinstance(old_tests, dict) and "tagged" not in old_tests)
                      or old.get("lines") != lines
                      or any("median_duration_s" not in lane.get("summary", {}) for lane in old_ci["lanes"].get("lanes", [])))
+    # Snapshots from before the Issue / PR trend charts are rebuilt once (without refreshing test data).
+    trend_upgrade = any(isinstance(((old.get("sections") or {}).get(kind) or {}).get("data"), dict)
+                        and "trend" not in old["sections"][kind]["data"] for kind in ("issues", "prs"))
     lanes_upgrade = False
     for line in lines:
         sections = old.get("sections", {}) if line["default"] else old.get("line_sections", {}).get(line["key"], {})
         view = ((sections.get("ci") or {}).get("data") or {}).get("lanes") or {}
         lanes_upgrade = lanes_upgrade or {lane["key"] for lane in view.get("lanes", [])} != {key for key, _ in LANES}
     # Reprojecting stored run categories must not invalidate test-artifact caches.
-    if (not history.changed and not sync.tagged.changed and not cache_upgrade and not lanes_upgrade and old.get("sync") == progress
+    if (not history.changed and not sync.tagged.changed and not cache_upgrade and not lanes_upgrade and not trend_upgrade and old.get("sync") == progress
             and old.get("generated_at", "")[:10] == stamp(midnight)[:10]):
         return old
     cfg = sync.cfg
@@ -213,6 +217,10 @@ def build_snapshot(sync):
     # by shard in History. Never prune canonical records when creating previews.
     issues["preview_total"] = len(issues["items"])
     prs["preview_total"] = len(prs["items"])
+    # Daily flow for the trend charts comes from the aggregate's day counts, not from the records.
+    for kind, data in (("issues", issues), ("prs", prs)):
+        data["trend"] = daily_trend(history.aggregate, kind, stamp(sync.now)[:10],
+                                    complete=progress["backfill"].get(kind, {}).get("complete", False))
     issues["items"] = issues["items"][:200]
     issues["closed_recent"] = issues["closed_recent"][:100]
     prs["items"] = prs["items"][:200]

@@ -54,8 +54,8 @@ test('issue distribution and filters; PR reviews and current commit checks', asy
   await page.locator('[data-tab="prs"]').click();
   await expect(page.locator('#tab-prs')).toContainText('需修改');
   await expect(page.locator('#tab-prs')).toContainText('评审负载');
-  await page.locator('#tab-prs summary').click();
-  await expect(page.locator('#tab-prs details')).toContainText('E2E');
+  await page.locator('#tab-prs .work-table summary').click();
+  await expect(page.locator('#tab-prs .work-table details')).toContainText('E2E');
 });
 
 // Issue and PR lists switch between the table and the local board.
@@ -810,6 +810,82 @@ test('unavailable data is not zero or a passing build',async({page})=>{
   await expect(page.locator('#global-banner')).toContainText('结果未知');
   await page.locator('[data-tab="releases"]').click();
   await expect(page.locator('#tab-releases')).toContainText('仓库尚无 Release');
+});
+
+test('Issue and PR tabs chart daily flow with an adjustable range and series switches', async ({ page }) => {
+  await page.goto('/github-status-board/#issues');
+  const card = page.locator('[data-trend-card="issues"]');
+  const charts = card.locator('.trend-chart');
+  // The last month by default: daily counts and the open count are two charts on one time axis.
+  await expect(card.locator('[data-trend-range="30"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(card.locator('[data-trend-from]')).toHaveValue('2026-08-22');
+  await expect(card.locator('[data-trend-to]')).toHaveValue('2026-09-20');
+  await expect(charts.locator('figcaption')).toHaveText(['每日数量', '存量（当天结束时仍开放）']);
+  await expect(charts.first().locator('.trend-line')).toHaveCount(2);
+  await expect(charts.last().locator('.trend-line')).toHaveCount(1);
+  expect(await card.locator('.trend-tick').evaluateAll((ticks) => ticks.filter((t) => t.getAttribute('text-anchor') === 'end').every((t) => /^\d[\d,]*$/.test(t.textContent)))).toBeTruthy();
+  await expect(card.locator('.trend-note')).toContainText('按 UTC 日期统计');
+  await expect(card.locator('.trend-note')).not.toContainText('回填');
+  await card.locator('.trend-table summary').click();
+  await expect(card.locator('.trend-table summary')).toHaveText('按日数据（30 天）');
+  await expect(card.locator('.trend-table tbody tr')).toHaveCount(30);
+  await expect(card.locator('.trend-table tbody tr').first().locator('td')).toHaveText(['2026-09-20', '0', '1', '95']);
+
+  // Hovering picks the nearest day in both charts; arrow keys step through days.
+  const hit = charts.first().locator('[data-trend-hit]');
+  const box = await hit.boundingBox();
+  await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2);
+  await expect(page.locator('#tooltip')).toHaveText('2026-09-20（UTC）\n0  新增\n1  关闭\n95  存量');
+  await expect(card.locator('.trend-cross.on')).toHaveCount(2);
+  await expect(card.locator('.trend-focus.on')).toHaveCount(3);
+  await page.mouse.move(0, 0);
+  await expect(card.locator('.trend-cross.on')).toHaveCount(0);
+  await hit.focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('#tooltip')).toContainText('2026-09-19（UTC）');
+  await page.keyboard.press('Home');
+  await expect(page.locator('#tooltip')).toContainText('2026-08-22（UTC）');
+
+  // Presets, the whole history and a custom range.
+  await card.locator('[data-trend-range="7"]').click();
+  await expect(card.locator('[data-trend-from]')).toHaveValue('2026-09-14');
+  await expect(card.locator('.trend-table summary')).toHaveText('按日数据（7 天）');
+  await card.locator('[data-trend-range="all"]').click();
+  await expect(card.locator('[data-trend-from]')).toHaveValue('2026-05-24');
+  await expect(card.locator('.trend-table summary')).toHaveText('按日数据（120 天）');
+  await card.locator('[data-trend-from]').fill('2026-09-01');
+  await card.locator('[data-trend-to]').fill('2026-09-10');
+  await expect(card.locator('.trend-table summary')).toHaveText('按日数据（10 天）');
+  await expect(card.locator('.seg button[aria-pressed="true"]')).toHaveCount(0);
+  // The chosen range survives a data refresh.
+  await page.locator('#refresh-btn').click();
+  await expect(page.locator('#refresh-btn')).toBeEnabled();
+  await expect(card.locator('[data-trend-from]')).toHaveValue('2026-09-01');
+
+  // Each series can be switched off and on; with none left the charts say how to bring them back.
+  await card.getByRole('button', { name: '存量' }).click();
+  await expect(card.getByRole('button', { name: '存量' })).toHaveAttribute('aria-pressed', 'false');
+  await expect(charts).toHaveCount(1);
+  await card.getByRole('button', { name: '新增' }).click();
+  await card.getByRole('button', { name: '关闭' }).click();
+  await expect(card.locator('.trend-none')).toContainText('所有数据都已关闭显示');
+  for (const name of ['新增', '关闭', '存量']) await card.getByRole('button', { name }).click();
+  await expect(charts).toHaveCount(2);
+
+  // PRs separate merges from PRs closed without merging, and say when history is still filling in.
+  await page.goto('/github-status-board/#prs');
+  const prs = page.locator('[data-trend-card="prs"]');
+  await expect(prs.locator('.trend-toggle')).toHaveText(['新增', '合入', '关闭未合入', '存量']);
+  await expect(prs.locator('.trend-chart').first().locator('.trend-line')).toHaveCount(3);
+  await expect(prs.locator('.trend-note')).toContainText('历史仍在回填');
+  await page.mouse.move(0, 0);
+  await prs.screenshot({ path: shot('pr-trend-desktop') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await expect(prs.locator('.trend-chart')).toHaveCount(2);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  expect(await prs.evaluate((el) => [...el.querySelectorAll('.trend-svg')].every((svg) => svg.getBoundingClientRect().right <= el.getBoundingClientRect().right))).toBeTruthy();
+  await prs.screenshot({ path: shot('pr-trend-narrow') });
 });
 
 test('mobile layout and failed refresh preserve snapshot',async({page})=>{
