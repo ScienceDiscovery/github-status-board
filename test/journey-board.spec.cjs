@@ -139,7 +139,39 @@ const withAgedSnapshot = async (page) => {
 };
 
 test('open-age pie filters only the open list on its own page', async ({page}) => {
+  test.setTimeout(60000);
   await withAgedSnapshot(page);
+  const header = tab => page.locator(`#tab-${tab} .open-list-header`);
+  const stableClick = async (tab, target, below = false) => {
+    await header(tab).evaluate((el, below) => {
+      const rect = el.getBoundingClientRect();
+      window.scrollTo(0, window.scrollY + (below ? rect.bottom + 20 : rect.top - 120));
+    }, below);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    const before = await page.evaluate(() => window.scrollY);
+    expect(before).toBeGreaterThan(0);
+    const height = (await header(tab).boundingBox()).height;
+    const list = page.locator(`#tab-${tab} .work-table, #tab-${tab} .work-board`);
+    const listTop = await list.evaluate(el => el.getBoundingClientRect().top + window.scrollY);
+    // Playwright click would scroll an offscreen sector into view before the handler.
+    // Dispatch its click while below the chart to isolate the application's focus/scroll behavior.
+    if (below) await target.dispatchEvent('click'); else await target.click();
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(Math.abs(await page.evaluate(() => window.scrollY) - before)).toBeLessThanOrEqual(2);
+    expect(Math.abs((await header(tab).boundingBox()).height - height)).toBeLessThanOrEqual(2);
+    expect(Math.abs(await list.evaluate(el => el.getBoundingClientRect().top + window.scrollY) - listTop)).toBeLessThanOrEqual(2);
+  };
+  const checkLayout = async (tab, width) => {
+    const chart = await page.locator(`#tab-${tab} .age-overview`).boundingBox();
+    const controls = await page.locator(`#tab-${tab} .open-list-controls`).boundingBox();
+    if (width === 1440) {
+      expect(controls.x).toBeGreaterThanOrEqual(chart.x + chart.width);
+      expect(Math.abs(controls.y - chart.y)).toBeLessThanOrEqual(2);
+    } else {
+      expect(controls.y).toBeGreaterThanOrEqual(chart.y + chart.height);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  };
   await page.goto('/github-status-board/#issues');
   const pie = page.locator('#tab-issues [data-age-pie="issues"]');
   await expect(pie).toBeVisible();
@@ -157,7 +189,7 @@ test('open-age pie filters only the open list on its own page', async ({page}) =
   await expect(key('30-90d')).toContainText('22.2%');
   await expect(key('>90d')).toContainText('22.2%');
   // Legend click filters the open Issue table; side cards keep their own rows.
-  await key('7-30d').click();
+  await stableClick('issues', key('7-30d'));
   await expect(rows).toHaveCount(2);
   await expect(page.locator('#tab-issues .list-head')).toContainText('2 / 10');
   await expect(page.locator('#tab-issues .work-table')).toContainText('样本 7d');
@@ -166,7 +198,7 @@ test('open-age pie filters only the open list on its own page', async ({page}) =
   await expect(page.locator('#tab-issues .work-table')).not.toContainText('样本 无年龄');
   await expect(key('7-30d')).toHaveAttribute('aria-pressed', 'true');
   await expect(pie.locator('.age-sector[data-age-filter="1"]')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('#tab-issues .filters .chip')).toContainText('开启时长：7-30d');
+  await expect(page.locator('#tab-issues .age-filter-slot .chip')).toContainText('开启时长：7-30d');
   await expect(page.locator('#tab-issues .grid.wide')).toContainText('处理超时问题');
   await page.screenshot({path:shot('issue-age-pie'),fullPage:true});
   // The age bucket intersects with the text search; an empty result keeps the pie.
@@ -179,16 +211,20 @@ test('open-age pie filters only the open list on its own page', async ({page}) =
   await expect(pie).toBeVisible();
   await page.locator('[data-filter="issueQ"]').fill('');
   // Clicking the selected legend entry again clears the filter.
-  await key('7-30d').click();
+  await stableClick('issues', key('7-30d'));
   await expect(rows).toHaveCount(10);
-  await expect(page.locator('#tab-issues .filters .chip')).toHaveCount(0);
+  await expect(page.locator('#tab-issues .age-filter-slot .chip')).toHaveCount(0);
   await expect(key('7-30d')).toHaveAttribute('aria-pressed', 'false');
   // A sector click works too, and the chip clears it.
-  await pie.locator('.age-sector[data-age-filter="3"]').click();
+  await stableClick('issues', pie.locator('.age-sector[data-age-filter="3"]'));
   await expect(rows).toHaveCount(2);
   await expect(page.locator('#tab-issues .work-table')).toContainText('样本 90d');
   await expect(page.locator('#tab-issues .work-table')).toContainText('样本 365d');
-  await page.locator('#tab-issues .filters .chip button').click();
+  await stableClick('issues', pie.locator('.age-sector[data-age-filter="3"]'), true);
+  await expect(rows).toHaveCount(10);
+  await stableClick('issues', pie.locator('.age-sector[data-age-filter="3"]'), true);
+  await expect(rows).toHaveCount(2);
+  await stableClick('issues', page.locator('#tab-issues .age-filter-slot .chip button'));
   await expect(rows).toHaveCount(10);
   // Sectors are keyboard-operable controls.
   await pie.locator('.age-sector[data-age-filter="2"]').focus();
@@ -205,10 +241,10 @@ test('open-age pie filters only the open list on its own page', async ({page}) =
   await expect(pPie.locator('button.age-key')).toHaveCount(3);
   await expect(pPie.locator('span.age-key.zero')).toHaveCount(1);
   await expect(pPie.locator('span.age-key.zero')).toContainText('7-30d');
-  await pPie.locator('button.age-key', {hasText: '>90d'}).click();
+  await stableClick('prs', pPie.locator('button.age-key', {hasText: '>90d'}));
   await expect(pRows).toHaveCount(1);
   await expect(page.locator('#tab-prs .work-table')).toContainText('PR 样本 100d');
-  await expect(page.locator('#tab-prs .filters .chip')).toContainText('开启时长：>90d');
+  await expect(page.locator('#tab-prs .age-filter-slot .chip')).toContainText('开启时长：>90d');
   // Recently merged PRs are not touched by the open-list filter.
   await expect(page.locator('#tab-prs')).toContainText('早前合并的 PR');
   // Back on Issues the earlier selection still holds; the PR choice did not follow.
@@ -220,15 +256,52 @@ test('open-age pie filters only the open list on its own page', async ({page}) =
   // The board view of the same page reads the very same filter.
   await showBoard(page, 'issues');
   await expect(page.locator('#tab-issues .bcard')).toHaveCount(2);
-  await expect(page.locator('#tab-issues .chips .chip')).toContainText('开启时长：30-90d');
-  await page.locator('#tab-issues .chips .chip button').click();
+  await expect(page.locator('#tab-issues .age-filter-slot .chip')).toContainText('开启时长：30-90d');
+  await stableClick('issues', page.locator('#tab-issues .age-filter-slot .chip button'));
   await expect(page.locator('#tab-issues .bcard')).toHaveCount(10);
   await page.locator('[data-tab="prs"]').click();
   await showBoard(page, 'prs');
   await expect(page.locator('#tab-prs .bcard')).toHaveCount(1);
   await expect(page.locator('#tab-prs .bcard')).toContainText('PR 样本 100d');
-  await page.locator('#tab-prs .chips .chip button').click();
+  await stableClick('prs', page.locator('#tab-prs .age-filter-slot .chip button'));
   await expect(page.locator('#tab-prs .bcard')).toHaveCount(3);
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({width, height: 1000});
+    for (const tab of ['issues', 'prs']) {
+      await page.locator(`[data-tab="${tab}"]`).click();
+      for (const view of ['table', 'board']) {
+        await page.locator(`[data-work-view="${tab}"] [data-val="${view}"]`).click();
+        await checkLayout(tab, width);
+        for (const colorScheme of ['light', 'dark']) {
+          await page.emulateMedia({colorScheme});
+          const chart = page.locator(`#tab-${tab} [data-age-pie]`);
+          const expected = ['--s2', '--s4', '--s7', '--s3'];
+          const colors = await chart.locator('.age-key i').evaluateAll((els, vars) => els.map((el, k) => {
+            const probe = document.createElement('i');
+            probe.style.backgroundColor = `var(${vars[k]})`; el.append(probe);
+            const matches = getComputedStyle(el).backgroundColor === getComputedStyle(probe).backgroundColor;
+            probe.remove(); return {matches, color: getComputedStyle(el).backgroundColor};
+          }), expected);
+          expect(colors.every(c => c.matches)).toBe(true);
+          expect(new Set(colors.map(c => c.color)).size).toBe(4);
+          const sector = chart.locator('.age-sector[data-age-filter="0"]');
+          await stableClick(tab, sector, true);
+          await expect(sector).toHaveAttribute('aria-pressed', 'true');
+          await expect(sector).not.toHaveAttribute('transform', /translate/);
+          await expect(sector).toHaveCSS('stroke', 'rgb(11, 11, 11)');
+          await page.evaluate(() => document.activeElement?.blur());
+          await page.mouse.move(0, 0);
+          await header(tab).evaluate(el => window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - document.querySelector('.topbar').getBoundingClientRect().height - 12));
+          await header(tab).screenshot({path: shot(`age-layout-${tab}-${view}-${width}-${colorScheme}`)});
+          await stableClick(tab, sector, true);
+          await expect(sector).toHaveAttribute('aria-pressed', 'false');
+          await stableClick(tab, chart.locator('button.age-key').first(), true);
+          await stableClick(tab, page.locator(`#tab-${tab} .age-filter-slot button`), true);
+          await checkLayout(tab, width);
+        }
+      }
+    }
+  }
 });
 
 test('drag a card, configure renamed column and WIP, preserve manual status',async({page})=>{
