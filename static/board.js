@@ -59,8 +59,11 @@
   function byId() { const m = {}; (B.data?.items || []).forEach((i) => { m[i.id] = i; }); return m; }
   function filtered() {
     const f = B.prefs.filters, q = (f.q || '').trim().toLowerCase();
+    // The open-age pie on the owning page filters these cards too (Issue and PR stay apart).
+    const ageSel = H.ageFilter ? H.ageFilter()[B.scope === 'issue' ? 'issues' : 'prs'] : null;
     return (B.data?.items || []).filter((i) => {
       if (i.kind !== B.scope) return false;
+      if (ageSel != null && H.ageBucketOf(i.age_days) !== ageSel) return false;
       if (f.state === 'open' && i.state !== 'open') return false;
       if (f.state === 'closed' && i.state !== 'closed') return false;
       if (f.label && !i.labels.some((l) => l.name === f.label)) return false;
@@ -139,6 +142,10 @@
     const d = B.data, f = B.prefs.filters, p = B.prefs;
     const sel = (name, list, cur, allLabel, noneLabel) => `<select data-bfilter="${name}"><option value="">${allLabel}</option>${noneLabel ? `<option value="${NONE}"${cur === NONE ? ' selected' : ''}>${noneLabel}</option>` : ''}${list.map((x) => { const [v, l] = Array.isArray(x) ? x : [x, x]; return `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`; }).join('')}</select>`;
     const chips = Object.entries(f).filter(([k, v]) => v).map(([k, v]) => `<span class="chip">${esc({ q: '搜索', state: '状态', label: '标签', assignee: '负责人', author: '作者', priority: '优先级', iteration: '迭代', milestone: '里程碑' }[k])}: ${esc(v === NONE ? '无' : v)} <button data-bclear="${k}">×</button></span>`).join('');
+    // The age filter lives on the page (pie above the list); mirror it here so board readers
+    // see the active bucket and can clear it. The × is wired by the page's own delegation.
+    const ageSel = H.ageFilter ? H.ageFilter()[B.scope === 'issue' ? 'issues' : 'prs'] : null;
+    const ageChip = ageSel == null ? '' : `<span class="chip">开启时长：${esc(H.AGE_BUCKETS[ageSel][0])} <button type="button" data-age-tab="${B.scope === 'issue' ? 'issues' : 'prs'}" data-age-clear aria-label="清除开启时长筛选">×</button></span>`;
     const summary = p.group === 'status' ? columns(items).map((c) => `<span class="sum ${c.over ? 'over' : ''}" style="--col:${c.color ? COLOR_VAR(c.color) : 'var(--axis)'}"><i></i>${esc(c.label)} <b>${c.items.length}</b>${c.limit ? `<span class="muted">/${c.limit}</span>` : ''}</span>`).join('') : '';
     return `<div class="board-toolbar">
       <div class="seg" data-bpref="group"><span class="seg-label">分组</span>${Object.entries(GROUPS).map(([k, l]) => `<button class="${p.group === k ? 'on' : ''}" data-val="${k}">${l}</button>`).join('')}</div>
@@ -156,7 +163,7 @@
       ${sel('iteration', d.facets.iterations, f.iteration, '全部迭代', '未设置')}${sel('milestone', d.facets.milestones, f.milestone, '全部里程碑', '无里程碑')}
       <span class="muted small">${items.length} / ${d.items.filter((i) => i.kind === B.scope).length} 张卡</span>
     </div>
-    ${chips ? `<div class="chips">${chips}<button class="btn small" data-baction="clear-filters">清除全部</button></div>` : ''}
+    ${chips || ageChip ? `<div class="chips">${ageChip}${chips}<button class="btn small" data-baction="clear-filters">清除全部</button></div>` : ''}
     ${summary ? `<div class="board-summary">${summary}<span class="muted small">规则：加入→${esc(d.rules.default_status)} · 指派→${esc(d.rules.doing_status)} · 关联 PR→${esc(d.rules.review_status)} · 关闭/合并→${esc(d.rules.done_status)}</span></div>` : ''}
     <div id="board-flash" class="banner error hidden"></div>`;
   }
@@ -389,7 +396,12 @@
     if (a === 'reload') load();
     else if (a === 'history') { B.historyOpen = !B.historyOpen; render(); }
     else if (a === 'settings') openSettings();
-    else if (a === 'clear-filters') { Object.keys(B.prefs.filters).forEach((k) => { B.prefs.filters[k] = ''; }); savePrefs(); render(); }
+    else if (a === 'clear-filters') {
+      Object.keys(B.prefs.filters).forEach((k) => { B.prefs.filters[k] = ''; });
+      savePrefs();
+      const tab = B.scope === 'issue' ? 'issues' : 'prs';
+      if (H.ageFilter && H.ageFilter()[tab] != null) H.setAgeFilter(tab, null); else render();
+    }
     else if (a === 'close-drawer') closeDrawer();
     else if (a === 'cancel-settings') $('#board-settings').close();
     else if (a === 'add-status') $('#status-rows').insertAdjacentHTML('beforeend', `<tr data-orig=""><td><input name="name" placeholder="新列" required maxlength="40"></td><td><select name="color">${['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8'].map((c) => `<option value="${c}">${c}</option>`).join('')}</select></td><td><input name="limit" type="number" min="0" placeholder="无" size="4"></td><td><input name="description" placeholder="说明"></td><td class="row-actions"><button type="button" data-srow="up">↑</button><button type="button" data-srow="down">↓</button><button type="button" data-srow="del" class="danger">删除</button></td></tr>`);

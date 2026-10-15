@@ -44,7 +44,7 @@ test('all existing pages render; only static requests and no promotional copy', 
 
 test('issue distribution and filters; PR reviews and current commit checks', async ({page})=>{
   await page.goto('/github-status-board/#issues');
-  await expect(page.locator('#tab-issues')).toContainText('年龄分布');
+  await expect(page.locator('#tab-issues')).toContainText('开启时长');
   await expect(page.locator('#tab-issues')).toContainText('<script>alert(1)</script>');
   expect(await page.locator('#tab-issues script').count()).toBe(0);
   await page.locator('[data-filter="issueQ"]').fill('不存在');
@@ -66,7 +66,7 @@ test('board grouping, drawer edits and reload retain browser fields', async ({pa
   await showBoard(page, 'issues');
   // Each page shows only its own kind; statistics stay above the list.
   await expect(page.locator('#tab-issues .bcard')).toHaveCount(1);
-  await expect(page.locator('#tab-issues')).toContainText('年龄分布');
+  await expect(page.locator('#tab-issues')).toContainText('开启时长');
   await page.locator('[data-open="issue:1"]').click();
   await expect(page.locator('#drawer')).toContainText('Reproduction');
   await expect(page.locator('#drawer')).toContainText('<script>alert(2)</script>');
@@ -97,6 +97,138 @@ test('board grouping, drawer edits and reload retain browser fields', async ({pa
   await page.locator('[data-work-view="issues"] [data-val="table"]').click();
   await expect(page.locator('#tab-issues .work-board')).toHaveCount(0);
   await expect(page.locator('#tab-issues .work-table')).toContainText('处理超时问题');
+});
+
+// Open-age pie: bucket counts come from the page's own open items, and clicking a sector
+// or legend entry filters only that page's open list. Boundary ages arrive via a patched
+// snapshot so the shared fixture keeps its single issue and PR.
+const withAgedSnapshot = async (page) => {
+  await page.route('**/github-status-board/data/snapshot.json*', async (route) => {
+    const res = await route.fetch();
+    const doc = await res.json();
+    const t = '2026-09-20T12:00:00Z', base = doc.repo_url;
+    const mkIssue = (number, age_days) => ({
+      number, title: age_days == null ? '样本 无年龄' : `样本 ${age_days}d`, url: `${base}/issues/${number}`,
+      state: 'open', author: 'dev', labels: [], assignees: [], milestone: null, comments: 0,
+      created_at: t, updated_at: t, closed_at: null, age_days, idle_days: age_days, reactions: 0, body: '',
+    });
+    const mkPr = (number, age_days) => ({
+      number, title: `PR 样本 ${age_days}d`, url: `${base}/pull/${number}`, state: 'open', author: 'dev',
+      labels: [], assignees: [], milestone: null, comments: 0, created_at: t, updated_at: t, closed_at: null,
+      age_days, idle_days: age_days, draft: false, review_decision: 'NONE', reviews: [], requested_reviewers: [],
+      waiting_review: false, mergeable: 'MERGEABLE', ci: { state: 'success', checks: [] }, head: `aged-${number}`, base: 'main',
+      linked_issues: [], head_sha: 'b'.repeat(40), body: '',
+    });
+    const ages = [0, 6.9, 7, 29.9, 30, 89.9, 90, 365, null];
+    const issues = doc.sections.issues.data, prs = doc.sections.prs.data;
+    ages.forEach((age, i) => issues.items.push(mkIssue(100 + i, age)));
+    issues.open_count = issues.items.length;
+    prs.items.push(mkPr(50, 45), mkPr(51, 100));
+    prs.open_count = prs.items.length;
+    prs.recent_merged = [{ number: 99, title: '早前合并的 PR', url: `${base}/pull/99`, author: 'dev', merged_at: t, time_to_merge_h: 5 }];
+    const boardItem = (kind, x) => ({
+      id: `${kind}:${x.number}`, kind, number: x.number, title: x.title, url: x.url, state: 'open', author: x.author,
+      labels: [], assignees: [], milestone: null, comments: 0, created_at: t, updated_at: t, closed_at: null,
+      age_days: x.age_days, idle_days: x.age_days, linked: [], draft: false, review_decision: null, ci_state: null, merged: false,
+      ...(kind === 'pr' ? { head: x.head, base: x.base } : {}),
+    });
+    ages.forEach((age, i) => doc.board.items.push(boardItem('issue', mkIssue(100 + i, age))));
+    [mkPr(50, 45), mkPr(51, 100)].forEach((p) => doc.board.items.push(boardItem('pr', p)));
+    await route.fulfill({ response: res, body: JSON.stringify(doc) });
+  });
+};
+
+test('open-age pie filters only the open list on its own page', async ({page}) => {
+  await withAgedSnapshot(page);
+  await page.goto('/github-status-board/#issues');
+  const pie = page.locator('#tab-issues [data-age-pie="issues"]');
+  await expect(pie).toBeVisible();
+  const key = (name) => pie.locator('.age-key', {hasText: name});
+  const rows = page.locator('#tab-issues .work-table tbody tr');
+  // Buckets follow the collector boundaries [0,7) [7,30) [30,90) [90,∞); the item without
+  // age_days stays in the list but is not counted in any sector.
+  await expect(rows).toHaveCount(10);
+  await expect(pie.locator('.age-total')).toHaveText('9');
+  await expect(pie.locator('.age-sector')).toHaveCount(4);
+  await expect(key('<7d')).toContainText('3');
+  await expect(key('<7d')).toContainText('33.3%');
+  await expect(key('7-30d')).toContainText('2');
+  await expect(key('7-30d')).toContainText('22.2%');
+  await expect(key('30-90d')).toContainText('22.2%');
+  await expect(key('>90d')).toContainText('22.2%');
+  // Legend click filters the open Issue table; side cards keep their own rows.
+  await key('7-30d').click();
+  await expect(rows).toHaveCount(2);
+  await expect(page.locator('#tab-issues .list-head')).toContainText('2 / 10');
+  await expect(page.locator('#tab-issues .work-table')).toContainText('样本 7d');
+  await expect(page.locator('#tab-issues .work-table')).toContainText('样本 29.9d');
+  await expect(page.locator('#tab-issues .work-table')).not.toContainText('样本 0d');
+  await expect(page.locator('#tab-issues .work-table')).not.toContainText('样本 无年龄');
+  await expect(key('7-30d')).toHaveAttribute('aria-pressed', 'true');
+  await expect(pie.locator('.age-sector[data-age-filter="1"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#tab-issues .filters .chip')).toContainText('开启时长：7-30d');
+  await expect(page.locator('#tab-issues .grid.wide')).toContainText('处理超时问题');
+  await page.screenshot({path:shot('issue-age-pie'),fullPage:true});
+  // The age bucket intersects with the text search; an empty result keeps the pie.
+  await page.locator('[data-filter="issueQ"]').fill('29.9');
+  await expect(rows).toHaveCount(1);
+  await expect(page.locator('#tab-issues .work-table')).toContainText('样本 29.9d');
+  await page.locator('[data-filter="issueQ"]').fill('不存在');
+  await expect(rows).toHaveCount(0);
+  await expect(page.locator('#tab-issues .work-table')).toContainText('没有符合筛选条件的开放 Issue');
+  await expect(pie).toBeVisible();
+  await page.locator('[data-filter="issueQ"]').fill('');
+  // Clicking the selected legend entry again clears the filter.
+  await key('7-30d').click();
+  await expect(rows).toHaveCount(10);
+  await expect(page.locator('#tab-issues .filters .chip')).toHaveCount(0);
+  await expect(key('7-30d')).toHaveAttribute('aria-pressed', 'false');
+  // A sector click works too, and the chip clears it.
+  await pie.locator('.age-sector[data-age-filter="3"]').click();
+  await expect(rows).toHaveCount(2);
+  await expect(page.locator('#tab-issues .work-table')).toContainText('样本 90d');
+  await expect(page.locator('#tab-issues .work-table')).toContainText('样本 365d');
+  await page.locator('#tab-issues .filters .chip button').click();
+  await expect(rows).toHaveCount(10);
+  // Sectors are keyboard-operable controls.
+  await pie.locator('.age-sector[data-age-filter="2"]').focus();
+  await page.keyboard.press('Enter');
+  await expect(rows).toHaveCount(2);
+  await expect(page.locator('#tab-issues .work-table')).toContainText('样本 30d');
+  // The PR page keeps its own pie and selection; zero-count buckets are not clickable.
+  await page.locator('[data-tab="prs"]').click();
+  const pPie = page.locator('#tab-prs [data-age-pie="prs"]');
+  const pRows = page.locator('#tab-prs .work-table tbody tr');
+  await expect(pRows).toHaveCount(3);
+  await expect(pPie.locator('.age-total')).toHaveText('3');
+  await expect(pPie.locator('.age-sector')).toHaveCount(3);
+  await expect(pPie.locator('button.age-key')).toHaveCount(3);
+  await expect(pPie.locator('span.age-key.zero')).toHaveCount(1);
+  await expect(pPie.locator('span.age-key.zero')).toContainText('7-30d');
+  await pPie.locator('button.age-key', {hasText: '>90d'}).click();
+  await expect(pRows).toHaveCount(1);
+  await expect(page.locator('#tab-prs .work-table')).toContainText('PR 样本 100d');
+  await expect(page.locator('#tab-prs .filters .chip')).toContainText('开启时长：>90d');
+  // Recently merged PRs are not touched by the open-list filter.
+  await expect(page.locator('#tab-prs')).toContainText('早前合并的 PR');
+  // Back on Issues the earlier selection still holds; the PR choice did not follow.
+  await page.locator('[data-tab="issues"]').click();
+  await expect(rows).toHaveCount(2);
+  await expect(page.locator('#tab-issues .work-table')).toContainText('样本 89.9d');
+  await expect(key('30-90d')).toHaveAttribute('aria-pressed', 'true');
+  await expect(key('>90d')).toHaveAttribute('aria-pressed', 'false');
+  // The board view of the same page reads the very same filter.
+  await showBoard(page, 'issues');
+  await expect(page.locator('#tab-issues .bcard')).toHaveCount(2);
+  await expect(page.locator('#tab-issues .chips .chip')).toContainText('开启时长：30-90d');
+  await page.locator('#tab-issues .chips .chip button').click();
+  await expect(page.locator('#tab-issues .bcard')).toHaveCount(10);
+  await page.locator('[data-tab="prs"]').click();
+  await showBoard(page, 'prs');
+  await expect(page.locator('#tab-prs .bcard')).toHaveCount(1);
+  await expect(page.locator('#tab-prs .bcard')).toContainText('PR 样本 100d');
+  await page.locator('#tab-prs .chips .chip button').click();
+  await expect(page.locator('#tab-prs .bcard')).toHaveCount(3);
 });
 
 test('drag a card, configure renamed column and WIP, preserve manual status',async({page})=>{
