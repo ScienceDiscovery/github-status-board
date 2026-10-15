@@ -163,12 +163,19 @@ td .sub { color: var(--muted); font-size: 12px; }
 .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); margin-top: 6px; }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
 /* Open-age donut on the Issue / PR pages; clicking a sector or legend entry filters the list below. */
-.age-pie { display: flex; align-items: center; gap: 12px 22px; flex-wrap: wrap; }
+.open-list-header { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 24px; margin: 12px 0; align-items: start; }
+.age-overview, .open-list-controls { min-width: 0; }
+.age-overview > .sub { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+.open-list-controls .list-head { margin: 0 0 12px; }
+.open-list-controls .filters { margin: 0 0 8px; }
+.open-list-controls input, .open-list-controls select { max-width: 100%; }
+.age-filter-slot { min-height: 30px; display: flex; align-items: center; }
+.age-pie { display: flex; align-items: center; gap: 12px; }
 .age-pie-svg { width: 160px; height: 160px; flex: none; }
 .age-sector { cursor: pointer; stroke: var(--surface); stroke-width: 1.5; }
 .age-sector:hover { filter: brightness(1.07); }
 .age-sector:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
-.age-sector.on { stroke: var(--ink); stroke-width: 2.5; }
+.age-sector.on { stroke: #0b0b0b; stroke-width: 3; }
 .age-total { fill: var(--ink); font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .age-total-sub { fill: var(--muted); font-size: 11px; }
 .age-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; min-width: 190px; }
@@ -181,6 +188,14 @@ button.age-key:hover { filter: brightness(0.97); }
 .age-key .age-name { flex: 1 1 auto; text-align: left; }
 .age-key b { font-variant-numeric: tabular-nums; }
 .age-key .muted { font-variant-numeric: tabular-nums; }
+@media (max-width: 1000px) {
+  .open-list-header { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+}
+@media (max-width: 500px) {
+  .age-pie-svg { width: 120px; height: 120px; }
+  .age-legend { min-width: 0; flex: 1; }
+  .age-key { padding: 3px 7px; gap: 5px; }
+}
 /* CI history lanes. Every row repeats one grid template, so day columns line up
    across lanes; a day's runs stack top-down and scroll inside that column. */
 /* Tagged tests: dimension × profile matrix. */
