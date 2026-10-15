@@ -637,23 +637,10 @@
       { label: '中位年龄', value: days(d.median_age_days), sub: `最老 ${days(d.oldest_age_days)}` },
     ]);
     html += trendSection('issues');
-    const issueRow = (i) => `<span class="title">${link(i.url, `#${i.number} ${esc(i.title)}`)}</span><span class="sub">${esc(i.author)} · ${labelChips(i.labels)}</span>`;
     html += `<div class="grid">
       ${card('标签分布', bars(d.labels.map((l) => ({ label: l.name, labelHtml: `<span class="label-chip"><span class="sw" style="background:#${esc(l.color || '999')}"></span>${esc(l.name)}</span>`, value: l.count })), { emptyText: '开放 Issue 都没有标签' }) + (d.unused_labels.length ? `<div class="muted" style="margin-top:8px">仓库另有 ${d.unused_labels.length} 个标签未用于任何开放 Issue：${esc(d.unused_labels.join('、'))}</div>` : ''), { sub: '按开放 Issue 计数' })}
       ${card('认领负载', bars(d.assignee_load.map((a) => ({ label: a.login, value: a.count })), { emptyText: '所有开放 Issue 均无人认领' }), { sub: '按 assignee' })}
       ${card('里程碑', bars(d.milestones.map((m) => ({ label: m.name, value: m.count }))))}
-    </div>`;
-    html += `<div class="grid wide" style="margin-top:12px">
-      ${card('最近更新', table('iss-recent', [
-        { key: 'number', label: 'Issue', render: issueRow, sortable: false },
-        { key: 'updated_at', label: '更新', render: (i) => ago(i.updated_at) },
-        { key: 'comments', label: '评论', num: true },
-      ], d.recent, { limit: 10 }))}
-      ${card('最久未动', table('iss-stale', [
-        { key: 'number', label: 'Issue', render: issueRow, sortable: false },
-        { key: 'idle_days', label: '闲置', num: true, render: (i) => days(i.idle_days) },
-        { key: 'age_days', label: '年龄', num: true, render: (i) => days(i.age_days) },
-      ], (d.stale.length ? d.stale : d.oldest), { limit: 10, emptyText: '没有陈旧 Issue' }), { sub: d.stale.length ? `≥${d.stale_days_threshold} 天无更新` : '暂无陈旧 Issue，显示最老的开放 Issue' })}
     </div>`;
     // Drill-down list with filters.
     const f = STATE.filters;

@@ -58,6 +58,49 @@ test('issue distribution and filters; PR reviews and current commit checks', asy
   await expect(page.locator('#tab-prs .work-table details')).toContainText('E2E');
 });
 
+test('open Issue table defaults to newest updates and resets sorting on reload', async ({page}) => {
+  await page.route('**/github-status-board/data/snapshot.json*', async route => {
+    const response = await route.fetch(), doc = await response.json();
+    const issues = doc.sections.issues.data, original = issues.items[0];
+    const item = (number, title, updated_at) => ({...original, number, title, updated_at,
+      url: `${doc.repo_url}/issues/${number}`});
+    const missing = item(31, '缺失更新时间', undefined);
+    // Keep the shared Issue untouched and deliberately return an unsorted list.
+    issues.items = [item(30, '空更新时间', null), item(10, '较早更新的 Issue', '2026-09-21T10:00:00Z'),
+      original, item(20, '较新更新的 Issue', '2026-09-22T10:00:00Z'), missing];
+    issues.open_count = issues.items.length;
+    await route.fulfill({response, json: doc});
+  });
+  await page.goto('/github-status-board/#issues');
+  const tab = page.locator('#tab-issues');
+  const table = tab.locator('.work-table');
+  const numbers = table.locator('tbody tr td:first-child');
+  const updateHead = table.locator('th[data-key="updated_at"]');
+  const defaultOrder = ['#20', '#10', '#1', '#30', '#31'];
+  await expect(numbers).toHaveText(defaultOrder);
+  await expect(table.locator('tbody tr').nth(0)).toContainText('较新更新的 Issue');
+  await expect(table.locator('tbody tr').nth(1)).toContainText('较早更新的 Issue');
+  await expect(updateHead).toHaveText('更新 ▼');
+  await expect(tab.getByRole('heading', {name: /^最近更新/})).toHaveCount(0);
+  await expect(tab.getByRole('heading', {name: /^最久未动/})).toHaveCount(0);
+  await expect(tab.locator('.tiles')).toContainText('陈旧（≥30 天无更新）');
+  await expect(tab.getByRole('heading', {name: /^标签分布/})).toBeVisible();
+  await expect(tab.getByRole('heading', {name: /^认领负载/})).toBeVisible();
+  await expect(tab.getByRole('heading', {name: '里程碑', exact: true})).toBeVisible();
+  await table.locator('th[data-key="number"]').click();
+  await expect(numbers).toHaveText(['#31', '#30', '#20', '#10', '#1']);
+  await expect(updateHead).toHaveText('更新');
+  await page.reload();
+  await expect(numbers).toHaveText(defaultOrder);
+  await expect(updateHead).toHaveText('更新 ▼');
+  await page.screenshot({path: shot('issue-list-updated-desktop'), fullPage: true});
+  await page.setViewportSize({width: 390, height: 1000});
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({path: shot('issue-list-updated-narrow'), fullPage: true});
+  await page.locator('[data-tab="prs"]').click();
+  await expect(page.locator('#tab-prs').getByRole('heading', {name: '最近合并', exact: true})).toBeVisible();
+});
+
 // Issue and PR lists switch between the table and the local board.
 const showBoard = async (page, tab) => { await page.locator(`[data-work-view="${tab}"] [data-val="board"]`).click(); await expect(page.locator(`#tab-${tab} .work-board .board`)).toBeVisible(); };
 test('board grouping, drawer edits and reload retain browser fields', async ({page})=>{
@@ -188,7 +231,7 @@ test('open-age pie filters only the open list on its own page', async ({page}) =
   await expect(key('7-30d')).toContainText('22.2%');
   await expect(key('30-90d')).toContainText('22.2%');
   await expect(key('>90d')).toContainText('22.2%');
-  // Legend click filters the open Issue table; side cards keep their own rows.
+  // Legend click filters the open Issue table; summary counts remain unchanged.
   await stableClick('issues', key('7-30d'));
   await expect(rows).toHaveCount(2);
   await expect(page.locator('#tab-issues .list-head')).toContainText('2 / 10');
@@ -199,7 +242,9 @@ test('open-age pie filters only the open list on its own page', async ({page}) =
   await expect(key('7-30d')).toHaveAttribute('aria-pressed', 'true');
   await expect(pie.locator('.age-sector[data-age-filter="1"]')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#tab-issues .age-filter-slot .chip')).toContainText('开启时长：7-30d');
-  await expect(page.locator('#tab-issues .grid.wide')).toContainText('处理超时问题');
+  await expect(page.locator('#tab-issues').getByRole('heading', {name: /^最近更新/})).toHaveCount(0);
+  await expect(page.locator('#tab-issues').getByRole('heading', {name: /^最久未动/})).toHaveCount(0);
+  await expect(page.locator('#tab-issues .tiles .tile').filter({hasText: /^开放/})).toContainText('10');
   await page.screenshot({path:shot('issue-age-pie'),fullPage:true});
   // The age bucket intersects with the text search; an empty result keeps the pie.
   await page.locator('[data-filter="issueQ"]').fill('29.9');
