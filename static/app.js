@@ -834,7 +834,8 @@
   const REAL_MARK = { passed: '✓', failed: '×', unknown: '?' };
   const realStatus = (delivery) => delivery === 'passed' || delivery === 'failed' ? delivery : 'unknown';
   // One small chart per metric, points evenly spaced in run order like the marks above it.
-  // Failed deliveries carry the previous score (dashed, ×); values that never arrived leave a gap.
+  // Show missing results only after the first measured score. Keep their marks at the previous
+  // recorded score, including across date boundaries; the mark is not a new measurement.
   function realTrendChart(points, metric) {
     const w = 320, h = 116, right = 10, top = 10, bottom = 22;
     const duration = metric.unit === 'duration_ms', key = metricKey(metric);
@@ -862,13 +863,29 @@
       return `<line class="score-grid" x1="${left}" x2="${w - right}" y1="${y}" y2="${y}"></line><text x="${left - 6}" y="${(Number(y) + 4).toFixed(1)}" text-anchor="end">${esc(scoreTick(value, metric.unit))}</text>`;
     }).join('');
     const reused = (index) => ['carried', 'baseline'].includes(entry(points[index])?.source);
-    const lines = values.map((value, index) => !index || value == null || values[index - 1] == null ? ''
-      : `<path class="score-line${reused(index - 1) || reused(index) ? ' carried' : ''}" d="M${xAt(index - 1).toFixed(1)},${yAt(values[index - 1]).toFixed(1)} L${xAt(index).toFixed(1)},${yAt(value).toFixed(1)}"></path>`).join('');
+    const firstSuccess = values.findIndex((value, index) => value != null && (duration || (!reused(index) && points[index].delivery === 'passed')));
+    const measured = values.map((value, index) => value == null || firstSuccess < 0 || index < firstSuccess ? null : index).filter((index) => index != null);
+    const previousAt = (index) => measured.findLast((at) => at < index);
+    const lines = measured.slice(1).map((index, position) => {
+      const previous = measured[position], gap = index > previous + 1;
+      const start = `M${xAt(previous).toFixed(1)},${yAt(values[previous]).toFixed(1)}`;
+      const missing = gap ? Array.from({ length: index - previous - 1 }, (_, offset) => ` L${xAt(previous + offset + 1).toFixed(1)},${yAt(values[previous]).toFixed(1)}`).join('') : '';
+      return `<path class="score-line${gap ? ' gap' : reused(previous) || reused(index) ? ' carried' : ''}" d="${start}${missing} L${xAt(index).toFixed(1)},${yAt(values[index]).toFixed(1)}"></path>`;
+    }).join('') + (measured.length && measured.at(-1) < points.length - 1
+      ? `<path class="score-line gap" d="M${xAt(measured.at(-1)).toFixed(1)},${yAt(values[measured.at(-1)]).toFixed(1)}${Array.from({ length: points.length - measured.at(-1) - 1 }, (_, offset) => ` L${xAt(measured.at(-1) + offset + 1).toFixed(1)},${yAt(values[measured.at(-1)]).toFixed(1)}`).join('')}"></path>`
+      : '');
+    const cross = (index, y, label) => `<g class="score-x" transform="translate(${xAt(index).toFixed(1)},${y.toFixed(1)})"${tip(label)}><path d="M-4,-4 L4,4 M4,-4 L-4,4"></path><title>${esc(label)}</title></g>`;
     const dots = values.map((value, index) => {
-      if (value == null) return '';
       const point = points[index], source = entry(point)?.source;
+      if (index < firstSuccess || firstSuccess < 0) return '';
+      if (value == null) {
+        const status = entry(point)?.status;
+        const reason = duration ? '耗时未记录' : `评分缺失${status ? `（${status}）` : ''}`;
+        const previous = previousAt(index);
+        return cross(index, yAt(values[previous]), `${date(point.created_at)} · ${metric.label} ${reason} · run ${point.run_id}；× 与上次有分数的运行平齐，不是本次测量值`);
+      }
       const label = `${date(point.created_at)} · ${metric.label} ${scoreTick(value, metric.unit)}${source === 'carried' ? '（交付失败，沿用上次实测）' : source === 'baseline' ? '（交付失败，无历史按 0）' : ''} · run ${point.run_id}`;
-      if (!duration && point.delivery === 'failed') return `<text class="score-failed" x="${xAt(index).toFixed(1)}" y="${(yAt(value) + 5).toFixed(1)}" text-anchor="middle"${tip(label)}>×<title>${esc(label)}</title></text>`;
+      if (!duration && point.delivery === 'failed') return cross(index, yAt(value), label);
       return `<circle class="score-dot${reused(index) ? ' carried' : ''}" cx="${xAt(index).toFixed(1)}" cy="${yAt(value).toFixed(1)}" r="3.5"${tip(label)}><title>${esc(label)}</title></circle>`;
     }).join('');
     const day = (index) => { const value = scoreDay(points[index].created_at); return value ? dayLabel(value) : ''; };
@@ -935,7 +952,7 @@
       { label: '有质量分数', value: `${n(scored)}<small>/ ${n(scores.length)}</small>`, sub: '未评分或 Judge 错误会明确显示', tone: scored === scores.length ? 'good' : 'warn' },
       { label: '质量门槛', value: '无', sub: '不根据分数改变 CI 结论' },
     ]);
-    html += `<div class="e2e-legend" aria-label="Real E2E 状态图例">${['passed', 'failed', 'unknown'].map((state) => `<span><span class="e2e-status-mark ${state}" aria-hidden="true">${REAL_MARK[state]}</span>${REAL_STATUS[state]}</span>`).join('')}<span class="muted">曲线：圆点为实测；交付失败的运行画 ×，并用虚线沿用上次实测分数（没有历史时按 0）；没有数值的运行留空。每个用例最多保留最近 30 个运行日，每天取一次运行。</span></div>`;
+    html += `<div class="e2e-legend" aria-label="Real E2E 状态图例">${['passed', 'failed', 'unknown'].map((state) => `<span><span class="e2e-status-mark ${state}" aria-hidden="true">${REAL_MARK[state]}</span>${REAL_STATUS[state]}</span>`).join('')}<span class="muted">曲线：圆点为实测；首次实测后的红色 × 表示该项数据缺失或用例交付失败，悬停可看原因。缺失数据的 × 与上次有分数的运行平齐，虚线经过缺失运行连接到下次实测；交付失败时沿用上次实测分数（没有历史时按 0）。每个用例最多保留最近 30 个运行日，每天取一次运行。</span></div>`;
     html += realCaseGroups(report, history).map((group) => {
       // Collapse state shares the run-record set; the prefix keeps family names apart from shard names.
       const key = `real:${group.family}`, open = !STATE.e2eCollapsed.has(key), id = `real-e2e-category-${encodeURIComponent(group.family)}`;

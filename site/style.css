@@ -258,9 +258,10 @@ a.ci-run:hover, a.ci-run:focus-visible { outline: 2px solid var(--ink); outline-
 .score-chart .score-grid { stroke: var(--grid); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .score-chart .score-line { fill: none; stroke: var(--s1); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .score-chart .score-line.carried { stroke-dasharray: 5 4; }
+.score-chart .score-line.gap { stroke-dasharray: 5 4; }
 .score-chart .score-dot { fill: var(--surface); stroke: var(--s1); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
 .score-chart .score-dot.carried { stroke-dasharray: 3 2; }
-.score-chart .score-failed { fill: var(--bad, #c73131); font-size: 16px; font-weight: 700; }
+.score-chart .score-x path { fill: none; stroke: var(--bad, #c73131); stroke-width: 2.5; stroke-linecap: round; vector-effect: non-scaling-stroke; }
 /* Real E2E: the metric charts sit under each case's status marks, side by side when there is room. */
 .real-trends { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 12px 20px; margin-top: 12px; }
 .real-trend { min-width: 0; margin: 0; }
