@@ -332,7 +332,7 @@
   // Open-age pie above each open list: same bucket boundaries as the collector's aging
   // summary ([0,7), [7,30), [30,90), [90,∞)), computed from the items the list shows.
   const AGE_BUCKETS = [['<7d', 0, 7], ['7-30d', 7, 30], ['30-90d', 30, 90], ['>90d', 90, null]];
-  const AGE_BUCKET_COLOR = ['seq-3', 'seq-4', 'seq-5', 'seq-6'];
+  const AGE_BUCKET_COLOR = ['s2', 's4', 's7', 's3'];
   const ageBucketOf = (age) => {
     if (age == null || Number.isNaN(Number(age))) return -1;
     return AGE_BUCKETS.findIndex(([, lo, hi]) => age >= lo && (hi == null || age < hi));
@@ -367,8 +367,7 @@
         const [x1, y1] = point(rO, a1), [u1, v1] = point(rI, a1), large = span > Math.PI ? 1 : 0;
         d = `M${x0.toFixed(2)},${y0.toFixed(2)} A${rO},${rO} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)} L${u1.toFixed(2)},${v1.toFixed(2)} A${rI},${rI} 0 ${large} 0 ${u0.toFixed(2)},${v0.toFixed(2)} Z`;
       }
-      const mid = (a0 + a1) / 2, offset = on ? ` transform="translate(${(Math.cos(mid) * 5).toFixed(2)},${(Math.sin(mid) * 5).toFixed(2)})"` : '';
-      sectors.push(`<path class="age-sector${on ? ' on' : ''}" d="${d}" fill="var(--${AGE_BUCKET_COLOR[k]})"${offset} role="button" tabindex="0" data-age-tab="${tab}" data-age-filter="${k}" aria-pressed="${on}" aria-label="筛选开启时长 ${esc(AGE_BUCKETS[k][0])} 的${unit}：${n(count)} 个，占 ${share.toFixed(1)}%"${tip(`${AGE_BUCKETS[k][0]}：${n(count)} 个（${share.toFixed(1)}%）`)}></path>`);
+      sectors.push(`<path class="age-sector${on ? ' on' : ''}" d="${d}" fill="var(--${AGE_BUCKET_COLOR[k]})" role="button" tabindex="0" data-age-tab="${tab}" data-age-filter="${k}" aria-pressed="${on}" aria-label="筛选开启时长 ${esc(AGE_BUCKETS[k][0])} 的${unit}：${n(count)} 个，占 ${share.toFixed(1)}%"${tip(`${AGE_BUCKETS[k][0]}：${n(count)} 个（${share.toFixed(1)}%）`)}></path>`);
     });
     const center = `<text class="age-total" x="${cx}" y="${cy + 1}" text-anchor="middle">${n(total)}</text><text class="age-total-sub" x="${cx}" y="${cy + 18}" text-anchor="middle">开放${unit}</text>`;
     const legend = AGE_BUCKETS.map(([label], k) => {
@@ -383,6 +382,23 @@
     const sel = STATE.ageFilter[tab];
     return sel == null ? '' : `<span class="chip">开启时长：${esc(AGE_BUCKETS[sel][0])} <button type="button" data-age-tab="${tab}" data-age-clear aria-label="清除开启时长筛选">×</button></span>`;
   };
+  const openListHeader = (tab, items, unit, sub, filters = '') => `<div class="card open-list-header">
+    <div class="age-overview"><h3>开启时长</h3><p class="sub">点击扇区或图例筛选，再次点击取消</p>${agePie(tab, items, unit)}</div>
+    <div class="open-list-controls">${listHead(tab, `开放 ${unit}`, sub)}
+      ${STATE.views[tab] === 'board' ? '<div class="open-board-controls"></div>' : filters}
+      <div class="age-filter-slot">${ageChip(tab)}</div>
+    </div>
+  </div>`;
+  function setAgeFilter(tab, value, focusBucket) {
+    const { scrollX, scrollY } = window, panel = $(`#tab-${tab}`);
+    // Shorter results must still leave enough document height to restore this viewport.
+    const top = panel.getBoundingClientRect().top + scrollY;
+    panel.style.minHeight = `${Math.max(0, scrollY + window.innerHeight - top)}px`;
+    STATE.ageFilter[tab] = value;
+    renderTabs();
+    if (focusBucket != null) document.querySelector(`.age-key[data-age-tab="${tab}"][data-age-filter="${focusBucket}"]`)?.focus({ preventScroll: true });
+    window.scrollTo({ left: scrollX, top: scrollY, behavior: 'instant' });
+  }
   // Totals across test reports, or null when any report has no readable counts.
   const sumCounts = (reports) => (!reports.length || reports.some((r) => !r.counts) ? null
     : Object.fromEntries(['tests', 'passed', 'failed', 'skipped', 'flaky'].map((k) => [k, reports.reduce((sum, r) => sum + (r.counts[k] || 0), 0)])));
@@ -651,15 +667,14 @@
     else if (f.issueAssignee) rows = rows.filter((i) => i.assignees.includes(f.issueAssignee));
     if (STATE.ageFilter.issues != null) rows = rows.filter((i) => ageBucketOf(i.age_days) === STATE.ageFilter.issues);
     const preview = d.preview_total > d.items.length ? ` · 列表显示最近更新的 ${d.items.length} / ${d.preview_total} 个` : '';
-    html += card('开启时长', agePie('issues', d.items, 'Issue'), { sub: STATE.ageFilter.issues != null ? '只筛选下方开放 Issue；再点一次选中的扇区或图例取消' : '点击扇区或图例筛选下方开放 Issue' });
-    html += listHead('issues', '开放 Issue', STATE.views.issues === 'board' ? `看板含最近关闭的 Issue${preview}` : `${rows.length} / ${d.items.length}${preview}`);
-    if (STATE.views.issues === 'board') return html + boardMount('issue');
-    html += `<div class="card work-table"><div class="filters">
+    const filters = `<div class="filters">
       <input type="text" data-filter="issueQ" placeholder="搜索编号 / 标题 / 作者" value="${esc(f.issueQ)}">
       <select data-filter="issueLabel"><option value="">全部标签</option><option value="__none__" ${f.issueLabel === '__none__' ? 'selected' : ''}>无标签</option>${labels.map((l) => `<option ${f.issueLabel === l ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
       <select data-filter="issueAssignee"><option value="">全部认领人</option><option value="__none__" ${f.issueAssignee === '__none__' ? 'selected' : ''}>无人认领</option>${assignees.map((a) => `<option ${f.issueAssignee === a ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>
-      ${ageChip('issues')}
-    </div>${table('iss-all', [
+    </div>`;
+    html += openListHeader('issues', d.items, 'Issue', STATE.views.issues === 'board' ? `看板含最近关闭的 Issue${preview}` : `${rows.length} / ${d.items.length}${preview}`, filters);
+    if (STATE.views.issues === 'board') return html + boardMount('issue');
+    html += `<div class="card work-table">${table('iss-all', [
       { key: 'number', label: '#', num: true, render: (i) => link(i.url, `#${i.number}`) },
       { key: 'title', label: '标题', render: (i) => `${link(i.url, esc(i.title))}<div class="sub">${labelChips(i.labels)}${i.milestone ? ` · ${esc(i.milestone)}` : ''}</div>` },
       { key: 'author', label: '作者' },
@@ -703,10 +718,9 @@
     </div>`;
     let rows = d.items;
     if (STATE.ageFilter.prs != null) rows = rows.filter((p) => ageBucketOf(p.age_days) === STATE.ageFilter.prs);
-    html += card('开启时长', agePie('prs', d.items, 'PR'), { sub: STATE.ageFilter.prs != null ? '只筛选下方开放 PR；再点一次选中的扇区或图例取消' : '点击扇区或图例筛选下方开放 PR' });
-    html += listHead('prs', '开放 PR', STATE.views.prs === 'board' ? '看板含最近关闭与合并的 PR' : STATE.ageFilter.prs != null ? `${rows.length} / ${d.items.length} 个` : `${d.items.length} 个`);
+    html += openListHeader('prs', d.items, 'PR', STATE.views.prs === 'board' ? '看板含最近关闭与合并的 PR' : `${rows.length} / ${d.items.length} 个`);
     if (STATE.views.prs === 'board') html += boardMount('pr');
-    else html += `<div class="card work-table">${STATE.ageFilter.prs != null ? `<div class="filters">${ageChip('prs')}</div>` : ''}${table('pr-open', [
+    else html += `<div class="card work-table">${table('pr-open', [
       { key: 'number', label: '#', num: true, render: (p) => link(p.url, `#${p.number}`) },
       { key: 'title', label: '标题', render: (p) => `${link(p.url, esc(p.title))}<div class="sub">${esc(p.author)} · <code>${esc(p.head)}</code> → <code>${esc(p.base)}</code>${p.labels.length ? ' · ' + labelChips(p.labels) : ''}</div>` },
       { key: 'age_days', label: '年龄', num: true, render: (p) => days(p.age_days) },
@@ -1582,10 +1596,8 @@
     if (age) {
       const tab = age.dataset.ageTab, prev = STATE.ageFilter[tab];
       const next = 'ageClear' in age.dataset ? null : Number(age.dataset.ageFilter);
-      STATE.ageFilter[tab] = prev === next ? null : next;
-      renderTabs();
-      const keep = STATE.ageFilter[tab] ?? prev;
-      document.querySelector(`.age-key[data-age-tab="${tab}"][data-age-filter="${keep}"]`)?.focus();
+      const value = prev === next ? null : next;
+      setAgeFilter(tab, value, value ?? prev);
       return;
     }
     const lineButton = ev.target.closest('[data-line]');
@@ -1694,7 +1706,7 @@
   }, true);
 
   // Shared helpers for the board module (static/board.js).
-  window.GSB = { esc, ago, days, date, n, badge, labelChips, link, codeify, conclusionBadge, tip, empty, kv, CONCLUSION_NAME, refresh, snapshot:()=>STATE.snap, ageBucketOf, AGE_BUCKETS, ageFilter:()=>STATE.ageFilter, setAgeFilter:(tab,value)=>{ STATE.ageFilter[tab] = value; renderTabs(); } };
+  window.GSB = { esc, ago, days, date, n, badge, labelChips, link, codeify, conclusionBadge, tip, empty, kv, CONCLUSION_NAME, refresh, snapshot:()=>STATE.snap, ageBucketOf, AGE_BUCKETS, ageFilter:()=>STATE.ageFilter, setAgeFilter };
   STATE.tab = location.hash.slice(1) || 'overview';
   load();
 })();

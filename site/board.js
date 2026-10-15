@@ -142,10 +142,6 @@
     const d = B.data, f = B.prefs.filters, p = B.prefs;
     const sel = (name, list, cur, allLabel, noneLabel) => `<select data-bfilter="${name}"><option value="">${allLabel}</option>${noneLabel ? `<option value="${NONE}"${cur === NONE ? ' selected' : ''}>${noneLabel}</option>` : ''}${list.map((x) => { const [v, l] = Array.isArray(x) ? x : [x, x]; return `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`; }).join('')}</select>`;
     const chips = Object.entries(f).filter(([k, v]) => v).map(([k, v]) => `<span class="chip">${esc({ q: '搜索', state: '状态', label: '标签', assignee: '负责人', author: '作者', priority: '优先级', iteration: '迭代', milestone: '里程碑' }[k])}: ${esc(v === NONE ? '无' : v)} <button data-bclear="${k}">×</button></span>`).join('');
-    // The age filter lives on the page (pie above the list); mirror it here so board readers
-    // see the active bucket and can clear it. The × is wired by the page's own delegation.
-    const ageSel = H.ageFilter ? H.ageFilter()[B.scope === 'issue' ? 'issues' : 'prs'] : null;
-    const ageChip = ageSel == null ? '' : `<span class="chip">开启时长：${esc(H.AGE_BUCKETS[ageSel][0])} <button type="button" data-age-tab="${B.scope === 'issue' ? 'issues' : 'prs'}" data-age-clear aria-label="清除开启时长筛选">×</button></span>`;
     const summary = p.group === 'status' ? columns(items).map((c) => `<span class="sum ${c.over ? 'over' : ''}" style="--col:${c.color ? COLOR_VAR(c.color) : 'var(--axis)'}"><i></i>${esc(c.label)} <b>${c.items.length}</b>${c.limit ? `<span class="muted">/${c.limit}</span>` : ''}</span>`).join('') : '';
     return `<div class="board-toolbar">
       <div class="seg" data-bpref="group"><span class="seg-label">分组</span>${Object.entries(GROUPS).map(([k, l]) => `<button class="${p.group === k ? 'on' : ''}" data-val="${k}">${l}</button>`).join('')}</div>
@@ -163,7 +159,7 @@
       ${sel('iteration', d.facets.iterations, f.iteration, '全部迭代', '未设置')}${sel('milestone', d.facets.milestones, f.milestone, '全部里程碑', '无里程碑')}
       <span class="muted small">${items.length} / ${d.items.filter((i) => i.kind === B.scope).length} 张卡</span>
     </div>
-    ${chips || ageChip ? `<div class="chips">${ageChip}${chips}<button class="btn small" data-baction="clear-filters">清除全部</button></div>` : ''}
+    ${chips ? `<div class="chips">${chips}<button class="btn small" data-baction="clear-filters">清除全部</button></div>` : ''}
     ${summary ? `<div class="board-summary">${summary}<span class="muted small">规则：加入→${esc(d.rules.default_status)} · 指派→${esc(d.rules.doing_status)} · 关联 PR→${esc(d.rules.review_status)} · 关闭/合并→${esc(d.rules.done_status)}</span></div>` : ''}
     <div id="board-flash" class="banner error hidden"></div>`;
   }
@@ -190,6 +186,9 @@
     if (B.error) html += `<div class="banner warn"><span class="icon">▲</span><div>${esc(B.error)}</div></div>`;
     if (B.historyOpen) html += historyHtml();
     html += '</div>';
+    // The page owns the shared chart/list header; keep the board itself full width.
+    const controls = $(`#tab-${SCOPES[B.scope].tab} .open-board-controls`);
+    if (controls) { controls.innerHTML = html; html = ''; }
     const cols = columns(items);
     html += `<div class="board ${B.prefs.equal ? 'equal' : ''}">${cols.map((c) => columnHtml(c, B.prefs.group)).join('')}</div>`;
     html += `<div class="muted small board-foot">数据：快照 ${ago(B.data.snapshot_generated_at)} 的 ${SCOPES[B.scope].name} + 本地字段（${B.scope === 'pr' ? B.data.counts.prs : B.data.counts.issues} 个，含最近 ${esc(String(B.data.rules.closed_window_days))} 天关闭的）。拖拽只改本地字段，不写回 GitHub。</div>`;
