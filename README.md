@@ -9,7 +9,7 @@
 
 ## 使用
 
-在目标仓 Actions 手动运行 **Collect dashboard data**，或由 Bot 触发；每小时第 17、47 分钟自动续跑。采集提交 `site/` 后，**Deploy dashboard Pages** 发布站点。首次配置见 [Actions 采集](docs/actions-collection.md)。
+在目标仓 Actions 手动运行 **Collect dashboard data**，或由 Bot 触发；每小时第 17、47 分钟自动续跑。`main` 上包含 `site/`、`.sync/` 以外文件改动的推送，也会自动派发一次采集；仅改这两个目录的采集提交不会再次派发。采集提交 `site/` 后，**Deploy dashboard Pages** 发布站点。首次配置见 [Actions 采集](docs/actions-collection.md)。
 
 本地快速预览（Python 3.10+，凭据来自环境或已登录的 gh）：
 
