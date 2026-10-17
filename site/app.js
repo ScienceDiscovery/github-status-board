@@ -1426,8 +1426,10 @@
       $('#meta').title='按浏览器时区显示';
       $('#repo-link').title=snap.repo;
     }
-    const stale=snap && Date.now()-new Date(snap.generated_at)>7200000;
-    const message=STATE.clientError || [...(snap?.notices||[]).map(n=>n.message).filter(message=>message !== '部分补充信息不可读取，请以 GitHub 原页面为准。'), ...(stale?['快照超过两小时未更新；当前显示最后一次发布的数据。']:[])].join(' ');
+    // A quiet collection keeps the snapshot's time, a new UTC day rebuilds it, and the bot collects at
+    // least every eight hours: an older snapshot means collection has stopped.
+    const stale=snap && Date.now()-new Date(snap.generated_at)>36*3600000;
+    const message=STATE.clientError || [...(snap?.notices||[]).map(n=>n.message).filter(message=>message !== '部分补充信息不可读取，请以 GitHub 原页面为准。'), ...(stale?['快照超过 36 小时未更新，采集可能已停止；当前显示最后一次发布的数据。']:[])].join(' ');
     banner.className='banner '+(message?'warn':'hidden');banner.textContent=message;
     document.querySelectorAll('#tabs a').forEach(a=>{
       const active=a.dataset.tab===STATE.tab;a.classList.toggle('active',active);
