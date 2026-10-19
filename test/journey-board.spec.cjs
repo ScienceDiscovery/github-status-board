@@ -648,6 +648,26 @@ test('Real E2E cases show run marks and score curves inline like the E2E run rec
   await drb.screenshot({ path: shot('real-e2e-case-narrow') });
 });
 
+test('Real E2E history remains visible when the latest report falls outside the current run window', async ({ page }) => {
+  await page.route('**/data/snapshot.json*', async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    const tests = snapshot.sections.tests.data;
+    tests.score_report = null;
+    tests.executed = tests.executed.filter((entry) => !entry.artifact.startsWith('real-e2e-results'));
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.goto('/github-status-board/#tests');
+  const tab = page.locator('#tab-tests');
+  await expect(tab).toContainText('最新 Real E2E 评分');
+  await expect(tab).toContainText('以下仍显示已保存的逐用例历史');
+  await expect(tab.locator('[data-real-item]')).toHaveCount(9);
+  await expect(tab.locator('[data-real-item="DRB-59"] .score-chart')).toHaveCount(4);
+  await tab.locator('[data-real-item="DRB-59"] .real-case-link').click();
+  await expect(page).toHaveURL(/real-e2e\.html\?line=main&case=DRB-59$/);
+  await expect(page.locator('.history-table .real-history-row')).toHaveCount(12);
+});
+
 test('Real E2E case names open branch-specific run details', async ({ page }) => {
   await page.goto('/github-status-board/#tests');
   await page.getByRole('link', { name: '查看 DRB-59 的 Real E2E 详情' }).click();
