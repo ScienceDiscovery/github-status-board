@@ -26,6 +26,8 @@ App 的 Actions 写权限在 App 注册页 **Permissions & events → Repository
 
 兑换令牌后，客户端用同一 OIDC 身份向同一 Worker 的 `/actions/gitcode-sync` 读取 GitCode 同步记录，经 `GSB_GITCODE_SYNC_FILE` 交给发布器；读取失败只把页面标为过期，不影响采集。见 [GitCode 同步记录](gitcode-sync.md)。
 
+客户端还向同一 Worker `POST /actions/reruns`（正文 `{}`）领取最多 20 条完成重跑通知，经非秘密的 `GSB_RUN_CHANGES_FILE` 交给采集器。Worker 仅合并 run ID／attempt／revision，不为每个完成事件调度采集；仍随既有 Issue／PR 合并刷新、8 小时空闲刷新、每日兜底或手动采集处理。发布器按 ID 优先读取最新 attempt、状态与必要报告，不回扫全部 Actions 历史。成功原子提交后才生成 `GSB_RUN_CHANGES_RECEIPT`，父进程重新领取短期 OIDC 身份，向 `/actions/reruns/ack` 确认成功项；失败项和确认丢失均保留，旧确认不删除后来的新 attempt。两个接口沿用固定看板仓 ID／所有者 ID、`main`、`collect.yml` 和 `schedule`／`workflow_dispatch` 的校验，不新增信任或安装令牌权限。建议先发布 Bot 接口再更新采集器；旧 Bot 不提供接口时给出警告并继续普通采集。请求、下载和时间预算保持不变。见 [增量同步与历史](incremental-history.md)。
+
 采集步骤从环境变量读取源仓 `GITHUB_TOKEN` 和目标仓 `GSB_PUBLISH_TOKEN`，运行 `publish.py --repo ... --publish-repo ... --output .tmp/collected-site --incremental`。临时目录不上传，不写回原始测试 artifact。发布器基于本轮 checkout 的准确 HEAD，将 `.sync/` 进度及变化的 `site/` 分片放入一个 Git 提交。保留源码和工作流；并发冲突直接失败，下轮从新 main 续跑。只有 site 变化才触发 Pages。详情见 [增量同步](incremental-history.md)。
 
 E2E 执行记录的 HTML 报告不进入提交：采集成功后，`collect.yml` 把新读取的报告上传为本次运行的 `e2e-html` 产物，保留到对应源产物的 `expires_at`；`pages.yml` 以 `actions: read` 读取这些产物并在部署前挂载，取不到时页面改为 GitHub 产物链接。见 [E2E 执行记录](e2e-run-records.md)。
@@ -42,6 +44,7 @@ Bot 的“已触发采集”只表示 GitHub 接受调度。实际采集结果�
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 python3 test/journey-rerun-collection.py
 ```
 
 测试覆盖正式／测试映射、拒绝跨站和恶意 inputs、读写凭据隔离、公开内容边界、非强制提交和测试报告统计。Bot 仓 `npm run test:worker-adapter` 覆盖 Worker 到模拟 Actions API 的签名凭据与触发链路。两者不代表真实 GitHub runner 或 Pages 已执行，上线前仍需验证。

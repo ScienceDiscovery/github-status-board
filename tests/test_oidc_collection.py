@@ -19,10 +19,12 @@ class OIDCCollectionTests(unittest.TestCase):
                     'SDBOT_TOKEN_AUDIENCE': 'test-audience', 'ACTIONS_ID_TOKEN_REQUEST_URL': 'https://issuer.example/oidc?x=1',
                     'ACTIONS_ID_TOKEN_REQUEST_TOKEN': 'runner-auth', 'SDBOT_GITHUB_APP_PRIVATE_KEY': 'must-not-inherit'}
         self.calls = []
-        temp = tempfile.TemporaryDirectory(dir=client.ROOT / '.tmp' if (client.ROOT / '.tmp').is_dir() else None)
+        (client.ROOT / '.tmp').mkdir(exist_ok=True)
+        temp = tempfile.TemporaryDirectory(dir=client.ROOT / '.tmp')
         self.addCleanup(temp.cleanup)
-        patcher = patch.object(client, 'SYNC_RECORDS', Path(temp.name) / 'gitcode-sync.json')
-        patcher.start(); self.addCleanup(patcher.stop)
+        for name, file in [('SYNC_RECORDS', 'gitcode-sync.json'), ('RUN_CHANGES', 'run-changes.json'), ('RUN_RECEIPT', 'receipt.json')]:
+            patcher = patch.object(client, name, Path(temp.name) / file)
+            patcher.start(); self.addCleanup(patcher.stop)
 
     def request(self, url, bearer, body=None, method='GET', **kwargs):
         self.calls.append((url, bearer, body, method))
@@ -36,6 +38,10 @@ class OIDCCollectionTests(unittest.TestCase):
         if url == 'https://broker.example/actions/gitcode-sync':
             self.assertEqual((body, method), ({}, 'POST'))
             return {'ok': True, 'enabled': True, 'source': self.source, 'target': 'openJiuwen/sciencediscovery', 'records': [], 'pulls': []}
+        if url == 'https://broker.example/actions/reruns':
+            return {'ok': True, 'source': self.source, 'runs': []}
+        if url == 'https://broker.example/actions/reruns/ack':
+            return {'ok': True}
         purpose = body['purpose']
         return {'token': purpose + '-token', 'repository': self.source if purpose == 'source' else self.target,
                 'purpose': purpose, 'expires_at': (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()}
@@ -117,3 +123,54 @@ class OIDCCollectionTests(unittest.TestCase):
         written = json.loads(client.SYNC_RECORDS.read_text())
         self.assertEqual(written, {'ok': False, 'error': 'bot returned HTTP 503'})
 
+
+    def test_rerun_ack_only_follows_a_successful_publish_receipt_with_a_fresh_identity(self):
+        change = {'id': 42, 'attempt': 2, 'revision': 'a' * 32}
+        def request(url, bearer, body=None, method='GET', **kwargs):
+            if url.endswith('/actions/reruns'):
+                self.calls.append((url, bearer, body, method))
+                return {'ok': True, 'source': self.source, 'runs': [change]}
+            return self.request(url, bearer, body, method, **kwargs)
+        def publish(*_args, **kwargs):
+            self.assertFalse(client.RUN_RECEIPT.exists(), 'stale receipts are removed before starting')
+            self.assertEqual(json.loads(Path(kwargs['env']['GSB_RUN_CHANGES_FILE']).read_text())['runs'], [change])
+            client.RUN_RECEIPT.write_text(json.dumps({'source': self.source, 'runs': [change], 'commit': 'b' * 40}))
+            return SimpleNamespace(returncode=0)
+        client.RUN_RECEIPT.write_text('stale')
+        with patch.dict(os.environ, self.env, clear=True), patch.object(client, 'request_json', side_effect=request), \
+             patch.object(client, 'mask'), patch.object(client.subprocess, 'run', side_effect=publish):
+            self.assertEqual(client.main(), 0)
+        ack = [call for call in self.calls if call[0].endswith('/reruns/ack')]
+        self.assertEqual(ack[0][2], {'commit': 'b' * 40, 'runs': [change]})
+        self.assertEqual(sum(call[0].startswith('https://issuer.example/') for call in self.calls), 2)
+
+    def test_failed_publish_stale_receipt_or_hint_fetch_never_loses_pending_ids(self):
+        for code in [1, 7]:
+            self.calls.clear(); client.RUN_RECEIPT.write_text('{"commit":"stale"}')
+            with patch.dict(os.environ, self.env, clear=True), patch.object(client, 'request_json', side_effect=self.request), \
+                 patch.object(client, 'mask'), patch.object(client.subprocess, 'run', return_value=SimpleNamespace(returncode=code)):
+                self.assertEqual(client.main(), code)
+            self.assertFalse(any(call[0].endswith('/reruns/ack') for call in self.calls))
+            self.assertFalse(client.RUN_RECEIPT.exists())
+        def request(url, *args, **kwargs):
+            if url.endswith('/actions/reruns'):
+                raise client.CredentialError('private response')
+            return self.request(url, *args, **kwargs)
+        out = io.StringIO()
+        with patch.dict(os.environ, self.env, clear=True), patch.object(client, 'request_json', side_effect=request), \
+             patch.object(client, 'mask'), patch.object(client.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), patch('sys.stdout', out):
+            self.assertEqual(client.main(), 0)
+        self.assertEqual(json.loads(client.RUN_CHANGES.read_text()), {'ok': False})
+        self.assertNotIn('private response', out.getvalue())
+
+    def test_lost_ack_does_not_fail_successful_publication_or_expose_credentials(self):
+        receipt = {'source': self.source, 'runs': [{'id': 42, 'attempt': 2, 'revision': 'a' * 32}], 'commit': 'b' * 40}
+        client.RUN_RECEIPT.write_text(json.dumps(receipt))
+        out = io.StringIO()
+        for response in [client.CredentialError('secret'), {'ok': False}]:
+            with patch.object(client, 'oidc_identity', return_value='fresh-secret'), \
+                 patch.object(client, 'request_json', **({'side_effect': response} if isinstance(response, Exception) else {'return_value': response})), \
+                 patch('sys.stdout', out):
+                client.acknowledge_runs('https://broker.example/actions/reruns/ack', 'test-audience', client.RUN_RECEIPT, {'runs': receipt['runs']}, self.source)
+        self.assertIn('pending IDs remain', out.getvalue())
+        self.assertNotIn('secret', out.getvalue())

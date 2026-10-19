@@ -147,6 +147,29 @@ class Sync:
     def queue(self, key, due=None):
         self.state["pending"].setdefault(key, {"due": due or stamp(self.now), "tries": 0})
 
+    def refresh_changed_runs(self, changes):
+        """Get only notified IDs, including reruns outside the created-time window."""
+        for hint in changes:
+            try:
+                raw = self.gh.get(self.base + f"/actions/runs/{hint['id']}")
+                attempt = raw.get("run_attempt")
+                if raw.get("id") != hint['id'] or type(attempt) is not int or attempt < hint['attempt']:
+                    raise GitHubError("rerun metadata not ready", kind="rerun_not_ready")
+                self.save_run(raw)
+                key = History.key("runs", slim_run(raw, self.settings.get("workflows", {})))
+                self.state["pending"]["run:" + key]["due"] = stamp(self.now)
+                self.changed_jobs.append((hint, key))
+                self.state["errors"].pop("rerun:" + str(hint['id']), None)
+            except GitHubError as err:
+                self.state["errors"]["rerun:" + str(hint['id'])] = {"kind": err.kind, "at": stamp(self.now)}
+
+    def completed_changes(self):
+        # Reports may need another poll or exceed this run's budget. Until settled,
+        # keep the bot hint as well as the existing durable detail job in Pages.
+        return [hint for hint, key in self.changed_jobs
+                if "run:" + key not in self.state["pending"]
+                and (self.history.get("runs", key) or {}).get("status") == "completed"]
+
     def objects(self, kind, mode, pages=4):
         store = self.state[mode]
         cursor = store.setdefault(kind, {"page": 1, "done": False})
@@ -273,13 +296,16 @@ class Sync:
         _enrich_prs_graphql(Context(OnePR(), self.cfg, self.now, self.meta), [row])
         self.history.put("prs", row)
 
-    def pending(self, count=30):
-        ready = [(key, value) for key, value in self.state["pending"].items() if value["due"] <= stamp(self.now)]
-        latest = sorted(ready, key=lambda item: (not item[0].startswith("pr:"), -int(item[0].split(":")[1].split("-")[0])))[:max(1, count // 2)]
-        selected = {key for key, _ in latest}
-        # Reserve half the batch for the oldest backlog so fresh activity cannot
-        # permanently starve historical reports.
-        due = latest + sorted((item for item in ready if item[0] not in selected), key=lambda item: (item[1]["due"], item[0]))[:count-len(latest)]
+    def pending(self, count=30, priority=(), only_priority=False):
+        ready = [(key, value) for key, value in self.state["pending"].items() if value["due"] <= stamp(self.now) and (not only_priority or key in priority)]
+        urgent = [item for item in ready if item[0] in priority][:count]
+        urgent_keys = {key for key, _ in urgent}
+        remaining = count - len(urgent)
+        rest = [item for item in ready if item[0] not in urgent_keys]
+        latest = sorted(rest, key=lambda item: (not item[0].startswith("pr:"), -int(item[0].split(":")[1].split("-")[0])))[:(remaining + 1) // 2]
+        selected = urgent_keys | {key for key, _ in latest}
+        # Keep half the remaining slots for old backlog after the bounded hints.
+        due = urgent + latest + sorted((item for item in ready if item[0] not in selected), key=lambda item: (item[1]["due"], item[0]))[:remaining-len(latest)]
         for key, job in due:
             kind, ident = key.split(":", 1)
             try:
@@ -346,10 +372,13 @@ class Sync:
                 job["tries"] += 1
                 job.update(error=err.kind, due=stamp(self.now + timedelta(seconds=min(86400, 60 * 2 ** min(job["tries"], 10)))))
 
-    def collect(self):
+    def collect(self, changed_runs=()):
+        self.changed_jobs = []
         self.meta = self.gh.get(self.base)
         if self.meta.get("private") or self.meta.get("visibility", "public") != "public":
             raise ValueError("public dashboard requires a public source")
+        self.guarded("reruns", lambda: self.refresh_changed_runs(changed_runs))
+        self.guarded("rerun_details", lambda: self.pending(count=20, priority={"run:" + key for _, key in self.changed_jobs}, only_priority=True))
         # Fair lane budgets prevent a large initial backfill starving live data.
         for mode in ("incremental", "backfill"):
             for kind in ("issues", "prs"):
@@ -367,7 +396,7 @@ class Sync:
                 self.guarded("reconcile:" + kind, lambda k=kind: self.objects(k, "reconcile", pages=1))
             self.guarded("reconcile:runs", lambda: self.runs("reconcile", pages=1))
             self.guarded("reconcile:releases", lambda: self.releases("reconcile", pages=1))
-        self.guarded("details", self.pending)
+        self.guarded("details", lambda: self.pending(priority={"run:" + key for _, key in self.changed_jobs}))
         self.guarded("tagged", lambda: self.tagged.refresh_schema(self.gh.get_text_file, self.repo))
         self.state["last_poll"] = stamp(self.now)
         return self

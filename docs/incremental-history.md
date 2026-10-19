@@ -2,7 +2,7 @@
 
 ## 功能与数据范围
 
-每个看板仓单独保存同步状态和公开数据。Bot 只提交刷新信号，Actions 使用 API 采集；漏 Webhook、重复触发或 Bot 停机都不改变数据事实来源。定时工作流从仓内断点继续，全部 Webhook 存档仍由 Bot 按原规则保存。
+每个看板仓单独保存同步状态和公开数据。Bot 提交刷新信号及合并后的重跑 ID，Actions 使用 API 采集；漏 Webhook、重复触发或 Bot 停机都不改变数据事实来源。定时工作流从仓内断点继续，全部 Webhook 存档仍由 Bot 按原规则保存。
 
 Issue / PR 的开放及关闭记录不设保留条数上限。Actions 保存 run / attempt 的状态、工作流、触发事件、门禁／每日／版本分类、分支、head 仓库、SHA、GitHub 链接与可核验测试指标。版本发布也逐页回填。历史尚未补齐时，页面显示“历史回填中”和已采集数量；列表回填完成不代表所有报告都有可读指标。
 
@@ -27,7 +27,11 @@ Issue / PR 的开放及关闭记录不设保留条数上限。Actions 保存 run
 
 主采集的产物下载仍使用原有 160 MiB 预算。[E2E 执行记录](e2e-run-records.md)在其后使用独立的有界预算，一次列表、最多两份 ZIP、每份最多 80 MiB，避免历史详情耗尽额度后执行记录一直无法升级。升级失败保留原有步骤和 HTML bundle，不以空记录覆盖已发布内容。
 
-Issue 按 updated 的 since 水位增量读取；PR 按 updated 倒序读到上一水位，均重叠一小时。历史按创建顺序逐页补齐。每周开始一轮小批量全表对账，修复翻页期间顺序变化、旧 PR 更新及旧构建重跑；对账也有持久游标。旧已完成 run 的重新运行最迟由对账发现；新建运行与已知在途运行优先处理。
+Issue 按 updated 的 since 水位增量读取；PR 按 updated 倒序读到上一水位，均重叠一小时。历史按创建顺序逐页补齐。每周开始一轮小批量全表对账，修复翻页期间顺序变化、旧 PR 更新及漏通知的旧构建重跑；对账也有持久游标，新建运行与已知在途运行优先处理。
+
+Worker 接收 `workflow_run.completed` 中 attempt 大于 1 的重跑完成通知，同一 run 只留最新 attempt 与 revision；普通第一次完成不入这条队列。不依赖 `requested`。下一次原有采集最多读取 20 条待办，优先调用 `/repos/{source}/actions/runs/{id}` 获取当前 attempt、状态，再按现有缓存读取对应 job 和必要报告；即使创建时间已在增量窗口之外也能更新，不为重跑新增 Actions 历史列表扫描。批次轮转，失败 ID 不挡住其他待办；刷新间隔、合并窗口、请求／时间和产物预算均不增加。
+
+只有最新详情已读完、且 `.sync/` 与 `site/` 原子提交成功，采集器才发送对应 ID、attempt、revision 的确认。源端错误、预算用尽、报告暂不可读、提交冲突或确认失败均保留 Bot 待办，下一次原有刷新再试；旧确认不会删除更晚的新 attempt。本地预览不确认。未部署此接口的 Bot 不影响原有增量采集；历史对账仍作为漏通知的原有兜底。
 
 Actions 历史按固定 created 时间窗遍历，遇到 GitHub 每次筛选查询 1,000 条的限制，将窗口递归切成不重叠秒区间。极端情况下同一秒仍超过 1,000 条会显式记录 `time_window_saturated` 并保持未完成，不静默丢弃；需再细分到工作流后重试。
 
@@ -59,4 +63,4 @@ Actions 产物上传后不再变化，看板已经读过的内容不再下载：
 
 Pages 每次部署仍整站上传 site，并非文件级增量部署。GitHub Pages 有站点容量边界；本实现不承诺无限字节容量。数据增长后需观测仓库与站点体积，再决定外置历史存储，不能悄悄改回业务条数截断。
 
-验证入口：`tests/test_incremental.py`。覆盖超旧上限回填、预算重启、权限失败、重开撤销计数、缓存和过期、attempt 隔离及原子提交冲突。
+验证入口：`tests/test_incremental.py`、`tests/test_run_changes.py` 与 `tests/test_oidc_collection.py`。覆盖超旧上限回填、预算重启、权限失败、重开撤销计数、缓存和过期、attempt 隔离、按 ID 补采、详情失败保留待办及发布后确认。`PYTHONDONTWRITEBYTECODE=1 python3 test/journey-rerun-collection.py` 通过本地 HTTP 替身运行真实采集 CLI，验证窗口外的失败 run 重跑变绿、源端失败不覆盖旧结论、原子发布冲突不确认；不访问真实 GitHub，也不派发采集。
