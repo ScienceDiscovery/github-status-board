@@ -323,9 +323,12 @@ def build_snapshot(sync):
         if tests.get("data"):
             # Refresh test metrics without re-fetching the repository tree/Codecov.
             tests["data"]["executed"] = _executed(runs)
-            tests["data"]["score_report"] = latest_score_report(runs)
             daily = history.select("runs", lambda r, key=key: r.get("channel") == "daily"
                                    and run_line.get(r["id"]) == key, limit=120)
+            # The current CI window is capped at 100 runs and can lose yesterday's
+            # readable report during a busy day. Score cards use the same durable
+            # Daily history as their curves.
+            tests["data"]["score_report"] = latest_score_report(daily)
             tests["data"]["score_history"] = score_history(daily)
             tests["data"]["score_runs"] = [dict(run_id=r["id"], attempt=r.get("attempt", 1), branch=r.get("branch"),
                 created_at=r.get("created_at"), url=r.get("url"), event=r.get("event"), conclusion=r.get("conclusion"),
