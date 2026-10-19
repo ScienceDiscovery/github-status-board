@@ -87,16 +87,6 @@
     return `<div class="stack">${segments.filter((s) => s.value).map((s) => `<span style="width:${(s.value / total) * 100}%;background:${s.color}"${tip(`${s.name}: ${s.value} (${((s.value / total) * 100).toFixed(1)}%)`)}></span>`).join('')}</div>`;
   };
   const ratioBar = (v, tone = '') => `<span class="ratio ${tone}"><span style="width:${Math.max(0, Math.min(100, v || 0))}%"></span></span>`;
-  const sparkline = (values, labels = [], unit = '次提交') => {
-    if (!values.length) return '';
-    const w = 400, h = 54, pad = 4, max = Math.max(...values, 1);
-    const pts = values.map((v, i) => [pad + (i * (w - 2 * pad)) / Math.max(values.length - 1, 1), h - pad - (v / max) * (h - 2 * pad)]);
-    const path = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
-    const area = `${path} L${pts[pts.length - 1][0].toFixed(1)},${h - pad} L${pts[0][0].toFixed(1)},${h - pad} Z`;
-    const last = pts[pts.length - 1];
-    const dots = pts.map((p, i) => `<rect x="${(p[0] - 6).toFixed(1)}" y="0" width="12" height="${h}" fill="transparent"${tip(`${labels[i] || ''}: ${values[i]} ${unit}`)}></rect>`).join('');
-    return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path class="area" d="${area}"></path><line class="base" x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}"></line><path d="${path}"></path><circle cx="${last[0]}" cy="${last[1]}" r="3"></circle>${dots}</svg>`;
-  };
   const dayDate = (day) => new Date(`${day}T00:00:00Z`);
   const dayString = (value) => {
     const d = value instanceof Date ? value : dayDate(value);
@@ -273,7 +263,7 @@
     const scope = { issues: 'issue', prs: 'pr' }[STATE.tab];
     if (scope && STATE.views[STATE.tab] === 'board') { try { window.GSBBoard?.mount(scope); } catch (err) { console.error(err); } }
   };
-  // Branch lines: CI, 测试 and Coverage show one long-lived branch at a time. PR runs
+  // Branch lines: CI, E2E and Coverage show one long-lived branch at a time. PR runs
   // belong to the branch they target; sections hold the default line.
   const currentLine = (snap) => { const lines = snap?.lines || []; return lines.find((l) => l.key === STATE.line) || lines[0] || { key: '', ref: snap?.repository?.default_branch, default: true }; };
   const lineSection = (snap, name) => { const line = currentLine(snap); return line.default ? snap.sections[name] : snap.line_sections?.[line.key]?.[name]; };
@@ -438,9 +428,9 @@
     else if (main?.outcome === 'failure') items.push(['critical', `主干最近一次 CI 失败（${esc(main.time)}，<code>${esc(main.sha)}</code>）${runLink(main)}`, '#ci']);
     if (daily?.outcome === 'failure') items.push(['critical', `每日构建最近一次失败（${shortDate(daily.created_at)} ${esc(daily.time)}）${runLink(daily)}`, '#ci']);
     else if (lanes.daily && hoursSince(daily?.created_at) > 36) items.push(['warn', daily ? `每日构建已 ${Math.floor(hoursSince(daily.created_at))} 小时没有运行` : '近 30 天没有每日构建运行', '#ci']);
-    const latestRelease = releases[0], releaseRun = latestRelease && validation(latestRelease);
-    if (latestRelease && !releaseRun) items.push(['warn', `版本 ${esc(latestRelease.tag)} 没有找到提交一致的版本验证运行`, '#releases']);
-    else if (releaseRun && releaseRun.status === 'completed' && releaseRun.conclusion !== 'success') items.push(['critical', `版本 ${esc(latestRelease.tag)} 的验证运行${esc(CONCLUSION_NAME[releaseRun.conclusion] || releaseRun.conclusion)}${runLink(releaseRun)}`, '#releases']);
+    const releaseURL = `${snap.repo_url}/releases`, latestRelease = releases[0], releaseRun = latestRelease && validation(latestRelease);
+    if (latestRelease && !releaseRun) items.push(['warn', `版本 ${esc(latestRelease.tag)} 没有找到提交一致的版本验证运行`, latestRelease.url || releaseURL]);
+    else if (releaseRun && releaseRun.status === 'completed' && releaseRun.conclusion !== 'success') items.push(['critical', `版本 ${esc(latestRelease.tag)} 的验证运行${esc(CONCLUSION_NAME[releaseRun.conclusion] || releaseRun.conclusion)}${runLink(releaseRun)}`, releaseRun.url || latestRelease.url || releaseURL]);
     if (prs?.ci_states?.failure) items.push(['warn', `${prs.ci_states.failure} 个开放 PR 的检查失败：${prs.items.filter((p) => p.ci?.state === 'failure').map((p) => link(p.url, `#${p.number}`)).join(' ')}`, '#prs']);
     if (prs?.waiting_review_count) items.push(['warn', `${prs.waiting_review_count} 个 PR 超过 ${prs.review_sla_days} 天无人评审：${prs.items.filter((p) => p.waiting_review).map((p) => link(p.url, `#${p.number}`)).join(' ')}`, '#prs']);
     if (prs?.items?.some((p) => p.mergeable === 'CONFLICTING')) items.push(['warn', `存在冲突的 PR：${prs.items.filter((p) => p.mergeable === 'CONFLICTING').map((p) => link(p.url, `#${p.number}`)).join(' ')}`, '#prs']);
@@ -452,9 +442,9 @@
     if (tagged?.uncovered?.cases) hints.push(['info', `${n(tagged.uncovered.cases)} 个标签化用例不会被任何流水线组合选中`, '#tests']);
     if (iss?.no_response_count) hints.push(['info', `${iss.no_response_count} 个开放 Issue 还没有评论，${iss.unassigned_count} 个无人认领`, '#issues']);
     if (iss?.stale_count) hints.push(['info', `${iss.stale_count} 个 Issue 超过 ${iss.stale_days_threshold} 天没有更新`, '#issues']);
-    if (ops?.releases?.unreleased?.commits > 50) hints.push(['info', `自 ${esc(ops.releases.latest?.tag)} 以来已有 ${n(ops.releases.unreleased.commits)} 个提交未发布`, '#releases']);
-    if (ops?.branches?.protection && !ops.branches.protection.enabled) hints.push(['info', `默认分支 ${esc(ops.branches.default)} 未启用分支保护`, '#ops']);
-    const line = ([sev, text, href]) => `<li><span class="sev ${sev}"></span><span>${text} <a href="${href}">详情</a></span></li>`;
+    if (ops?.releases?.unreleased?.commits > 50) hints.push(['info', `自 ${esc(ops.releases.latest?.tag)} 以来已有 ${n(ops.releases.unreleased.commits)} 个提交未发布`, releaseURL]);
+    if (ops?.branches?.protection && !ops.branches.protection.enabled) hints.push(['info', `默认分支 ${esc(ops.branches.default)} 未启用分支保护`, `${snap.repo_url}/branches`]);
+    const line = ([sev, text, href]) => `<li><span class="sev ${sev}"></span><span>${text} ${href.startsWith("https://") ? link(href, "详情") : `<a href="${esc(href)}">详情</a>`}</span></li>`;
     const serious = items.filter(([sev]) => sev === 'critical').length;
     let html = `<div class="card health ${serious ? 'health-bad' : items.length ? 'health-warn' : 'health-good'}"><h3>${serious ? `${serious} 个流水线问题需要处理` : items.length ? `${items.length} 项需要关注` : '流水线与交付状态正常'}<span class="sub">数据截至 ${date(snap.generated_at)}（${ago(snap.generated_at)}）</span></h3>
       ${items.length ? `<ul class="attention">${items.map(line).join('')}</ul>` : '<div class="muted">主干、每日构建和最新版本都没有失败；开放 PR 没有失败检查或超期评审。</div>'}
@@ -467,7 +457,7 @@
       return { label, value: text, tone, href, sub: run ? `${shortDate(run.created_at)} ${esc(run.time)} · ${esc(run.workflow)}${run.pr ? ` · PR #${run.pr}` : ''}${run.duration_s != null ? ` · 耗时 ${dur(run.duration_s)}` : ''}<br>近 ${L.window_days} 天成功率 ${pct(rate)}（${n(lane.summary.total)} 次）` : lane ? `近 ${L.window_days} 天没有运行` : '分层历史尚未生成' };
     };
     html += sectionHead('流水线', L ? `最近一次运行的结论；成功率 = 成功 ÷（成功 + 失败）${(snap.lines || []).length > 1 ? `；此处为 ${esc(snap.lines[0].ref)} 分支线，其他分支线在 CI 页切换` : ''}` : '');
-    html += tiles([laneTile('pr', 'PR 门禁', '#ci'), laneTile('main', '主干', '#ci'), laneTile('daily', '每日构建', '#ci'), laneTile('release', '版本构建', '#releases')]);
+    html += tiles([laneTile('pr', 'PR 门禁', '#ci'), laneTile('main', '主干', '#ci'), laneTile('daily', '每日构建', '#ci'), laneTile('release', '版本构建', '#ci')]);
     if (L) html += `<div class="grid one" style="margin-top:12px">${card('近 14 天', ciLanes(recentLanes(L, Math.min(14, L.days.length)), { notes: false }), { sub: `每格一次运行，颜色为结论；<a href="#ci">完整 ${L.window_days} 天与 job 明细</a>` })}</div>`;
 
     // Delivery and quality at a glance.
@@ -481,7 +471,7 @@
       { label: '开放 Issue', value: n(iss?.open_count), href: '#issues', sub: iss ? `7 天 +${n(iss.counts.opened_7d)} / −${n(iss.counts.closed_7d)} · 陈旧 ${n(iss.stale_count)}` : '—' },
       { label: '主干门禁用例', value: layers.length ? `${n(passed)}<small>/ ${n(planned)}</small>` : '—', href: '#tests', tone: layers.length ? (passed === planned ? 'good' : 'bad') : '', sub: layers.length ? layers.map(([s, r]) => `${s.toUpperCase()} ${n(r.passed)}/${n(r.planned)}`).join(' · ') : '尚未读取到门禁计划' },
       { label: '整仓行覆盖率', value: lines != null ? pct(lines) : '—', href: '#coverage', sub: cov?.current?.kind === 'authoritative' ? '主干完整结果' : cov?.current?.kind === 'incremental' ? '基线 + 主干增量' : cov?.source ? '部分结果' : '暂无覆盖率' },
-      { label: '最新版本', value: rel ? esc(rel.tag) : '—', href: '#releases', sub: rel ? `${days(rel.age_days)}前${ops?.releases?.unreleased ? ` · 之后 ${n(ops.releases.unreleased.commits)} 个提交未发布` : ''}` : '尚无 release' },
+      { label: '最新版本', value: rel ? esc(rel.tag) : '—', href: latestRelease?.url || releaseURL, sub: rel ? `${days(rel.age_days)}前${ops?.releases?.unreleased ? ` · 之后 ${n(ops.releases.unreleased.commits)} 个提交未发布` : ''}` : '尚无 release' },
     ]);
 
     const releaseRows = releases.slice(0, 3).map((release) => {
@@ -491,26 +481,12 @@
     const merged = (prs?.recent_merged || []).slice(0, 5).map((p) => `<li>${badge('合并', 'good')} ${link(p.url, `#${p.number} ${esc(p.title)}`)} <span class="muted">${ago(p.merged_at)}</span></li>`);
     const opened = (iss?.items || []).slice().sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')).slice(0, 5).map((i) => `<li>${badge('新建', 'info')} ${link(i.url, `#${i.number} ${esc(i.title)}`)} <span class="muted">${ago(i.created_at)}</span></li>`);
     html += `<div class="grid wide" style="margin-top:12px">
-      ${card('版本质量', releaseRows ? `<ul class="checks">${releaseRows}</ul>` : empty('仓库尚无 release'), { sub: '版本提交的验证运行结论；<a href="#releases">全部版本</a>' })}
+      ${card('版本质量', releaseRows ? `<ul class="checks">${releaseRows}</ul>` : empty('仓库尚无 release'), { sub: `版本提交的验证运行结论；${link(releaseURL, '在 GitHub 查看全部版本 ↗')}` })}
       ${card('最近动态', merged.length || opened.length ? `<ul class="checks">${[...merged, ...opened].join('')}</ul>` : empty('最近没有合并或新建'), { sub: '最近合并的 PR 与新建的 Issue' })}
     </div>`;
     const status = Object.entries(S).filter(([, s]) => s.status !== 'ok').map(([k, s]) => badge(`${k} ${s.status}`, s.status === 'partial' ? 'warn' : 'bad'));
     html += `<p class="muted small" style="margin-top:12px">数据来源 ${link(snap.repo_url, esc(snap.repo))} · 视图每 60 秒读取已发布快照${status.length ? ` · 部分区块不完整：${status.join(' ')}` : ''}</p>`;
     return html;
-  }
-
-  function renderReleases(snap) {
-    const releases = snap.releases || [], runsById = new Map((snap.quality?.runs || []).map((r) => [r.id, r]));
-    const html = sectionHead('版本验证', '只关联提交与版本一致的验证运行；发布成功不等于测试完成');
-    if (!releases.length) return html + `<div class="card">${empty('仓库尚无 Release。发布版本后，将按标签对应的提交关联验证证据。')}</div>`;
-    return html + `<div class="card">${releases.map((release) => {
-      const runs = (release.validation_run_ids || []).map((id) => runsById.get(id)).filter(Boolean);
-      const evidence = runs.length ? runs.map((run) => {
-        const e2eCounts = sumCounts((run.tests || []).filter((t) => t.layer === 'e2e'));
-        return `<div class="release-evidence">${conclusionBadge(run.status === 'completed' ? run.conclusion : run.status)} ${link(run.url, esc(run.name))} <span class="muted">${e2eCounts ? `E2E ${n(e2eCounts.passed)} / ${n(e2eCounts.tests)} 通过` : '暂无 E2E 用例结果'}</span></div>`;
-      }).join('') : `${badge('尚无匹配的版本验证', 'warn')}<div class="muted small">等待此版本提交的验证运行。</div>`;
-      return `<div class="release-row"><div><h3>${link(release.url, esc(release.tag))}</h3>${badge(release.prerelease ? '预发布' : '已发布', release.prerelease ? 'warn' : 'good')} <span class="muted">${date(release.published_at)}</span> <code>${esc((release.sha || '提交未知').slice(0, 12))}</code></div><div>${evidence}</div></div>`;
-    }).join('')}</div>`;
   }
 
   // Issue / PR daily flow. Daily counts and the number still open differ in scale, so they get
@@ -1172,7 +1148,7 @@
 
   function renderTests(sec, line) {
     const d = sec?.data;
-    let html = sectionState(sec, '测试');
+    let html = sectionState(sec, 'E2E');
     if (!d) return html;
     const tree = d.tree;
     const ut = d.executed.find((e) => e.artifact.startsWith('ut'));
@@ -1362,56 +1338,15 @@
     return html;
   }
 
-  function renderOps(sec) {
-    const d = sec?.data;
-    let html = sectionState(sec, '运维');
-    if (!d) return html;
-    const cards = [];
-    // Releases
-    const r = d.releases;
-    cards.push(card('Release / Tag', r ? kv([
-      ['最新', r.latest ? `${link(r.latest.url, esc(r.latest.tag))} ${r.latest.prerelease ? badge('预发布', 'warn') : ''} <span class="muted">${ago(r.latest.published_at)} · ${esc(r.latest.author)}</span>` : '无 release'],
-      ['未发布提交', r.unreleased ? `${link(r.unreleased.url, n(r.unreleased.commits))} 个提交，${n(r.unreleased.files_changed)} 个文件` : '—'],
-      ['发布节奏', r.cadence_days != null ? `平均 ${r.cadence_days} 天一次（${r.count} 个 release）` : `${r.count} 个 release，不足以计算节奏`],
-      ['资产下载', n(r.total_downloads)],
-      ['Tags', r.tags.map((t) => `<code>${esc(t.name)}</code>`).join(' ') || '—'],
-    ]) + (r.items.length > 1 ? `<details><summary>全部 release</summary><ul class="checks">${r.items.map((x) => `<li>${link(x.url, esc(x.tag))} <span class="muted">${ago(x.published_at)} · 资产 ${x.assets.length}</span></li>`).join('')}</ul></details>` : '') : empty('Release 数据不可用')));
-    // Branches
-    const b = d.branches;
-    cards.push(card('分支与保护', b ? `${kv([
-      ['默认分支', `<code>${esc(b.default)}</code>`],
-      ['分支保护', b.protection?.enabled ? badge('已启用', 'good') + (b.protection.readable === false ? ' <span class="muted">规则详情需 admin 权限</span>' : ` 需 ${b.protection.required_reviews ?? 0} 个批准 · 必需检查 ${(b.protection.required_checks || []).map(esc).join(', ') || '无'}`) : badge('未启用', 'bad') + ' <span class="muted">分支列表 protected=false</span>'],
-      ['Rulesets', b.rulesets ? (b.rulesets.length ? b.rulesets.map((x) => `${esc(x.name)} (${esc(x.enforcement)})`).join('，') : '无') : '不可读'],
-    ])}${table('ops-br', [
-      { key: 'name', label: '分支', render: (x) => `<code>${esc(x.name)}</code>${x.is_default ? ' ' + badge('默认', 'info') : ''}${x.protected ? ' ' + badge('保护', 'good') : ''}` },
-      { key: 'ahead', label: '领先', num: true, render: (x) => n(x.ahead) },
-      { key: 'behind', label: '落后', num: true, render: (x) => (x.behind == null ? '—' : x.behind >= 100 ? `<span class="bad">${n(x.behind)}</span>` : n(x.behind)) },
-      { key: 'idle_days', label: '最近提交', render: (x) => (x.is_default ? '—' : x.last_commit_at ? ago(x.last_commit_at) : '—') },
-    ], b.items, { defaultSort: { key: 'behind', dir: 'desc' } })}` : empty('分支数据不可用'), { sub: `${b?.count ?? 0} 个分支` }));
-    cards.push(card('安全', `${link(STATE.snap.repo_url+'/security', '在 GitHub 查看安全告警 ↗')}<p class="muted">私有告警由 GitHub 权限控制；此公开站点只列出已公开的安全公告。</p>${d.public_advisories?.length ? '<ul class="checks">'+d.public_advisories.map(a=>'<li>'+badge(a.severity||'未知')+' '+link(a.url,esc(a.summary))+'</li>').join('')+'</ul>' : empty(d.public_advisories ? '没有已公开的安全公告' : '公开安全公告暂不可读取')}`));
-    // Community
-    const c = d.community;
-    cards.push(card('社区健康度', c ? `<div class="tile" style="display:inline-block;margin-bottom:8px"><div class="label">GitHub community profile</div><div class="value">${pct(c.health_percentage)}</div></div><ul class="checks" style="font-size:13px">${Object.entries(c.files).filter(([k]) => k !== 'code_of_conduct_file').map(([k, v]) => `<li>${badge(v ? '有' : '缺', v ? 'good' : 'bad')} ${esc(k)}</li>`).join('')}</ul>` : empty('不可用')));
-    // Contributors: GitHub's own page is complete and current.
-    cards.push(card('贡献者', link(`${STATE.snap.repo_url}/graphs/contributors`, '在 GitHub 查看贡献者 ↗') + '<p class="muted">贡献者名单与各自的提交统计以 GitHub 页面为准。</p>'));
-    // Activity
-    const a = d.activity;
-    cards.push(card('提交活跃度', `${a ? `${sparkline(a.weeks.map((w) => w.total), a.weeks.map((w) => new Date(w.week * 1000).toLocaleDateString('zh-CN')))}${kv([['近 4 周', `${n(a.commits_4w)} 次提交`], ['近 52 周', `${n(a.commits_52w)} 次提交`], ['近 7 天（默认分支）', `${n(d.commits_7d)} 次`]])}` : '<div class="muted">周统计暂不可读取</div>'}<details style="margin-top:6px"><summary>最近提交（${d.recent_commits.length}）</summary><ul class="checks">${d.recent_commits.slice(0, 15).map((x) => `<li><code>${link(x.url, esc(x.sha))}</code> ${esc(x.message)} <span class="muted">${esc(x.author)} · ${ago(x.date)}</span></li>`).join('')}</ul></details>`, { sub: '近 26 周，每周提交数' }));
-    cards.push(card('流量与克隆', link(STATE.snap.repo_url+'/graphs/traffic', '在 GitHub Insights 查看流量 ↗')+'<p class="muted">访问量、独立访客和克隆统计由 GitHub 对有权限的成员提供，不写入公开快照。</p>'));
-    // Stale automation & hygiene
-    const iss = STATE.snap.sections.issues?.data, prs = STATE.snap.sections.prs?.data;
-    cards.push(card('陈旧治理', kv([
-      ['stale 自动化', d.stale_automation.workflow ? `${badge('已配置', 'good')} <code>${esc(d.stale_automation.workflow)}</code>` : `${badge('未配置', 'warn')} <span class="muted">没有 workflow 使用 actions/stale</span>`],
-      ['陈旧 Issue', iss ? `${n(iss.stale_count)} 个 ≥${iss.stale_days_threshold} 天无更新，${n(iss.no_response_count)} 个零回复` : '—'],
-      ['闲置 PR', prs ? `${prs.items.filter((p) => (p.idle_days || 0) >= (STATE.snap.config.pr_idle_days || 14)).length} 个 ≥14 天无更新` : '—'],
-      ['陈旧分支', b ? (b.stale.length ? b.stale.map((x) => `<code>${esc(x.name)}</code>`).join(' ') : '无') : '—'],
-    ])));
-    html += `<div class="grid wide" style="margin-top:12px">${cards.join('')}</div>`;
-    return html;
-  }
-
-
   // ------------------------------------------------------------ shell
+  const activeTab = () => {
+    const requested = location.hash.slice(1);
+    const known = [...document.querySelectorAll('#tabs [data-tab]')].some(tab => tab.dataset.tab === requested);
+    if (known) return requested;
+    if (requested) history.replaceState(history.state, '', location.pathname + location.search + '#overview');
+    return 'overview';
+  };
+
   function renderShell() {
     const snap=STATE.snap, btn=$('#refresh-btn'), banner=$('#global-banner');
     btn.disabled=!!STATE.status?.refreshing;
@@ -1441,7 +1376,7 @@
     const snap = STATE.snap;
     const render = (id, fn) => { const el = $(`#tab-${id}`); if (el) el.innerHTML = fn(); };
     if (!snap) {
-      ['overview', 'issues', 'prs', 'ci', 'tests', 'coverage', 'releases', 'ops'].forEach((id) => render(id, () => `<div class="skeleton">${STATE.status?.refreshing ? '<span class="spinner"></span>采集中…' : '暂无数据'}</div>`));
+      ['overview', 'issues', 'prs', 'ci', 'tests', 'coverage'].forEach((id) => render(id, () => `<div class="skeleton">${STATE.status?.refreshing ? '<span class="spinner"></span>采集中…' : '暂无数据'}</div>`));
       return;
     }
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${STATE.tab}`));
@@ -1455,8 +1390,6 @@
     safe('ci', () => lineBar(snap) + renderCI(lineSection(snap, 'ci'), line));
     safe('tests', () => lineBar(snap) + renderTests(lineSection(snap, 'tests'), line));
     safe('coverage', () => lineBar(snap) + renderCoverage(lineSection(snap, 'tests'), line));
-    safe('releases', () => renderReleases(snap));
-    safe('ops', () => renderOps(snap.sections.ops));
     pinLanes(keep);
     try { if (window.GSBBoard) window.GSBBoard.onSnapshot(snap); } catch (err) { console.error(err); }
     mountBoard();
@@ -1629,7 +1562,7 @@
   $('#refresh-btn').addEventListener('click', refresh);
   // Browsers throttle timers in background tabs; re-sync as soon as the tab is visible again.
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { clearTimeout(STATE.pollTimer); load(); } });
-  window.addEventListener('hashchange', () => { STATE.tab = location.hash.slice(1) || 'overview'; renderShell(); mountBoard(); document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${STATE.tab}`)); pinLanes(); drawTrends(); loadE2EHistory(); });
+  window.addEventListener('hashchange', () => { STATE.tab = activeTab(); renderShell(); mountBoard(); document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${STATE.tab}`)); pinLanes(); drawTrends(); loadE2EHistory(); });
   // Tooltip layer: any element with data-tip.
   const tipEl = $('#tooltip');
   // Beside an element (for keyboard focus); a trend chart anchors it to its crosshair instead.
@@ -1696,6 +1629,6 @@
 
   // Shared helpers for the board module (static/board.js).
   window.GSB = { esc, ago, days, date, n, badge, labelChips, link, codeify, conclusionBadge, tip, empty, kv, CONCLUSION_NAME, refresh, snapshot:()=>STATE.snap, ageBucketOf, AGE_BUCKETS, ageFilter:()=>STATE.ageFilter, setAgeFilter };
-  STATE.tab = location.hash.slice(1) || 'overview';
+  STATE.tab = activeTab();
   load();
 })();
