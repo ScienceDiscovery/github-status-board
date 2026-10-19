@@ -976,21 +976,26 @@
   }
   function realScoresSection(executed, history = {}, scoreRuns = [], mockPreview = false, localArtifactPreview = false, scoreReport = null) {
     const report = scoreReport || executed.find((entry) => entry.artifact.startsWith('real-e2e-results') && entry.scores?.length);
+    const groups = realCaseGroups(report, history);
     let html = sectionHead('Real E2E 质量评分', localArtifactPreview ? '本地导入的真实历史产物；逐用例结果请以来源运行和日期为准' : mockPreview ? '本地模拟评分与耗时，仅用于预览；不代表 CI 实测结果' : '质量分数仅作观察，不设置通过门槛；交付结果单独显示');
     if (scoreRuns.length) html += `<div class="card score-run-summary"><b>${localArtifactPreview ? '最近两次主仓 Nightly（下方展示本地导入的历史报告）' : '最近两天的 Nightly'}</b><div class="muted">按北京时间，同一天优先使用手动或触发式运行。</div>${scoreRuns.slice(0, 2).map((run) => `<div class="score-run-row"><span class="${run.conclusion === 'success' ? 'good' : run.conclusion === 'cancelled' ? 'muted' : 'bad'}">${run.conclusion === 'success' ? '✓' : run.conclusion === 'cancelled' ? '−' : '×'}</span> ${esc(scoreDay(run.created_at))} · ${run.event === 'workflow_dispatch' ? (run.branch === 'main' ? '手动' : '触发式') : '定时'} · ${link(run.url, `run ${esc(run.run_id)}`)} · 整次运行${run.conclusion === 'success' ? '成功' : run.conclusion === 'cancelled' ? '取消' : '失败'} · 耗时 ${dur(run.duration_s)} · 产物${run.artifact_status === 'available' ? '已读取' : run.artifact_status === 'unreadable' ? '解析失败' : '缺失'}</div>`).join('')}<div class="muted">产物未读到时，逐用例分数和耗时未知；整次失败不代表每个用例失败。</div></div>`;
-    if (!report) return html + `<div class="banner warn"><span class="icon">▲</span><div><div class="title">尚未读取到 Real E2E 评分</div><div>需要可解析的 <code>real-e2e-results</code> 产物，才能显示逐用例分数、失败标记和耗时。</div></div></div>`;
-    const scores = report.scores;
-    const passed = scores.filter((row) => row.delivery === 'passed').length;
-    const scored = scores.filter((row) => row.metrics.some((metric) => metric.value != null)).length;
-    html += `<div class="muted" style="margin:-4px 0 8px">${mockPreview ? `本地模拟运行 · ${date(report.created_at)}` : `最近一次可读取的逐用例报告：${link(report.url, `run ${esc(report.run_id)}`)} · <code>${esc(report.branch)}</code> · ${date(report.created_at)}`} · 此处保留各评分器的原始量纲。</div>`;
-    html += tiles([
-      { label: 'Real E2E 用例', value: n(scores.length), sub: `${new Set(scores.map((row) => row.family)).size} 类评分` },
-      { label: '交付通过', value: `${n(passed)}<small>/ ${n(scores.length)}</small>`, sub: '仅表示测试流程与最终交付成功', tone: passed === scores.length ? 'good' : 'warn' },
-      { label: '有质量分数', value: `${n(scored)}<small>/ ${n(scores.length)}</small>`, sub: '未评分或 Judge 错误会明确显示', tone: scored === scores.length ? 'good' : 'warn' },
-      { label: '质量门槛', value: '无', sub: '不根据分数改变 CI 结论' },
-    ]);
+    if (!report) {
+      html += `<div class="banner warn"><span class="icon">▲</span><div><div class="title">尚未读取到最新 Real E2E 评分</div><div>${groups.length ? '以下仍显示已保存的逐用例历史；最新运行的分数和耗时暂不可用。' : '需要可解析的 <code>real-e2e-results</code> 产物，才能显示逐用例分数、失败标记和耗时。'}</div></div></div>`;
+      if (!groups.length) return html;
+    } else {
+      const scores = report.scores;
+      const passed = scores.filter((row) => row.delivery === 'passed').length;
+      const scored = scores.filter((row) => row.metrics.some((metric) => metric.value != null)).length;
+      html += `<div class="muted" style="margin:-4px 0 8px">${mockPreview ? `本地模拟运行 · ${date(report.created_at)}` : `最近一次可读取的逐用例报告：${link(report.url, `run ${esc(report.run_id)}`)} · <code>${esc(report.branch)}</code> · ${date(report.created_at)}`} · 此处保留各评分器的原始量纲。</div>`;
+      html += tiles([
+        { label: 'Real E2E 用例', value: n(scores.length), sub: `${new Set(scores.map((row) => row.family)).size} 类评分` },
+        { label: '交付通过', value: `${n(passed)}<small>/ ${n(scores.length)}</small>`, sub: '仅表示测试流程与最终交付成功', tone: passed === scores.length ? 'good' : 'warn' },
+        { label: '有质量分数', value: `${n(scored)}<small>/ ${n(scores.length)}</small>`, sub: '未评分或 Judge 错误会明确显示', tone: scored === scores.length ? 'good' : 'warn' },
+        { label: '质量门槛', value: '无', sub: '不根据分数改变 CI 结论' },
+      ]);
+    }
     html += `<div class="e2e-legend" aria-label="Real E2E 状态图例">${['passed', 'failed', 'unknown'].map((state) => `<span><span class="e2e-status-mark ${state}" aria-hidden="true">${REAL_MARK[state]}</span>${REAL_STATUS[state]}</span>`).join('')}<span class="muted">曲线：圆点为实测；首次实测后的红色 × 表示该项数据缺失或用例交付失败，悬停可看原因。缺失数据的 × 与上次有分数的运行平齐，虚线经过缺失运行连接到下次实测；交付失败时沿用上次实测分数（没有历史时按 0）。每个用例最多保留最近 30 个运行日，每天取一次运行。</span></div>`;
-    html += realCaseGroups(report, history).map((group) => {
+    html += groups.map((group) => {
       // Collapse state shares the run-record set; the prefix keeps family names apart from shard names.
       const key = `real:${group.family}`, open = !STATE.e2eCollapsed.has(key), id = `real-e2e-category-${encodeURIComponent(group.family)}`;
       return `<section class="card e2e-category" data-real-family="${esc(group.family)}"><h3><button type="button" class="e2e-category-toggle" data-e2e-category="${esc(key)}" aria-expanded="${open}" aria-controls="${esc(id)}"><span class="e2e-category-chevron" aria-hidden="true"></span><span>${esc(REAL_FAMILY_NAME[group.family] || (group.family === 'other' ? '其他' : group.family))}</span> <span class="sub">${n(group.items.length)} 个用例</span></button></h3><div id="${esc(id)}"${open ? '' : ' hidden'}>${group.items.map(realCaseItem).join('')}</div></section>`;
