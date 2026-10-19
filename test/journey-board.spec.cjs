@@ -601,20 +601,60 @@ test('Real E2E cases show run marks and score curves inline like the E2E run rec
   await expect(trends.locator('figcaption > span:first-child')).toHaveText(['RACE', 'Citation accuracy', 'Verification coverage', '运行耗时']);
   await expect(trends.first().locator('figcaption')).toContainText('（沿用上次实测）');
   await expect(trends.first().locator('.score-dot')).toHaveCount(11);
-  await expect(trends.first().locator('.score-failed')).toHaveCount(1);
+  await expect(trends.first().locator('.score-x')).toHaveCount(1);
   await expect(trends.first().locator('.score-line.carried')).toHaveCount(1);
+  await expect(trends.first().locator('.score-x title')).toContainText('交付失败，沿用上次实测');
+  const carried = await trends.first().evaluate((figure) => {
+    const measured = [...figure.querySelectorAll('.score-dot')].at(-1);
+    const { e: x, f: y } = figure.querySelector('.score-x').transform.baseVal.consolidate().matrix;
+    const line = figure.querySelector('.score-line.carried');
+    const start = line.getPointAtLength(0), end = line.getPointAtLength(line.getTotalLength());
+    return { previous: { x: Number(measured.getAttribute('cx')), y: Number(measured.getAttribute('cy')) },
+      cross: { x, y }, start: { x: start.x, y: start.y }, end: { x: end.x, y: end.y }, dash: getComputedStyle(line).strokeDasharray };
+  });
+  expect(carried.cross.y).toBeCloseTo(carried.previous.y, 1);
+  expect(carried.cross.x).toBeGreaterThan(carried.previous.x);
+  expect(carried.start.x).toBeCloseTo(carried.previous.x, 1);
+  expect(carried.start.y).toBeCloseTo(carried.previous.y, 1);
+  expect(carried.end.x).toBeCloseTo(carried.cross.x, 1);
+  expect(carried.end.y).toBeCloseTo(carried.cross.y, 1);
+  expect(carried.dash).not.toBe('none');
   await expect(trends.last().locator('.score-dot')).toHaveCount(12);
-  await expect(trends.last().locator('.score-failed')).toHaveCount(0);
+  await expect(trends.last().locator('.score-x')).toHaveCount(0);
 
-  // A failed first run has no score to carry: it is drawn at 0 and says so.
+  // Score curves start at the first measurement; the earlier failure remains on the status axis.
   const team = realCase('TC-E2E-01');
   await expect(team.locator('.e2e-history-point').first()).toHaveClass(/failed/);
-  await expect(team.locator('.real-trend').first().locator('.score-failed title')).toContainText('无历史按 0');
-  // A missing score leaves a gap instead of a zero.
+  const teamScore = team.locator('.real-trend').first();
+  await expect(teamScore.locator('.score-dot')).toHaveCount(11);
+  await expect(teamScore.locator('.score-x')).toHaveCount(0);
+  await expect(teamScore.locator('.score-line')).toHaveCount(10);
+  await expect(teamScore.locator('.score-dot').first().locator('title')).toContainText('run 806');
+  await expect(teamScore.locator('title').filter({ hasText: 'run 804' })).toHaveCount(0);
+  await expect(team.locator('.real-trend').last().locator('.score-dot')).toHaveCount(12);
+  // Later missing scores use a cross at the last measured height and a dashed bridge, never zero.
   const puct = realCase('PUCT-COMPRESS');
   await expect(puct.locator('.real-trend')).toHaveCount(3);
-  await expect(puct.locator('.real-trend').nth(1).locator('.score-dot')).toHaveCount(11);
-  await expect(puct.locator('.real-trend').nth(1).locator('.score-line')).toHaveCount(9);
+  const missingScore = puct.locator('.real-trend').nth(1);
+  await expect(missingScore.locator('.score-dot')).toHaveCount(11);
+  await expect(missingScore.locator('.score-x')).toHaveCount(1);
+  await expect(missingScore.locator('.score-line')).toHaveCount(10);
+  await expect(missingScore.locator('.score-line.gap')).toHaveCount(1);
+  const gap = await missingScore.evaluate((figure) => {
+    const { e: x, f: y } = figure.querySelector('.score-x').transform.baseVal.consolidate().matrix;
+    const measured = [...figure.querySelectorAll('.score-dot')].map((dot) => [Number(dot.getAttribute('cx')), Number(dot.getAttribute('cy'))]);
+    const previous = measured.findLast((point) => point[0] < x), next = measured.find((point) => point[0] > x);
+    const line = figure.querySelector('.score-line.gap');
+    return { x, y, previous, next, path: line.getAttribute('d').match(/-?\d+(?:\.\d+)?/g).map(Number), dash: getComputedStyle(line).strokeDasharray };
+  });
+  expect(gap.y).toBeCloseTo(gap.previous[1], 1);
+  const expectedGap = [...gap.previous, gap.x, gap.previous[1], ...gap.next];
+  expect(gap.path).toHaveLength(expectedGap.length);
+  expectedGap.forEach((value, index) => expect(gap.path[index]).toBeCloseTo(value, 1));
+  expect(gap.dash).not.toBe('none');
+  await missingScore.locator('.score-x').hover();
+  await expect(page.locator('#tooltip')).toContainText('评分缺失');
+  await expect(page.locator('#tooltip')).toContainText('不是本次测量值');
 
   // Scores stay inside each chart's own scale.
   const rubric = realCase('BiomniBench-da-14-1').locator('.real-trend').first().locator('svg');
