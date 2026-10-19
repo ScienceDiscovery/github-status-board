@@ -23,7 +23,7 @@ test('all existing pages render; only static requests and no promotional copy', 
   await expect(page.locator('#global-banner')).toContainText('超过 36 小时未更新');
   await expect(page.locator('body')).not.toContainText('把进展与风险放在同一页');
   await page.screenshot({path:shot('overview-desktop'),fullPage:true});
-  await expect(page.locator('.topbar #tabs a')).toHaveCount(9);
+  await expect(page.locator('.topbar #tabs a')).toHaveCount(7);
   await expect(page.locator('.topbar #tabs')).not.toContainText('构建报告');
   await expect(page.locator('.topbar #tabs')).not.toContainText('历史数据');
   await expect(page.locator('body > footer')).toHaveCount(0);
@@ -32,7 +32,7 @@ test('all existing pages render; only static requests and no promotional copy', 
   const tabsBox=await page.locator('#tabs').boundingBox(), timeBox=await page.locator('#meta').boundingBox();
   expect(timeBox.x).toBeGreaterThan(tabsBox.x+tabsBox.width);
   expect(timeBox.y).toBeLessThan(tabsBox.y+tabsBox.height);
-  for (const id of ['issues','prs','ci','tests','coverage','releases','ops','sync']) {
+  for (const id of ['issues','prs','ci','tests','coverage','sync']) {
     await page.locator(`[data-tab="${id}"]`).click();
     await expect(page.locator(`#tab-${id}`)).toBeVisible();
     await expect(page.locator(`#tab-${id}`)).not.toContainText('渲染出错');
@@ -402,7 +402,7 @@ test('drawer edits and field import/export stay local',async({page})=>{
   expect(writes).toEqual([]);
 });
 
-test('CI trends, failed job steps, test distribution, coverage and operations',async({page})=>{
+test('CI trends, failed job steps, test distribution and coverage',async({page})=>{
   await page.goto('/github-status-board/#ci');
   await expect(page.locator('#tab-ci')).toContainText('Workflow 健康');
   await expect(page.locator('#tab-ci')).toContainText('Run browser journeys');
@@ -525,12 +525,7 @@ test('CI trends, failed job steps, test distribution, coverage and operations',a
   await expect(page.locator('[data-cov-sort="lines"]').first()).toHaveClass(/on/);
   await page.locator('[data-cov-sort="name"]').first().click();
   await page.screenshot({path:shot('coverage-desktop'),fullPage:true});
-  await page.locator('[data-tab="ops"]').click();
-  // Contributors are read on GitHub's own page.
-  await expect(page.locator('#tab-ops a[href$="/graphs/contributors"]')).toHaveCount(1);
-  await expect(page.locator('#tab-ops')).not.toContainText('前 50% 提交由');
-  await expect(page.locator('#tab-ops')).toContainText('分支与保护');
-  await expect(page.locator('#tab-ops a[href$="/graphs/traffic"]')).toHaveCount(1);
+
 });
 
 test('tagged dimensions, profile combinations and never-covered cases', async ({ page }) => {
@@ -671,7 +666,7 @@ test('Real E2E case names open branch-specific run details', async ({ page }) =>
   await expect(page.getByText('isolated Swarm stack', { exact: true })).toBeVisible();
   await expect(page.getByText('本次报告没有记录独立的用户步骤。')).toBeVisible();
   await expect(page.locator('.report-meta').last()).toContainText('E2E_API_TOKEN（仅变量名）');
-  await page.getByRole('link', { name: '← 返回测试看板' }).click();
+  await page.getByRole('link', { name: '← 返回 E2E 看板' }).click();
   await expect(page.locator('#tab-tests')).toBeVisible();
   await expect(page.locator('#tab-tests .line-switch [data-line="main"]')).toHaveClass(/on/);
   const caseLink = page.getByRole('link', { name: '查看 DRB-59 的 Real E2E 详情' });
@@ -758,7 +753,7 @@ test('E2E run records show categories and case timelines without opening runs', 
     expect(decodeURI(src)).toContain('/journey-reports/issue-77-wake-notice/');
     expect((await page.request.get(src)).status()).toBe(200);
   }
-  await tab.getByRole('link', { name: '返回测试看板' }).click();
+  await tab.getByRole('link', { name: '返回 E2E 看板' }).click();
   await expect(tab.locator('#tab-tests .e2e-case').filter({ has: tab.locator('h4', { hasText: '后台执行完成后显示运行时提示' }) }).first()).toBeInViewport();
   await tab.close();
   await expect(records.locator('.e2e-case-details, .e2e-attempt, .e2e-error, .e2e-steps')).toHaveCount(0);
@@ -1046,10 +1041,33 @@ test('CI, tests and coverage switch between main, legacy and release without mix
   await expect(page.locator('#tab-overview .ci-lane-row:not(.ci-axis)')).toHaveCount(7);
 });
 
-test('release evidence matches SHA; no evidence remains unknown',async({page})=>{
-  await page.goto('/github-status-board/#releases');
-  await expect(page.locator('.release-row').first()).toContainText('10 / 10 通过');
-  await expect(page.locator('.release-row').last()).toContainText('尚无匹配的版本验证');
+test('E2E navigation replaces tests and removed tabs have no dangling links', async ({ page }) => {
+  await page.goto('/github-status-board/');
+  const tabs = page.getByRole('navigation', { name: '看板页面' });
+  await expect(tabs.getByRole('link')).toHaveText(['总览', 'Issue', 'PR', 'CI', 'E2E', 'Coverage', /^GitCode 同步\d*$/]);
+  await expect(page.locator('#tab-releases, #tab-ops')).toHaveCount(0);
+  await expect(page.locator('a[href="#releases"], a[href="#ops"]')).toHaveCount(0);
+  await expect(page.getByRole('link', { name: '在 GitHub 查看全部版本 ↗' })).toHaveAttribute('href', /github\.com\/.+\/releases$/);
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await tabs.getByRole('link', { name: 'E2E', exact: true }).click();
+    await expect(page.locator('#tab-tests')).toBeVisible();
+    await expect(tabs.getByRole('link', { name: 'E2E', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(page.locator('#tab-tests')).toContainText('Real E2E');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
+    await page.screenshot({ path: shot(`e2e-tabs-${width}`) });
+  }
+  // Existing report return links keep #tests; old removed tabs recover to the overview.
+  for (const hash of ['releases', 'ops', 'unknown']) {
+    await page.goto(`/github-status-board/#${hash}`);
+    await expect(page.locator('#tab-overview')).toBeVisible();
+    await expect(page).toHaveURL(/#overview$/);
+  }
+  // Exercise hashchange too, without loading a fresh document.
+  await tabs.getByRole('link', { name: 'CI', exact: true }).click();
+  await page.evaluate(() => { location.hash = 'ops'; });
+  await expect(page.locator('#tab-overview')).toBeVisible();
+  await expect(page).toHaveURL(/#overview$/);
 });
 
 test('unavailable data is not zero or a passing build',async({page})=>{
@@ -1059,8 +1077,7 @@ test('unavailable data is not zero or a passing build',async({page})=>{
   await expect(health).not.toContainText('正常');
   await expect(page.locator('#tab-overview .tile').filter({hasText:'主干门禁用例'}).locator('.value')).toHaveText('—');
   await expect(page.locator('#global-banner')).toContainText('结果未知');
-  await page.locator('[data-tab="releases"]').click();
-  await expect(page.locator('#tab-releases')).toContainText('仓库尚无 Release');
+  await expect(page.locator('#tabs [data-tab="releases"]')).toHaveCount(0);
 });
 
 test('Issue and PR tabs chart daily flow with an adjustable range and series switches', async ({ page }) => {

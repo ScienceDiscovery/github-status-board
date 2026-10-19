@@ -1,6 +1,6 @@
 # GitHub 项目状态看板
 
-静态 GitHub Pages 看板，展示 Issue、PR、门禁、每日构建、版本验证、UT / ST / E2E、标签化测试及 Node.js / Python 覆盖率（可展开到文件）。总览优先列出需要处理的流水线问题；Issue 与 PR 可在表格和本地看板之间切换；CI、测试与 Coverage 可在 main 和长期开发分支之间切换查看。采集由看板仓 GitHub Actions 执行；Bot 负责接收 Webhook 和触发刷新。
+静态 GitHub Pages 看板，展示 Issue、PR、门禁、每日构建、版本验证、UT / ST / E2E、标签化测试及 Node.js / Python 覆盖率（可展开到文件）。总览优先列出需要处理的流水线问题；Issue 与 PR 可在表格和本地看板之间切换；CI、E2E 与 Coverage 可在 main 和长期开发分支之间切换查看。采集由看板仓 GitHub Actions 执行；Bot 负责接收 Webhook 和触发刷新。
 
 | 用途 | 数据源 | 站点 |
 | --- | --- | --- |

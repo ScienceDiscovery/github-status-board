@@ -74,7 +74,7 @@
   function render(snapshot) {
     const line = (snapshot.lines || []).find((item) => item.key === wantedLine);
     if (!line || !wantedCase || wantedCase.length > 100) {
-      root.innerHTML = '<p>未找到对应的分支线或用例。<a href="./#tests">返回测试看板</a></p>';
+      root.innerHTML = '<p>未找到对应的分支线或用例。<a href="./#tests">返回 E2E 看板</a></p>';
       return;
     }
     const data = (line.default ? snapshot.sections?.tests : snapshot.line_sections?.[line.key]?.tests)?.data || {};
@@ -84,7 +84,7 @@
       run_id: report.run_id, attempt: report.attempt, created_at: report.created_at, url: report.url }] : []))
       .slice().sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || Number(a.run_id) - Number(b.run_id));
     if (!history.length) {
-      root.innerHTML = `<p>当前 <code>${escape(line.ref)}</code> 分支线没有 ${escape(wantedCase)} 的可读取记录。<a href="./#tests">返回测试看板</a></p>`;
+      root.innerHTML = `<p>当前 <code>${escape(line.ref)}</code> 分支线没有 ${escape(wantedCase)} 的可读取记录。<a href="./#tests">返回 E2E 看板</a></p>`;
       return;
     }
     const latest = history.at(-1);
@@ -138,13 +138,13 @@
   }
 
   if (!wantedCase || !wantedLine) {
-    root.innerHTML = '<p>缺少用例或分支线参数。<a href="./#tests">返回测试看板</a></p>';
+    root.innerHTML = '<p>缺少用例或分支线参数。<a href="./#tests">返回 E2E 看板</a></p>';
     return;
   }
   fetch('./data/snapshot.json', { cache: 'no-store' }).then((response) => {
     if (!response.ok) throw new Error('snapshot unavailable');
     return response.json();
   }).then(render).catch(() => {
-    root.innerHTML = '<p>暂时无法读取用例详情。请稍后重试，或<a href="./#tests">返回测试看板</a>。</p>';
+    root.innerHTML = '<p>暂时无法读取用例详情。请稍后重试，或<a href="./#tests">返回 E2E 看板</a>。</p>';
   });
 })();

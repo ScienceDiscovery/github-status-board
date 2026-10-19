@@ -458,14 +458,12 @@ dialog.settings footer { display: flex; justify-content: flex-end; gap: 8px; mar
 .rules-grid select, .rules-grid input[type=number] { font: inherit; font-size: 13px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); }
 dialog.settings textarea { width: 100%; font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--ink); box-sizing: border-box; }
 
-/* Shared report pieces: release rows, pass/fail bars, filters. */
+/* Shared report pieces: pass/fail bars and filters. */
 .small-note{font-size:12px;color:var(--muted)}
-.release-row{display:flex;justify-content:space-between;padding:18px;gap:20px;border-bottom:1px solid var(--grid)}
-.release-row:last-child{border-bottom:0}.release-row h3{margin:0 0 6px;font-size:15px}.release-evidence{margin:4px 0}
 .bar{display:flex;height:6px;overflow:hidden;border-radius:5px;margin:12px 0}.bar .passed{background:var(--good)}.bar .failed{background:var(--critical)}.bar .skipped{background:var(--axis)}.bar .flaky{background:var(--warning)}
 .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px}.count-inline{font-size:12px;color:var(--muted)}.filters{display:flex;gap:15px;align-items:center;flex-wrap:wrap;margin:15px 0}
 .board-local-note{margin:0 0 10px;color:var(--ink-2);font-size:12px}
-@media(max-width:700px){.topbar,.brand{min-width:0}.repo-link{overflow-wrap:anywhere}.release-row{flex-direction:column}.tabs{overflow-x:auto;flex-wrap:nowrap}}
+@media(max-width:700px){.topbar,.brand{min-width:0}.repo-link{overflow-wrap:anywhere}.tabs{overflow-x:auto;flex-wrap:nowrap}}
 
 @media(max-width:700px){
   .tabs a{flex:none;white-space:nowrap}.brand{flex-wrap:wrap}.brand-title{white-space:nowrap}
