@@ -32,6 +32,7 @@ Coverage 页从源仓 GitHub Actions 产物中读取 `node-coverage-summary-*` �
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 python3 test/journey-rerun-collection.py
 node test/sync-e2e.mjs
 node .e2e/node_modules/playwright/cli.js test --config test/playwright.config.cjs
 ```

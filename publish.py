@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 
-from gsb import gitcode_sync
+from gsb import gitcode_sync, run_changes
 from gsb.github import GitHub, GitHubError, discover_token
 from gsb.project import REPO_RE, build_project
 
@@ -150,7 +150,8 @@ def main():
         if args.incremental:
             from gsb.sync import Sync
             from gsb.incremental_project import build_snapshot
-            sync = Sync(gh, ROOT, args.repo, settings, requests=args.request_budget).collect()
+            sync = Sync(gh, ROOT, args.repo, settings, requests=args.request_budget).collect(
+                changed_runs=run_changes.load_changes(os.environ.get("GSB_RUN_CHANGES_FILE"), args.repo))
             phase = "snapshot"
             snapshot = build_snapshot(sync)
             records = e2e_run_records(sync, snapshot)
@@ -189,6 +190,7 @@ def main():
                 result["commit"] = publish_batch(publisher, args.publish_repo, args.branch, base, files, source_token=token)
                 result["sync"] = sync.progress()
                 result["changed_files"] = len(files)
+                run_changes.write_receipt(os.environ.get("GSB_RUN_CHANGES_RECEIPT"), args.repo, sync.completed_changes(), result["commit"] or base)
             else:
                 result["commit"] = publish(publisher, args.output, args.publish_repo, args.branch, source_token=token)
             result["requests"] = {"source": getattr(gh, "calls", None), "publish": getattr(publisher, "calls", None)}

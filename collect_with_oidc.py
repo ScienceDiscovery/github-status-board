@@ -5,6 +5,7 @@ import base64
 from datetime import datetime, timezone
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -17,6 +18,8 @@ from collection_context import collection_context
 ROOT = Path(__file__).resolve().parent
 # GitCode sync records fetched from the bot for publish.py; not uploaded anywhere by itself.
 SYNC_RECORDS = ROOT / ".tmp" / "gitcode-sync.json"
+RUN_CHANGES = ROOT / ".tmp" / "run-changes.json"
+RUN_RECEIPT = ROOT / ".tmp" / "run-changes-receipt.json"
 
 
 class CredentialError(RuntimeError):
@@ -79,6 +82,35 @@ def sync_records(url, identity):
         return {"ok": False, "error": "bot unreachable"}
 
 
+def changed_runs(url, identity):
+    try:
+        value = request_json(url, identity, {}, "POST")
+        return value if isinstance(value, dict) else {"ok": False}
+    except CredentialError:
+        print("::warning::Rerun hints unavailable; pending IDs remain at the bot.", flush=True)
+        return {"ok": False}
+
+
+def acknowledge_runs(url, audience, receipt, requested, source):
+    # The file only exists after publish.py committed both progress and public data.
+    # Read a fresh GitHub identity: collection can outlive the original OIDC JWT.
+    try:
+        value = json.loads(receipt.read_text())
+        from gsb.run_changes import valid_change
+        rows = value.get("runs")
+        if (value.get("source") != source or not isinstance(value.get("commit"), str)
+                or not re.fullmatch('[0-9a-f]{40}', value['commit'])
+                or not isinstance(rows, list) or not rows or len(rows) > 20
+                or not all(valid_change(row) and row in requested.get("runs", []) for row in rows)):
+            raise ValueError("invalid rerun receipt")
+        reply = request_json(url, oidc_identity(audience), {"runs": rows, "commit": value["commit"]}, "POST")
+        if not isinstance(reply, dict) or reply.get("ok") is not True:
+            raise ValueError("rerun acknowledgement unavailable")
+    except Exception:
+        # Publication succeeded; lost acknowledgements are safe to retry next collection.
+        print("::warning::Rerun acknowledgement failed; pending IDs remain at the bot.", flush=True)
+
+
 def main():
     grants = []
     stage = "configuration"
@@ -109,10 +141,18 @@ def main():
         stage = "GitCode sync records"
         SYNC_RECORDS.parent.mkdir(parents=True, exist_ok=True)
         SYNC_RECORDS.write_text(json.dumps(sync_records(urllib.parse.urlunsplit(endpoint._replace(path="/actions/gitcode-sync")), identity)), encoding="utf-8")
+        stage = "rerun hints"
+        requested = changed_runs(urllib.parse.urlunsplit(endpoint._replace(path="/actions/reruns")), identity)
+        RUN_CHANGES.write_text(json.dumps(requested), encoding="utf-8")
+        RUN_RECEIPT.unlink(missing_ok=True)
         # The collector receives neither OIDC credentials nor any App private key.
         child_env = {k: v for k, v in os.environ.items() if k not in {"ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "GH_TOKEN", "GITHUB_TOKEN", "GSB_PUBLISH_TOKEN"} and "PRIVATE_KEY" not in k}
-        child_env.update(GITHUB_TOKEN=grants[0], GSB_PUBLISH_TOKEN=grants[1], GSB_GITCODE_SYNC_FILE=str(SYNC_RECORDS))
-        return subprocess.run([sys.executable, str(ROOT / "publish.py"), "--repo", context["source"], "--publish-repo", context["target"], "--output", ".tmp/collected-site", "--incremental"], env=child_env, cwd=ROOT, check=False).returncode
+        child_env.update(GITHUB_TOKEN=grants[0], GSB_PUBLISH_TOKEN=grants[1], GSB_GITCODE_SYNC_FILE=str(SYNC_RECORDS),
+                         GSB_RUN_CHANGES_FILE=str(RUN_CHANGES), GSB_RUN_CHANGES_RECEIPT=str(RUN_RECEIPT))
+        code = subprocess.run([sys.executable, str(ROOT / "publish.py"), "--repo", context["source"], "--publish-repo", context["target"], "--output", ".tmp/collected-site", "--incremental"], env=child_env, cwd=ROOT, check=False).returncode
+        if code == 0 and RUN_RECEIPT.exists():
+            acknowledge_runs(urllib.parse.urlunsplit(endpoint._replace(path="/actions/reruns/ack")), audience, RUN_RECEIPT, requested, context["source"])
+        return code
     except Exception as error:
         status = getattr(error, "status", None)
         detail = f" (HTTP {status})" if isinstance(status, int) else ""
