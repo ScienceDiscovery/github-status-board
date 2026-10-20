@@ -165,7 +165,8 @@ lane_runs.append(lane_run(397,'CI','merge_group','2026-09-20T05:00:00Z','gh-read
 lane_runs.append(lane_run(396,'CI',None,'2026-09-20T05:01:00Z','main'))
 lanes=build_lanes(lane_runs,default_branch='main',now=datetime(2026,9,20,12,tzinfo=timezone.utc),rules=json.loads((root/'board-config.json').read_text())['workflows'],prs=[pr])
 ci['lanes']=lanes
-ci['recent_runs']=lane_runs
+# E2E histories also use these run IDs to identify their branch line.
+ci['recent_runs']=[*runs,*lane_runs]
 # Release branch line: PRs, a failing manual gate, Nightly and hidden categories.
 swarm_runs=[lane_run(600,'CI','pull_request','2026-09-19T09:00:00Z','swarm-fix','success',pull_requests=[8]),lane_run(601,'CI','pull_request','2026-09-20T02:00:00Z','swarm-fix','failure',pull_requests=[8]),
             lane_run(602,'CI','workflow_dispatch','2026-09-20T03:00:00Z','releases/v0.3.0.beta','failure')]
