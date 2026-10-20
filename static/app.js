@@ -198,7 +198,7 @@
   };
   // CI history lanes: one row per trigger lane, one column per day on a shared axis.
   // The collector buckets days and orders runs, so a column simply stacks them top-down.
-  const LANE_SOURCE = { pr: 'CI · pull_request', main: 'CI · 默认分支 push / 手动', daily: 'Nightly · 定时 / 手动', release: 'Release · 版本运行', called: 'workflow_call / CI 调用事件', other: '其他工作流 / 分支事件', unknown: '缺少触发事件' };
+  const LANE_SOURCE = { pr: 'CI · pull_request', main: 'CI · 默认分支 push / 手动', merge_queue: 'merge_group · 合并队列', daily: 'Nightly · 定时 / 手动', release: 'Release · 版本运行' };
   const laneSource = (L, key) => (key === 'main' && L.branch ? `CI · ${L.branch} push / 手动` : LANE_SOURCE[key] || '');
   const LANE_OUTCOMES = [['success', '成功'], ['failure', '失败/超时'], ['cancelled', '取消'], ['running', '运行中'], ['other', '其他（待批准等）']];
   const LANE_EVENT = { schedule: 'schedule · 定时', workflow_dispatch: 'workflow_dispatch · 手动' };
@@ -223,7 +223,7 @@
     const zone = L.zone || 'UTC+8';
     const uncollected = (day) => L.collected_since && day < L.collected_since;
     const outcomes = (runs) => LANE_OUTCOMES.map(([key, name]) => [name, runs.filter((r) => r.outcome === key).length]).filter(([, count]) => count).map(([name, count]) => `${name} ${count}`).join(' · ');
-    const rows = L.lanes.map((lane) => {
+    const rows = Object.keys(LANE_SOURCE).map((key) => L.lanes.find((lane) => lane.key === key)).filter(Boolean).map((lane) => {
       const s = lane.summary;
       const counts = [['成功', s.success], ['失败', s.failure], ['取消', s.cancelled], ['运行中', s.running], ...(s.other ? [['其他', s.other]] : [])];
       const head = `<div class="ci-lane-head" role="rowheader"><b>${esc(lane.label).replace(/\//g, '/<wbr>')}</b><span class="ci-lane-src">${esc(laneSource(L, lane.key))}</span>`
@@ -243,7 +243,7 @@
     const notes = [
       '成功率 = 成功 ÷（成功 + 失败/超时），取消、运行中与其他不计入；重跑按最后一次尝试着色，仍放在 run 创建的那天。',
       '耗时为最后一次尝试从开始到结束的时间；中位耗时只统计成功与失败的运行，运行中的没有耗时。',
-      '按 run ID 展示该分支线窗口内的全部已采集运行；workflow_call 子 run 单列在工作流调用层，其他工作流和未知触发事件也各自成点。',
+      '按 run ID 展示 PR、分支门禁、合并队列、Daily、版本五层；merge_group 优先归入合并队列。',
       L.collected_since ? `${laneDay(L.collected_since)} 之前的日期尚未采集（斜纹），不代表没有运行。` : '',
     ].filter(Boolean);
     const legendItems = LANE_OUTCOMES.map(([key, name]) => `<span><i class="ci-run ${key}"></i>${esc(name)}</span>`).join('') + (L.collected_since ? '<span><i class="ci-lane-day uncollected"></i>未采集</span>' : '');
@@ -271,7 +271,7 @@
     const lines = snap.lines || [], line = currentLine(snap);
     if (lines.length < 2) return '';
     return `<div class="line-bar"><div class="seg line-switch" role="group" aria-label="分支线"><span class="seg-label">分支线</span>${lines.map((l) => `<button type="button" class="${l.key === line.key ? 'on' : ''}" data-line="${esc(l.key)}" aria-pressed="${l.key === line.key}">${esc(l.ref)}</button>`).join('')}</div>`
-      + `<span class="muted">当前 <code>${esc(line.ref)}</code>：按运行分支及 PR 目标分支归类，包含 Daily 和其他工作流；各分支线的数据互不混合。</span></div>`;
+      + `<span class="muted">当前 <code>${esc(line.ref)}</code>：按运行分支及 PR 目标分支归类，按 PR、分支门禁、合并队列、Daily 与版本展示；各分支线的数据互不混合。</span></div>`;
   };
   // The word for a line's own branch runs: 主干 on the default branch, the full branch name elsewhere.
   const trunkName = (line) => (line.default ? '主干' : ` ${line.ref} 分支`);
@@ -400,7 +400,7 @@
   const OUTCOME_TEXT = { success: ['成功', 'good'], failure: ['失败', 'bad'], cancelled: ['已取消', ''], running: ['运行中', 'warn'], other: ['待处理', 'warn'] };
   // The newest `count` days of the lane chart, with each lane's summary recomputed for that window.
   const recentLanes = (L, count) => L && ({ ...L, days: L.days.slice(-count), collected_since: L.collected_since && L.collected_since > L.days[L.days.length - count] ? L.collected_since : null,
-    excluded: {}, lanes: L.lanes.map((lane) => {
+    lanes: L.lanes.map((lane) => {
       const days = lane.days.slice(-count), runs = days.flat(), by = (o) => runs.filter((r) => r.outcome === o).length;
       const success = by('success'), failure = by('failure');
       const times = runs.filter((r) => (r.outcome === 'success' || r.outcome === 'failure') && r.duration_s != null).map((r) => r.duration_s).sort((a, b) => a - b);
@@ -745,9 +745,12 @@
       { key: 'last', label: '最近', render: (j) => (j.last ? `${conclusionBadge(j.last.conclusion)} ${link(j.last.url, ago(j.last.created_at))}` : '—'), sortable: false },
       { key: 'steps', label: '常失败步骤', render: (j) => (j.top_failed_steps.length ? j.top_failed_steps.map((s) => `${esc(s.step)} ×${s.count}`).join('，') : '<span class="muted">—</span>'), sortable: false },
     ], d.job_health, { emptyText: '没有可统计的 job' })}</div>`;
-    const branches = [...new Set(d.recent_runs.map((r) => r.branch))];
+    // Keep the run table within the displayed lanes, without a fallback list for hidden categories.
+    const visibleIds = new Set((L?.lanes || []).filter((lane) => Object.hasOwn(LANE_SOURCE, lane.key)).flatMap((lane) => lane.days.flatMap((runs) => runs.map((r) => r.id))));
+    const recent = d.recent_runs.filter((r) => visibleIds.has(r.id));
+    const branches = [...new Set(recent.map((r) => r.branch))];
     const f = STATE.filters;
-    const runs = f.runBranch ? d.recent_runs.filter((r) => r.branch === f.runBranch) : d.recent_runs;
+    const runs = f.runBranch ? recent.filter((r) => r.branch === f.runBranch) : recent;
     html += sectionHead('最近 run', `${runs.length} 条`);
     html += `<div class="card"><div class="filters"><select data-filter="runBranch"><option value="">全部分支</option>${branches.map((b) => `<option ${f.runBranch === b ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select></div>${table('ci-runs', [
       { key: 'conclusion', label: '结论', render: (r) => conclusionBadge(r.conclusion || r.status) },

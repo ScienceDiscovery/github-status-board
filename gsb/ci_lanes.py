@@ -1,4 +1,4 @@
-"""All collected CI runs grouped by trigger on one calendar.
+"""Selected CI trigger lanes on one calendar.
 
 Each lane follows how the source repository triggers its Actions. All lanes
 share the same day axis in one fixed display zone; runs of one day stay in
@@ -14,8 +14,7 @@ import re
 WINDOW_DAYS = 30
 # The team reads the board in Asia/Shanghai, which has no daylight saving.
 DISPLAY_ZONE = timezone(timedelta(hours=8), "UTC+8")
-LANES = (("pr", "PR"), ("main", "主干"), ("daily", "Daily"), ("release", "版本"),
-         ("called", "工作流调用"), ("other", "其他工作流"), ("unknown", "未知触发"))
+LANES = (("pr", "PR"), ("main", "主干"), ("merge_queue", "合并队列"), ("daily", "Daily"), ("release", "版本"))
 # Mirrors board-config.json so a site without that section still classifies runs.
 DEFAULT_RULES = {"gate": ["^CI$"], "daily": ["nightly", "daily", "每日"], "release": ["release", "version", "版本"]}
 PR_EVENTS = ("pull_request", "pull_request_target")
@@ -69,30 +68,32 @@ def duration(run):
 
 
 def lane_of(run, rules=None, default_branch="main"):
-    """Return a lane key, "called" for reusable-workflow children, "unknown" or "other"."""
+    """Return a displayed lane key, or None for a run outside these five lanes."""
     rules = {**DEFAULT_RULES, **{kind: patterns for kind, patterns in (rules or {}).items() if patterns}}
     name, event = run.get("name") or "", run.get("event")
     matches = lambda kind: any(re.search(pattern, name, re.I) for pattern in rules[kind])
+    # Queue checks belong together even when their workflow name matches Nightly or Release.
+    if event == "merge_group":
+        return "merge_queue"
     if event == "workflow_call":
-        return "called"
+        return None
     # Workflow names determine the category independently of the branch line.
     if matches("release"):
         return "release"
     if matches("daily"):
         return "daily"
     if not matches("gate"):
-        return "other"
+        return None
     if event in PR_EVENTS:
         return "pr"
     if event == "workflow_dispatch":
         return "main"
     if event == "push":
-        return "main" if run.get("branch") == default_branch else "other"
-    if event is None:
+        return "main" if run.get("branch") == default_branch else None
+    if not event:
         # Degraded record without its trigger: only a linked PR is certain.
-        return "pr" if run.get("pull_requests") else "unknown"
-    # CI itself runs on PRs, pushes and dispatch; anything else came from a caller.
-    return "called"
+        return "pr" if run.get("pull_requests") else None
+    return None
 
 
 def pr_number(run, prs=()):
@@ -126,7 +127,7 @@ def build_lanes(runs, *, default_branch, now, rules=None, prs=(), days=WINDOW_DA
 
     ``default_branch`` is the branch whose pushes form the "main" lane; a branch
     line passes its own branch and labels its push / manual lane with that ref.
-    Called and unclassified runs remain visible as distinct run IDs."""
+    Runs outside the displayed lanes remain in history, without a fallback row."""
     first = now.astimezone(zone).date() - timedelta(days=days - 1)
     axis = [first + timedelta(days=offset) for offset in range(days)]
     position = {day: index for index, day in enumerate(axis)}
@@ -138,7 +139,6 @@ def build_lanes(runs, *, default_branch, now, rules=None, prs=(), days=WINDOW_DA
         if previous is None or (run.get("attempt") or 1) > (previous.get("attempt") or 1):
             latest[run.get("id")] = run
     cells = {key: [[] for _ in axis] for key, _ in lanes}
-    excluded = Counter()
     for run in latest.values():
         created = parse(run.get("created_at"))
         if not created:
@@ -151,7 +151,6 @@ def build_lanes(runs, *, default_branch, now, rules=None, prs=(), days=WINDOW_DA
         name = workflow_name(run, names)
         key = lane_of({**run, "name": name}, rules, default_branch)
         if key not in cells:
-            excluded[key] += 1
             continue
         cells[key][day].append((created, run.get("id") or 0, {
             "id": run.get("id"), "attempt": run.get("attempt") or 1, "url": run.get("url"), "workflow": name,
@@ -178,4 +177,4 @@ def build_lanes(runs, *, default_branch, now, rules=None, prs=(), days=WINDOW_DA
     since = since.astimezone(zone).date() if since else None
     return {"days": [day.isoformat() for day in axis], "window_days": days, "zone": zone.tzname(None),
             "order": "earliest_first", "collected_since": since.isoformat() if since and since > first else None,
-            "branch": default_branch, "lanes": rows, "excluded": dict(excluded)}
+            "branch": default_branch, "lanes": rows}
