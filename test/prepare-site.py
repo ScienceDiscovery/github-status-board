@@ -149,7 +149,7 @@ runs[0]['jobs'].append(dict(name='Coverage',status='completed',conclusion='succe
 rate=dict(success_rate=50,total=2,success=1,failure=1,cancelled=0,median_duration_s=120)
 ci=dict(default_branch='main',main=rate,pull_request=rate,red_streak_main=1,failures_7d=2,runs_sampled=3,job_history_runs=2,main_timeline=runs,latest_main=dict(run=runs[0],jobs=runs[0]['jobs']),workflows=[dict(name='CI',url=runs[0]['url'],path='.github/workflows/ci.yml',state='active',all=rate,main=rate,pull_request=rate,failures_7d=2,last_run=runs[0])],job_health=[dict(name='E2E',success_rate=50,runs=2,success=1,failure=1,cancelled=0,median_duration_s=120,last=runs[0],top_failed_steps=[dict(step='Run browser journeys',count=1)]),dict(name='Coverage',success_rate=100,runs=1,success=1,failure=0,cancelled=0,median_duration_s=385,last=runs[0],top_failed_steps=[])],recent_runs=runs)
 # CI lanes: 13 PR runs on the newest day (more than one column shows), manual and push
-# runs on main, one nightly per evening, a Nightly-called CI child and no release.
+# runs on main, one nightly per evening, a queue run, hidden categories and no release.
 from gsb.ci_lanes import LANES, build_lanes
 def lane_run(ident,name,event,created,branch,conclusion='success',pull_requests=()):
     # Finished runs take between 3 and 28 minutes; a running one has no time yet.
@@ -161,9 +161,12 @@ lane_runs+=[lane_run(470,'CI','push','2026-09-18T02:00:00Z','main'),lane_run(471
 lane_runs+=[lane_run(400+d,'Nightly','schedule',f'2026-09-{d:02d}T18:00:00Z','main','failure' if d==16 else 'success') for d in range(12,20)]
 lane_runs.append(lane_run(399,'CI','workflow_call','2026-09-19T18:00:05Z','main'))
 lane_runs.append(lane_run(398,'Maintenance','push','2026-09-19T18:00:06Z','main'))
+lane_runs.append(lane_run(397,'CI','merge_group','2026-09-20T05:00:00Z','gh-readonly-queue/main/pr-3'))
+lane_runs.append(lane_run(396,'CI',None,'2026-09-20T05:01:00Z','main'))
 lanes=build_lanes(lane_runs,default_branch='main',now=datetime(2026,9,20,12,tzinfo=timezone.utc),rules=json.loads((root/'board-config.json').read_text())['workflows'],prs=[pr])
 ci['lanes']=lanes
-# Release branch line: PRs, a failing manual gate, Nightly and separate called/other runs.
+ci['recent_runs']=lane_runs
+# Release branch line: PRs, a failing manual gate, Nightly and hidden categories.
 swarm_runs=[lane_run(600,'CI','pull_request','2026-09-19T09:00:00Z','swarm-fix','success',pull_requests=[8]),lane_run(601,'CI','pull_request','2026-09-20T02:00:00Z','swarm-fix','failure',pull_requests=[8]),
             lane_run(602,'CI','workflow_dispatch','2026-09-20T03:00:00Z','releases/v0.3.0.beta','failure')]
 swarm_runs += [lane_run(37845266203,'Nightly','workflow_dispatch','2026-09-20T04:00:00Z','releases/v0.3.0.beta'),

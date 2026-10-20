@@ -6,7 +6,7 @@
 
 - 每个 run 归入它的工作所针对的分支：PR 运行归入 PR 的目标分支，push、手动、定时运行归入运行所在分支。
 - 目标分支不是任何已配置分支线的 run（版本 tag、其他分支的 push、无法匹配 PR 的运行）归入默认分支线，因此每个 run 只计一次。Nightly 按运行所在分支归线，手动在 release 分支执行也归 release 线。
-- 每条分支线都展示窗口内归入该线的全部已采集 run：PR、分支门禁、Daily、版本、工作流调用、其他工作流、未知触发七层；`workflow_call` 子 run 按各自 run ID 单独显示，不被父 run 替代。
+- 每条分支线按 PR、分支门禁、合并队列、Daily、版本五层展示；`merge_group` 优先归入合并队列。工作流调用、其他工作流与无事件且无关联 PR 的门禁 run 不画点，也不通过脚注或最近 run 表另列；采集仍保存全部 run。
 
 ## 使用
 
@@ -33,7 +33,7 @@
 
 | 页面 | 内容 |
 | --- | --- |
-| CI | 该分支 push / 手动门禁和目标为它的 PR 的成功率、包含全部运行类别的分层历史、Workflow 与 Job 健康、最近 run；门禁层显示完整分支名，不标成“主干” |
+| CI | 该分支 push / 手动门禁和目标为它的 PR 的成功率、上述五层历史、Workflow 与 Job 健康、最近 run；门禁层显示完整分支名，不标成“主干” |
 | 测试 | 最近用例数，以及该分支最新 push / 手动运行冻结的[标签化测试](tagged-tests.md)目录和规则；没有运行过的组合不显示 |
 | Coverage | 只用该分支线运行上传的覆盖率摘要；完整基线来自该分支完整通过的 push 或手动门禁；PR 列表只含目标为它的 PR |
 
@@ -63,4 +63,4 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_lines.p
 node .e2e/node_modules/playwright/cli.js test --config test/playwright.config.cjs -g "CI, tests and coverage"
 ```
 
-单元测试覆盖配置校验、同仓 / fork / 手动 / tag 运行的归线、release 手动 Nightly 与 legacy Daily 可见、工作流调用和其他工作流不被排除、旧分层快照重建、各线成功率、覆盖率产物归线、标签化目录分线与迁移。浏览器用例在桌面和窄屏验证切换、跨页与刷新后保持、Daily/调用/其他运行链接、各线数据不混合，以及总览列出其他分支线的失败。
+单元测试覆盖配置校验、同仓 / fork / 手动 / tag 运行的归线、release 手动 Nightly 与 legacy Daily 可见、合并队列优先归类、工作流调用和其他工作流不展示但保留记录、旧分层快照重建、各线成功率、覆盖率产物归线、标签化目录分线与迁移。浏览器用例在桌面和窄屏验证切换、跨页与刷新后保持、Daily 与合并队列链接、空合并队列、各线数据不混合，以及总览列出其他分支线的失败。

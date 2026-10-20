@@ -187,7 +187,7 @@ def build_snapshot(sync):
     for line in lines:
         sections = old.get("sections", {}) if line["default"] else old.get("line_sections", {}).get(line["key"], {})
         view = ((sections.get("ci") or {}).get("data") or {}).get("lanes") or {}
-        lanes_upgrade = lanes_upgrade or {lane["key"] for lane in view.get("lanes", [])} != {key for key, _ in LANES}
+        lanes_upgrade = lanes_upgrade or [lane["key"] for lane in view.get("lanes", [])] != [key for key, _ in LANES]
     # Reprojecting stored run categories must not invalidate test-artifact caches.
     if (not history.changed and not sync.tagged.changed and not cache_upgrade and not lanes_upgrade and not trend_upgrade and old.get("sync") == progress
             and old.get("generated_at", "")[:10] == stamp(midnight)[:10]):
@@ -282,8 +282,8 @@ def build_snapshot(sync):
         line_index = {ident: project_run(row) for ident, row in index.items() if run_line[ident] == key}
         ci = collect_ci(Context(_stored_ci(history, line_index), cfg, midnight, line_meta))
         # Lanes read complete records (event, linked PRs, head repository) for the
-        # displayed window only, plus the PRs that were open during it. Every
-        # line keeps all run categories, including manually dispatched Nightly.
+        # displayed window only, plus the PRs that were open during it. Each
+        # line keeps the same five lanes, including manually dispatched Nightly.
         lane_runs = [project_run(history.get("runs", history_key(row)) or index[row["id"]]) for row in line_index.values() if (row.get("created_at") or "") >= start]
         ci["lanes"] = build_lanes(lane_runs, default_branch=line["ref"], now=sync.now,
                                   rules=sync.settings.get("workflows"), prs=[pr for pr in lane_prs if pr],

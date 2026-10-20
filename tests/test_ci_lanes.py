@@ -38,16 +38,19 @@ class LaneClassificationTests(unittest.TestCase):
     def test_lanes_follow_how_actions_are_triggered(self):
         cases = [
             ('CI', 'pull_request', 'feat', 'pr'),
+            ('CI', 'pull_request_target', 'feat', 'pr'),
+            ('Nightly', 'workflow_call', 'main', None),
+            ('Release', 'workflow_call', 'main', None),
             ('CI', 'push', 'main', 'main'),
             ('CI', 'workflow_dispatch', 'main', 'main'),
-            ('CI', 'push', 'master', 'other'),
+            ('CI', 'push', 'master', None),
             ('Nightly', 'schedule', 'main', 'daily'),
             ('Nightly', 'workflow_dispatch', 'main', 'daily'),
             ('Release', 'push', '0.3.0', 'release'),
-            ('CI', 'workflow_call', 'main', 'called'),
+            ('CI', 'workflow_call', 'main', None),
             # A CI run carrying its caller's trigger can only be a reusable call.
-            ('CI', 'schedule', 'main', 'called'),
-            ('.github/workflows/test-policy.yml', 'push', 'feat', 'other'),
+            ('CI', 'schedule', 'main', None),
+            ('.github/workflows/test-policy.yml', 'push', 'feat', None),
         ]
         for name, event, branch, expected in cases:
             with self.subTest(name=name, event=event):
@@ -55,25 +58,25 @@ class LaneClassificationTests(unittest.TestCase):
 
     def test_missing_trigger_degrades_without_guessing(self):
         self.assertEqual(lane_of(dict(name='CI', event=None, branch='feat', pull_requests=[5]), RULES, 'main'), 'pr')
-        self.assertEqual(lane_of(dict(name='CI', event=None, branch='main'), RULES, 'main'), 'unknown')
-        self.assertEqual(lane_of(dict(name='CI', branch='main'), None, 'main'), 'unknown')
+        self.assertEqual(lane_of(dict(name='CI', event=None, branch='main'), RULES, 'main'), None)
+        self.assertEqual(lane_of(dict(name='CI', branch='main'), None, 'main'), None)
 
-    def test_all_run_ids_are_visible_including_called_other_and_unknown(self):
-        nightly = run(1, 'Nightly', 'schedule', '2026-09-21T18:00:00Z', 'main')
-        release = run(2, 'Release', 'push', '2026-09-21T09:00:00Z', '0.3.0')
-        children = [run(3, 'CI', 'workflow_call', '2026-09-21T18:00:05Z', 'main'),
-                    run(4, 'CI', 'schedule', '2026-09-21T18:00:06Z', 'main'),
-                    run(5, 'CI', 'push', '2026-09-21T09:00:04Z', '0.3.0')]
-        unknown = run(6, event=None, branch='main')
-        doc, by_key = lanes([nightly, release, *children, unknown, dict(children[0], attempt=2)])
-        self.assertEqual(points(by_key['pr']) + points(by_key['main']), [])
-        self.assertEqual(points(by_key['daily']), [1])
-        self.assertEqual(points(by_key['release']), [2])
-        self.assertEqual(points(by_key['called']), [3, 4])
-        self.assertEqual(points(by_key['other']), [5])
-        self.assertEqual(points(by_key['unknown']), [6])
-        self.assertEqual(doc['excluded'], {})
-        self.assertEqual(sorted(ident for lane in by_key.values() for ident in points(lane)), list(range(1, 7)))
+    def test_merge_group_precedes_every_workflow_name_rule(self):
+        runs = [run(i, name, 'merge_group') for i, name in enumerate(('CI', 'Nightly', 'Release', 'Maintenance'), 1)]
+        doc, by_key = lanes(runs)
+        self.assertEqual([(lane['key'], lane['label']) for lane in doc['lanes']],
+                         [('pr', 'PR'), ('main', '主干'), ('merge_queue', '合并队列'), ('daily', 'Daily'), ('release', '版本')])
+        self.assertEqual(points(by_key['merge_queue']), [1, 2, 3, 4])
+        self.assertTrue(all(not points(lane) for key, lane in by_key.items() if key != 'merge_queue'))
+
+    def test_hidden_categories_have_no_points_or_excluded_counts(self):
+        visible = [run(1, 'Nightly', 'schedule'), run(2, 'Release', 'push')]
+        hidden = [run(3, 'CI', 'workflow_call'), run(4, 'CI', 'schedule'),
+                  run(5, 'CI', 'push', branch='other'), run(6, event=None),
+                  run(7, 'Maintenance', 'push'), run(8, 'Nightly', 'workflow_call')]
+        doc, by_key = lanes([*visible, *hidden, dict(hidden[0], attempt=2)])
+        self.assertEqual(sorted(ident for lane in by_key.values() for ident in points(lane)), [1, 2])
+        self.assertNotIn('excluded', doc)
 
     def test_release_branch_keeps_manually_dispatched_nightly_in_daily(self):
         doc = build_lanes([run(37845266203, 'Nightly', 'workflow_dispatch', branch='releases/v0.3.0.beta')],
@@ -81,7 +84,7 @@ class LaneClassificationTests(unittest.TestCase):
         daily = next(lane for lane in doc['lanes'] if lane['key'] == 'daily')
         self.assertEqual(points(daily), [37845266203])
         self.assertTrue(daily['days'][-1][0]['manual'])
-        self.assertEqual(doc['excluded'], {})
+        self.assertNotIn('excluded', doc)
 
     def test_path_named_startup_failure_stays_with_its_workflow(self):
         # GitHub names a run after its file when the workflow does not parse.
@@ -141,9 +144,9 @@ class LaneLayoutTests(unittest.TestCase):
 
     def test_lane_without_runs_is_empty_not_failed(self):
         _, by_key = lanes([run(1)])
-        release = by_key['release']
-        self.assertEqual(release['days'], [[] for _ in range(30)])
-        self.assertEqual(release['summary'], dict(total=0, success=0, failure=0, cancelled=0, running=0, other=0, success_rate=None, median_duration_s=None))
+        queue = by_key['merge_queue']
+        self.assertEqual(queue['days'], [[] for _ in range(30)])
+        self.assertEqual(queue['summary'], dict(total=0, success=0, failure=0, cancelled=0, running=0, other=0, success_rate=None, median_duration_s=None))
 
     def test_summary_counts_each_outcome_and_completed_success_rate(self):
         results = [('success', 'completed'), ('failure', 'completed'), ('timed_out', 'completed'), ('startup_failure', 'completed'),
@@ -232,7 +235,7 @@ class SnapshotLaneTests(unittest.TestCase):
         ci = self.snapshot(sync)['sections']['ci']['data']
         lanes_by_key = {lane['key']: lane for lane in ci['lanes']['lanes']}
         self.assertEqual({k: points(v) for k, v in lanes_by_key.items()},
-                         {'pr': [1], 'main': [2, 5], 'daily': [3], 'release': [4], 'called': [], 'other': [], 'unknown': []})
+                         {'pr': [1], 'main': [2, 5], 'merge_queue': [], 'daily': [3], 'release': [4]})
         self.assertEqual(lanes_by_key['pr']['days'][-1][0]['pr'], 7)
         self.assertEqual(ci['pull_request']['total'], 1)
         for name, content in sync.files().items():
