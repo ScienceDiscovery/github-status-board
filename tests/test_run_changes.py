@@ -105,3 +105,23 @@ class RunChangeTests(unittest.TestCase):
         write_receipt(receipt, REPO, [], 'a' * 40); self.assertFalse(receipt.exists())
         write_receipt(receipt, REPO, [hint()], 'b' * 40)
         self.assertEqual(json.loads(receipt.read_text()), {'source': REPO, 'runs': [hint()], 'commit': 'b' * 40})
+    def test_a_run_recorded_as_running_is_rechecked_before_the_completed_backlog(self):
+        # 39 completed runs wait for inspection. Run 20 was saved while running and has
+        # finished since; it is neither among the newest IDs nor among the oldest due.
+        finished = dict(run(20), status='completed', conclusion='success', updated_at=stamp(NOW + timedelta(hours=3)))
+        gh = RerunSource([finished])
+        sync = Sync(gh, self.root, REPO, now=NOW)
+        for number in range(1, 41):
+            sync.save_run(dict(run(number), status='in_progress', conclusion=None) if number == 20 else run(number))
+        inspected = []
+        def inspect(_gh, _cfg, record, **_kw):
+            inspected.append(record['id']); return self.report(_gh, _cfg, record)
+        sync.now = NOW + timedelta(hours=3)
+        with patch('gsb.sync.run_details', side_effect=inspect): sync.pending(count=4)
+        self.assertEqual(inspected[0], 20)
+        self.assertEqual(len(inspected), 4)
+        row = sync.history.get('runs', '20-1')
+        self.assertEqual((row['status'], row['conclusion']), ('completed', 'success'))
+        # Read in full, it leaves the queue; the rest of the backlog keeps its turn order.
+        self.assertNotIn('run:20-1', sync.state['pending'])
+

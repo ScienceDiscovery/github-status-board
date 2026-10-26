@@ -296,9 +296,21 @@ class Sync:
         _enrich_prs_graphql(Context(OnePR(), self.cfg, self.now, self.meta), [row])
         self.history.put("prs", row)
 
+    def in_flight(self, key):
+        """A queued run still recorded as queued or in progress."""
+        if not key.startswith("run:"):
+            return False
+        row = self.history.get("runs", key[4:])
+        return bool(row) and row.get("status") != "completed"
+
     def pending(self, count=30, priority=(), only_priority=False):
         ready = [(key, value) for key, value in self.state["pending"].items() if value["due"] <= stamp(self.now) and (not only_priority or key in priority)]
-        urgent = [item for item in ready if item[0] in priority][:count]
+        # A run's status changes only through this queue: the run lists are read by
+        # creation time. Runs still recorded as running therefore go first, right after
+        # notified ones, so a backlog of completed runs (or a budget that runs out
+        # downloading their reports) cannot keep a finished workflow showing as running.
+        running = [] if only_priority else sorted((item for item in ready if item[0] not in priority and self.in_flight(item[0])), key=lambda item: (item[1]["due"], item[0]))
+        urgent = ([item for item in ready if item[0] in priority] + running)[:count]
         urgent_keys = {key for key, _ in urgent}
         remaining = count - len(urgent)
         rest = [item for item in ready if item[0] not in urgent_keys]
