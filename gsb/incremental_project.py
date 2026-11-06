@@ -15,7 +15,7 @@ from .public_sections import public_ops, public_tests, score_history, daily_scor
 from .sync import stamp, date
 
 
-SUPPLEMENT_TESTS_VERSION = 6
+SUPPLEMENT_TESTS_VERSION = 7
 COVERAGE_TIMEZONE = ZoneInfo("Asia/Shanghai")
 COVERAGE_GATE_JOBS = ("Gate / UT", "Gate / ST", "Gate / Coverage")
 
@@ -158,6 +158,7 @@ def _executed(runs):
              "status": "incomplete" if t.get("counts") is None else "failed" if t["counts"]["failed"] else "unstable" if t["counts"]["flaky"] or t["counts"]["skipped"] else "passed",
              "run_id": r["id"], "sha": r["sha"], "attempt": r["attempt"], "branch": r["branch"], "created_at": r["updated_at"],
              "url": t.get("url"), "scores": t.get("scores", []),
+             **({"table": t["table"]} if "table" in t else {}),
              "totals": t.get("counts"), "duration_ms": None, "detail": {"files": [], "failures": [], "projects": [], "stats": {}}}
             for r, t in latest_reports.values()]
 

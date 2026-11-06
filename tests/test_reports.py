@@ -40,6 +40,54 @@ class ReportsTests(unittest.TestCase):
         self.assertIsNone(parse_report_zip(archive({'dashboard-summary.json':json.dumps({'tests':3,'passed':4,'failed':0,'skipped':0,'flaky':0})})))
         self.assertIsNone(parse_report_zip(archive({'trace.zip':'not a test summary'})))
 
+    def test_generic_summary_table_preserves_declared_order_and_final_strings(self):
+        table = {'title': 'case execution', 'columns': [{'key': 'result', 'label': 'Outcome'}, {'key': 'task', 'label': 'Task'}],
+                 'rows': [{'task': 'item-b', 'result': '34.2K', 'answer': 'PRIVATE'}, {'task': 'item-a', 'result': 'n/a'}], 'trace': 'PRIVATE'}
+        doc = dict(tests=2, passed=1, failed=1, skipped=0, flaky=0, table=table, error='PRIVATE')
+        parsed = parse_report_zip(archive({'nested/dashboard-summary.json': json.dumps(doc), 'junit.xml': '<testsuite tests="99"/>'}))
+        self.assertEqual((parsed['tests'], parsed['format']), (2, 'summary'))
+        self.assertEqual(parsed['table']['columns'], table['columns'])
+        self.assertEqual(parsed['table']['rows'], [{'result': '34.2K', 'task': 'item-b'}, {'result': 'n/a', 'task': 'item-a'}])
+        self.assertNotIn('PRIVATE', json.dumps(parsed))
+
+    def test_missing_or_malformed_optional_table_keeps_legacy_summary_counts(self):
+        counts = dict(tests=1, passed=1, failed=0, skipped=0, flaky=0)
+        for table in [None, {}, {'title': 'bad', 'columns': [], 'rows': []},
+                      {'title': 'bad', 'columns': [{'key': 'x', 'label': 'X'}], 'rows': [{'x': {'answer': 'PRIVATE'}}]},
+                      {'title': 'bad', 'columns': [{'key': 'x', 'label': 'X'}, {'key': 'x', 'label': 'Again'}], 'rows': []}]:
+            with self.subTest(table=table):
+                parsed = parse_report_zip(archive({'dashboard-summary.json': json.dumps(dict(counts, table=table))}))
+                self.assertEqual({key: parsed[key] for key in counts}, counts)
+                self.assertNotIn('table', parsed)
+                self.assertEqual(parsed['cases'], [])
+
+    def test_non_science_repository_table_survives_collection_and_both_snapshot_paths(self):
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+        from gsb.collectors import Context
+        from gsb.public_sections import public_tests
+        from gsb.incremental_project import _executed
+        table = {'title': 'service checks', 'columns': [{'key': 'name', 'label': 'Check'}, {'key': 'value', 'label': 'Recorded value'}],
+                 'rows': [{'name': 'probe-b', 'value': 'n/a'}, {'name': 'probe-a', 'value': '14.5M'}]}
+        doc = dict(tests=2, passed=1, failed=1, skipped=0, flaky=0, table=table)
+        class GH:
+            def paginate(self, path, *args, **kw):
+                return [] if path.endswith('/jobs') or path.endswith('/actions/artifacts') else [dict(id=10, name='service-test-results')]
+            def download_artifact(self, repo, ident, **kw):
+                assert repo == 'acme/weather-service'
+                return archive({'dashboard-summary.json': json.dumps(doc)})
+            def get_text_file(self, *args): return '{}'
+        cfg = Config(repo='acme/weather-service')
+        run = slim_run(dict(id=7, name='Service checks', head_branch='main', head_sha='a'*40,
+                            html_url=cfg.repo_url+'/actions/runs/7', updated_at='2026-01-01T00:00:00Z'), {})
+        run_details(GH(), cfg, run)
+        self.assertEqual(run['tests'][0]['table'], table)
+        ctx = Context(GH(), cfg, datetime.now(timezone.utc), {'default_branch': 'main'})
+        with patch('gsb.public_sections._tree_paths', return_value=([], 'test')):
+            full = public_tests(ctx, [run])
+        self.assertEqual(full['executed'][0]['table'], table)
+        self.assertEqual(_executed([run])[0]['table'], table)
+
     def test_real_e2e_scores_keep_four_native_shapes_without_private_payloads(self):
         files = {
             'results.json': json.dumps({'suites': [], 'stats': {'expected': 4, 'unexpected': 0, 'skipped': 0, 'flaky': 0}}),

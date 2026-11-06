@@ -121,7 +121,7 @@ def run_details(gh, cfg, run, *, cache=None, parser_version=None):
                         continue
                     entry.update(status="available", counts={k: parsed[k] for k in ("tests", "passed", "failed", "skipped", "flaky")},
                                  cases=parsed["cases"], format=parsed["format"])
-                    for key in ("commands", "packages"):
+                    for key in ("commands", "packages", "table"):
                         if key in parsed:
                             entry[key] = parsed[key]
                 else:

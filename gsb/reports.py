@@ -252,6 +252,26 @@ def artifact_layer(name):
     return "other"
 
 
+def summary_table(value):
+    """Project a producer-formatted table without interpreting its columns."""
+    if not isinstance(value, dict) or not isinstance(value.get("title"), str):
+        return None
+    columns, rows = value.get("columns"), value.get("rows")
+    if not isinstance(columns, list) or not columns or not isinstance(rows, list):
+        return None
+    if any(not isinstance(c, dict) or not isinstance(c.get("key"), str) or not c["key"]
+           or not isinstance(c.get("label"), str) for c in columns):
+        return None
+    keys = [c["key"] for c in columns]
+    if len(set(keys)) != len(keys):
+        return None
+    if any(not isinstance(row, dict) or any(not isinstance(row.get(key), str) for key in keys) for row in rows):
+        return None
+    # Ignore undeclared cells and metadata, just as we omit raw report payloads.
+    return {"title": value["title"], "columns": [{"key": c["key"], "label": c["label"]} for c in columns],
+            "rows": [{key: row[key] for key in keys} for row in rows]}
+
+
 def parse_report_zip(blob):
     """Choose one report family per artifact, avoiding JSON/XML/log double counts."""
     with zipfile.ZipFile(io.BytesIO(blob)) as archive:
@@ -299,6 +319,9 @@ def parse_report_zip(blob):
                         if counts["tests"] != sum(counts[k] for k in FIELDS):
                             raise ValueError("inconsistent counts")
                         result, family = {**counts, "cases": [], "format": "summary"}, "summary"
+                        table = summary_table(doc.get("table"))
+                        if table is not None:
+                            result["table"] = table
                 elif name.endswith(".xml"):
                     result, family = junit(text), "junit"
                 elif name.endswith("run.log"):
@@ -329,7 +352,10 @@ def parse_report_zip(blob):
         for family in ("summary", "playwright", "tagged", "junit", "log"):
             if reports[family]:
                 counts = {k: sum(r.get(k, 0) for r in reports[family]) for k in ("tests", *FIELDS)}
-                return {**counts, "format": family, "cases": [c for r in reports[family] for c in r["cases"]][:500], "coverage": coverage, "tagged": tagged, "scores": scores[:100], **({k: [v for r in reports[family] for v in r[k]] for k in ("commands", "packages")} if family == "log" else {})}
+                tables = [r["table"] for r in reports[family] if "table" in r]
+                return {**counts, "format": family, "cases": [c for r in reports[family] for c in r["cases"]][:500], "coverage": coverage, "tagged": tagged, "scores": scores[:100],
+                        **({"table": tables[0]} if len(tables) == 1 else {}),
+                        **({k: [v for r in reports[family] for v in r[k]] for k in ("commands", "packages")} if family == "log" else {})}
         if coverage or tagged or scores:
             return {"tests": None, "coverage": coverage, "tagged": tagged, "scores": scores[:100]}
     return None

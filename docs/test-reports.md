@@ -1,5 +1,36 @@
 # 测试报告契约
 
+## Optional summary table
+
+Any public repository can include an optional `table` in its `dashboard-summary.json`, uploaded inside an existing test-results artifact. The producer computes the values; the dashboard only displays the declared columns and rows as escaped text, in their original order. It does not interpret column keys or calculate scores, tokens, memory, or duration. This contract is independent of repository, workflow, and artifact prefix.
+
+```json
+{
+  "tests": 2,
+  "passed": 1,
+  "failed": 1,
+  "skipped": 0,
+  "flaky": 0,
+  "table": {
+    "title": "case execution",
+    "columns": [
+      {"key": "case", "label": "case"},
+      {"key": "result", "label": "result"}
+    ],
+    "rows": [
+      {"case": "example-a", "result": "passed"},
+      {"case": "example-b", "result": "n/a"}
+    ]
+  }
+}
+```
+
+Use one summary per artifact. `title`, column `key` / `label`, and every declared cell must be strings; keys must be nonempty and unique. Producers supply final display strings, including units, compact numbers, and `n/a`. Only declared cells are retained; extra metadata is ignored. A malformed optional table is omitted without invalidating otherwise valid counts. The nonnegative integer count fields keep their existing meaning: `passed + failed + skipped + flaky == tests`. Summaries without `table` retain their current counts-only behavior and do not gain per-case details. Producers must exclude prompts, model answers, traces, errors, and credentials before upload.
+
+The E2E page displays optional tables from test artifacts for the selected branch line, alongside existing reports. Publication preserves the table through collection, run history, and snapshot generation without recalculation.
+
+## Existing report formats
+
 看板读取现有 CI 证据，不替源仓库执行测试，也不会将缺失证据当成成功。默认按 `release` 事件／版本工作流归为版本验证、`schedule`／daily/nightly 归为每日构建，其余为门禁；可在 `board-config.json` 配置名称正则。
 
 Actions 产物名使用 `ut-results`、`st-results`、`e2e-results`、`real-e2e-results`（分片可追加后缀）。支持：

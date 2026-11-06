@@ -208,6 +208,43 @@ doc['line_sections']={'legacy':dict(ci=wrap(legacy_ci),tests=wrap(legacy_tests))
 doc['board']=BoardStore(cfg,persist=False).payload(doc)
 doc['details']={'issue:1':dict(body=item['body'],cross_references=[]),'pr:3':dict(body=pr['body'],cross_references=[])}
 export_site(root/'.e2e/site/github-status-board',doc)
+
+# A different repository publishes a table through the normal test-artifact
+# collector. The browser fixture must not rely on score-history recognition.
+import io
+import zipfile
+from gsb.project import slim_run, run_details
+summary_repo = 'acme/weather-service'
+summary_table = dict(title='case execution', columns=[
+    dict(key='ordinal', label='#'), dict(key='probe', label='case'), dict(key='state', label='status'),
+    dict(key='grade', label='score'), dict(key='memory', label='peak memory GB'),
+    dict(key='output', label='generated tokens'), dict(key='review', label='judge tokens'),
+    dict(key='all', label='total tokens'), dict(key='calls', label='tool calls'), dict(key='time', label='duration min')], rows=[
+    dict(ordinal='1', probe='probe-b', state='failed', grade='n/a', memory='n/a', output='n/a', review='n/a', all='34.2K', calls='n/a', time='1.5'),
+    dict(ordinal='2', probe='<script>window.injected=true</script> probe-a', state='passed', grade='0', memory='2.50', output='900', review='14.5M', all='n/a', calls='7', time='n/a')])
+summary_doc = dict(tests=2, passed=1, failed=1, skipped=0, flaky=0, table=summary_table)
+summary_archive = io.BytesIO()
+with zipfile.ZipFile(summary_archive, 'w') as archive:
+    archive.writestr('reports/dashboard-summary.json', json.dumps(summary_doc))
+class SummaryGH:
+    def paginate(self, path, *args, **kwargs):
+        return [] if path.endswith('/jobs') or path.endswith('/actions/artifacts') else [dict(id=88, name='service-test-results')]
+    def download_artifact(self, repo, ident, **kwargs):
+        assert repo == summary_repo
+        return summary_archive.getvalue()
+    def get_text_file(self, *args): return '{}'
+summary_cfg = Config(repo=summary_repo)
+summary_run = slim_run(dict(id=88, name='Service verification', head_branch='main', head_sha='a'*40,
+    html_url=summary_cfg.repo_url+'/actions/runs/88', updated_at=time), {})
+run_details(SummaryGH(), summary_cfg, summary_run)
+with patch('gsb.public_sections._tree_paths', return_value=([], 'fixture')):
+    summary_tests = public_tests(Context(SummaryGH(), summary_cfg, datetime.now(timezone.utc), {'default_branch':'main'}), [summary_run])
+generic = json.loads(json.dumps(doc))
+generic.update(repo=summary_repo, repo_url=summary_cfg.repo_url, line_sections={})
+generic['repository'].update(name=summary_repo, url=summary_cfg.repo_url)
+generic['sections']['tests'] = wrap(summary_tests)
+export_site(root/'.e2e/site/generic-summary', generic)
+
 # E2E run records through the real collector and Pages attachment, offline: yesterday's
 # collection read histories across multiple runs and branch lines. An expired
 # artifact disappears; fork and oversized artifacts have no hosted HTML.
