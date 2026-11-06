@@ -1154,6 +1154,15 @@
     }));
   }
 
+  function summaryTables(executed) {
+    return executed.filter(report => report.table).map(report => {
+      const {title, columns, rows} = report.table;
+      // Cells already contain the producer's final display values. Keep both
+      // axes in declared order and render every cell as text.
+      return `<section class="card summary-table"><h3>${esc(title)}</h3><p class="muted">${link(report.url, esc(report.artifact))} · ${date(report.created_at)} · <code>${esc(report.branch)}</code></p><div class="table-wrap" tabindex="0" role="region" aria-label="${esc(title)}"><table><thead><tr>${columns.map(column => `<th scope="col">${esc(column.label)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${columns.map(column => `<td>${esc(row[column.key])}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;
+    }).join('');
+  }
+
   function renderTests(sec, line) {
     const d = sec?.data;
     let html = sectionState(sec, 'E2E');
@@ -1168,6 +1177,7 @@
       { label: 'CI 最近 E2E 用例', value: n(e2e?.totals?.tests), sub: e2e?.totals ? `${e2e.totals.passed} 通过 · ${e2e.totals.failed} 失败/超时 · ${e2e.totals.skipped} 跳过 · ${e2e.totals.flaky} 重试通过` : e2e ? '产物存在但没有解析出用例数' : '无产物', tone: e2e?.totals?.failed ? 'bad' : e2e?.totals ? 'good' : '' },
     ]);
     html += e2eRecordsSection();
+    html += summaryTables(d.executed);
     html += realScoresSection(d.executed, d.score_history, d.score_runs, d.mock_real_e2e, d.local_artifact_preview, d.score_report);
     html += taggedSection(d.tagged, line);
 
