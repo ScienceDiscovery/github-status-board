@@ -208,6 +208,7 @@ def public_tests(ctx, runs, owns=None, coverage_eligible=None):
                              'run_id': run['id'], 'sha': run['sha'], 'attempt': run['attempt'], 'branch': run['branch'],
                              'created_at': run['updated_at'], 'url': report['url'], 'duration_ms': None, 'totals': counts,
                              'scores': report.get('scores', []),
+                             **({'table': report['table']} if 'table' in report else {}),
                              'detail': {'files': [{'file': k, **v} for k, v in by_file.items()],
                                         'failures': [{'file': c.get('file'), 'title': c['name'], 'status': c['status']} for c in report.get('cases', []) if c['status'] == 'failed'],
                                         'stats': {'expected': (counts or {}).get('passed'), 'unexpected': (counts or {}).get('failed'), 'flaky': (counts or {}).get('flaky')},

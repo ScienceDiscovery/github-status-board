@@ -139,6 +139,11 @@ main { padding: 18px 20px 40px; max-width: 1500px; margin: 0 auto; }
 
 /* --------------------------------------------------------------- tables */
 .table-wrap { overflow: auto; }
+.summary-table { min-width: 0; margin: 12px 0; }
+.summary-table table { width: max-content; min-width: 100%; }
+.summary-table td { max-width: 48ch; overflow-wrap: anywhere; }
+.summary-table p { overflow-wrap: anywhere; }
+.summary-table .table-wrap:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
 th { color: var(--ink-2); font-weight: 600; font-size: 12px; white-space: nowrap; position: sticky; top: 0; background: var(--surface); }
