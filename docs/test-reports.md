@@ -42,6 +42,20 @@ Actions 产物名使用 `ut-results`、`st-results`、`e2e-results`、`real-e2e-
 5. `run.log`：兼容现有 CI 的 TAP / unittest / pytest 汇总，作为没有结构化报告时的后备来源。
 6. Real E2E 评分：从 `benchmark-metrics.json`、`team-metrics.json`、`evolve-metrics.json` 分别读取 DeepResearchBench、BiomniBench、Research Team 和 PUCT Compression 的原生分数、交付状态与耗时。看板不统一不同评分器的量纲，也不设置质量通过门槛；prompt、原始响应、错误详情和凭据不会进入公开快照。
 
+### 通用执行表与分组
+
+任意仓库的 `dashboard-summary.json` 都可以附带 `table`，列顺序由 `columns` 声明，格子由生产者写成最终字符串。看板只转义并显示，不按仓库、产物名、列名解释或重算数字：
+
+```json
+{"tests":2,"passed":1,"failed":1,"skipped":0,"flaky":0,"table":{"title":"Service probes","group":{"key":"smoke","label":"L3 · smoke"},"columns":[{"key":"probe","label":"Probe"}],"rows":[{"probe":"probe-a"},{"probe":"probe-b"}]}}
+```
+
+`group` 是可选的通用分组身份，`key` 与 `label` 均为非空字符串。生产者可以用它区分测试层级、执行策略等；例如分别声明 L3、L4、L5，看板不会从工作流名或用例数猜层级。没有分组的旧表显示为「未分组（旧报告）」；没有表格的旧 summary 继续只提供计数。
+
+E2E 页提供分组筛选，每个分组、每个产物名保留最近有表格的运行，分别标明 run、SHA、attempt、分支和该表计数。各组不累加，后来的同名无表格产物不会遮住已有表格；展示的是最近有表格的运行，不保证它就是整仓最新的一次 CI。增量快照从所属分支线的完整已采集历史选表，不受最近 100 次运行窗口影响。同一 run 只认最新 attempt，最新 attempt 没有表时不会挪用它的旧 attempt。
+
+### 评分与计数
+
 Real E2E 的简化分数与运行耗时随每次 run / attempt 保存在看板历史记录中。E2E 页按分支线、用例 ID 汇总最近 30 次有记录的运行；同一 run 重跑只采用最新 attempt；每个北京日取一次运行，手动或触发式优先，但只在最新 attempt 有可读 `real-e2e-results` 评分的运行中挑选，仍在运行或产物不可读的运行不会挡掉当天已读到的结果；缺失指标或耗时留空，不当作 0。E2E 页在每个用例下直接画出这些点的全部曲线，不需要打开弹窗。历史只从已采集的产物累积，无法用最新结果推造过去的趋势。
 
 同一产物内只取一种报告格式，优先级为 summary、Playwright、标签化 summary、JUnit、log。分片产物必须互不重叠，避免同时上传同一层的合并报告和分片。用例数按报告中的测试实例（包含浏览器项目）计数，不是测试文件数；重试不重复计数。稳定通过率 = passed / tests；skipped 和 flaky 单列，不计稳定通过。零用例不显示 100%。

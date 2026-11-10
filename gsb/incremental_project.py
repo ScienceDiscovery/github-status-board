@@ -13,9 +13,10 @@ from .lines import canonical_branch, configured_lines, line_of, target_of
 from .work_trend import daily_trend
 from .public_sections import public_ops, public_tests, score_history, daily_score_runs, latest_score_report, envelope
 from .sync import stamp, date
+from .reports import summary_tables
 
 
-SUPPLEMENT_TESTS_VERSION = 7
+SUPPLEMENT_TESTS_VERSION = 8
 COVERAGE_TIMEZONE = ZoneInfo("Asia/Shanghai")
 COVERAGE_GATE_JOBS = ("Gate / UT", "Gate / ST", "Gate / Coverage")
 
@@ -324,6 +325,12 @@ def build_snapshot(sync):
         if tests.get("data"):
             # Refresh test metrics without re-fetching the repository tree/Codecov.
             tests["data"]["executed"] = _executed(runs)
+            # Tables are independent observations per producer group, not the
+            # latest same-name artifact. Read durable history so busy CI cannot
+            # push a less frequent group out of the 100-run current window.
+            table_runs = history.select("runs", lambda r, key=key: run_line.get(r["id"]) == key
+                                        and r["attempt"] == index[r["id"]]["attempt"])
+            tests["data"]["summary_tables"] = summary_tables(table_runs)
             daily = history.select("runs", lambda r, key=key: r.get("channel") == "daily"
                                    and run_line.get(r["id"]) == key, limit=120)
             # The current CI window is capped at 100 runs and can lose yesterday's

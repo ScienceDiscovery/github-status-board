@@ -268,8 +268,37 @@ def summary_table(value):
     if any(not isinstance(row, dict) or any(not isinstance(row.get(key), str) for key in keys) for row in rows):
         return None
     # Ignore undeclared cells and metadata, just as we omit raw report payloads.
-    return {"title": value["title"], "columns": [{"key": c["key"], "label": c["label"]} for c in columns],
-            "rows": [{key: row[key] for key in keys} for row in rows]}
+    table = {"title": value["title"], "columns": [{"key": c["key"], "label": c["label"]} for c in columns],
+             "rows": [{key: row[key] for key in keys} for row in rows]}
+    group = value.get("group")
+    if isinstance(group, dict) and all(isinstance(group.get(k), str) and group[k].strip() for k in ("key", "label")):
+        table["group"] = {k: group[k] for k in ("key", "label")}
+    return table
+
+
+def summary_tables(runs):
+    """Latest table per producer group/artifact, independent of counts-only reports."""
+    attempts = {}
+    for run in runs:
+        attempts[run["id"]] = max(attempts.get(run["id"], 0), run.get("attempt", 1))
+    selected = {}
+    for run in sorted(runs, key=lambda r: (r.get("updated_at") or r.get("created_at") or "", r["id"]), reverse=True):
+        if run.get("attempt", 1) != attempts[run["id"]]:
+            continue
+        for report in run.get("tests", []):
+            table = report.get("table")
+            if not table:
+                continue
+            identity = ((table.get("group") or {}).get("key", ""), report["name"])
+            if identity in selected:
+                continue
+            selected[identity] = {
+                "artifact": report["name"], "table": table, "totals": report.get("counts"),
+                "run_id": run["id"], "sha": run.get("sha"), "attempt": run.get("attempt", 1),
+                "branch": run.get("branch"), "created_at": report.get("created_at") or run.get("updated_at"),
+                "url": report.get("url"), "run_url": run.get("url"),
+            }
+    return list(selected.values())
 
 
 def parse_report_zip(blob):

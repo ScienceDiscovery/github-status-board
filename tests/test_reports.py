@@ -61,6 +61,53 @@ class ReportsTests(unittest.TestCase):
                 self.assertNotIn('table', parsed)
                 self.assertEqual(parsed['cases'], [])
 
+    def test_summary_table_group_is_optional_public_producer_metadata(self):
+        table = dict(title='Probes', columns=[dict(key='probe', label='Probe')], rows=[dict(probe='a')],
+                     group=dict(key='smoke', label='L3 · smoke', secret='PRIVATE'))
+        counts = dict(tests=1, passed=1, failed=0, skipped=0, flaky=0)
+        parsed = parse_report_zip(archive({'dashboard-summary.json': json.dumps(dict(counts, table=table))}))
+        self.assertEqual(parsed['table']['group'], dict(key='smoke', label='L3 · smoke'))
+        self.assertNotIn('PRIVATE', json.dumps(parsed))
+        for group in [None, [], {}, dict(key='', label=''), dict(key='x', label={'answer': 'PRIVATE'})]:
+            with self.subTest(group=group):
+                table['group'] = group
+                parsed = parse_report_zip(archive({'dashboard-summary.json': json.dumps(dict(counts, table=table))}))
+                self.assertEqual(parsed['tests'], 1)
+                self.assertEqual(parsed['table']['rows'], [dict(probe='a')])
+                self.assertNotIn('group', parsed['table'])
+
+    def test_table_groups_survive_newer_same_name_counts_only_reports_and_reruns(self):
+        from gsb.reports import summary_tables
+        from gsb.public_sections import public_tests
+        from gsb.collectors import Context
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+        def run(ident, group=None, count=1, attempt=1):
+            report = dict(name='service-test-results', artifact_id=ident * 10 + attempt, layer='e2e', status='available',
+                          url=f'https://example.com/runs/{ident}/artifacts/{attempt}', cases=[],
+                          counts=dict(tests=count, passed=count - 1, failed=1, skipped=0, flaky=0))
+            if group is not None:
+                report['table'] = dict(title='Probes', group=dict(key=group, label=group),
+                    columns=[dict(key='probe', label='Probe')], rows=[dict(probe=f'{group}-{i}') for i in range(count)])
+            return dict(id=ident, attempt=attempt, sha=str(ident)*20, branch='main', updated_at=f'2026-01-01T00:{ident:02}:00Z', tests=[report])
+        runs = [run(6), run(5, 'smoke', 2), run(4, 'full', 4), run(3, 'regression', 3), run(2, 'smoke', 1)]
+        tables = summary_tables(runs)
+        self.assertEqual([(r['table']['group']['key'], r['totals']['tests'], r['run_id']) for r in tables],
+                         [('smoke', 2, 5), ('full', 4, 4), ('regression', 3, 3)])
+        self.assertEqual(tables[0]['sha'], runs[1]['sha'])
+        self.assertEqual(tables[0]['attempt'], 1)
+        # An older attempt of the SAME run must never stand in for its latest attempt.
+        self.assertEqual(summary_tables([run(7, attempt=2), run(7, 'obsolete', attempt=1)]), [])
+        # The full collector has the same selection contract as the incremental projection.
+        class GH:
+            def paginate(self, *a, **kw): return []
+            def get_text_file(self, *a): return '{}'
+        ctx = Context(GH(), Config(repo='acme/weather-service'), datetime.now(timezone.utc), {'default_branch':'main'})
+        with patch('gsb.public_sections._tree_paths', return_value=([], 'test')):
+            full = public_tests(ctx, runs)
+        self.assertEqual(full['summary_tables'], tables)
+        self.assertNotIn('table', full['executed'][0])
+
     def test_non_science_repository_table_survives_collection_and_both_snapshot_paths(self):
         from datetime import datetime, timezone
         from unittest.mock import patch

@@ -10,6 +10,7 @@ from .collectors import collect_ci, _coverage_probe, _tree_paths, OPS_BLOCKS
 from .github import GitHubError
 from .testparse import summarize_tree, package_of
 from .real_e2e_definitions import definition as real_e2e_definition
+from .reports import summary_tables
 
 
 def _score_with_definition(score):
@@ -262,7 +263,7 @@ def public_tests(ctx, runs, owns=None, coverage_eligible=None):
             break
     return {'notes': notes, 'tree_source': source, 'tree': {k: v for k, v in tree.items() if k != 'inventory'} if tree else None,
             'inventory': [{**row, 'ci_cases': package_counts.get(row['package'], {}).get('tests'), 'ci_failed': package_counts.get(row['package'], {}).get('failed')} for row in (tree or {}).get('inventory', [])],
-            'test_scripts': scripts, 'artifacts_recent': artifacts[:30], 'executed': executed,
+            'test_scripts': scripts, 'artifacts_recent': artifacts[:30], 'executed': executed, 'summary_tables': summary_tables(runs),
             'score_history': score_history(runs), 'score_report': latest_score_report(runs), 'coverage': coverage}
 
 

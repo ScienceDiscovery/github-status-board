@@ -159,6 +159,28 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(updated['sections']['ops']['data']['marker'],'old-ops')
         self.assertEqual(updated['sections']['tests']['data']['marker'],'new-tests')
 
+    def test_grouped_tables_survive_the_current_run_window_without_reusing_old_attempts(self):
+        sync = Sync(Source(), self.root, REPO, now=NOW).collect()
+        for ident in range(1, 107):
+            raw = run(ident)
+            raw['updated_at'] = raw['created_at']
+            row = slim_run(raw, {})
+            if ident in (105, 106):
+                row['tests'] = [dict(name='service-test-results', artifact_id=ident, layer='e2e',
+                    counts=dict(tests=2, passed=1, failed=1, skipped=0, flaky=0), cases=[],
+                    table=dict(title='Probes', group=dict(key=str(ident), label=f'Group {ident}'),
+                        columns=[dict(key='probe', label='Probe')], rows=[dict(probe='a'), dict(probe='b')]))]
+            sync.history.put('runs', row)
+        latest = slim_run(dict(run(106, attempt=2), updated_at=stamp(NOW)), {})
+        sync.history.put('runs', latest)
+        with patch('gsb.incremental_project.public_ops', return_value={}), \
+             patch('gsb.incremental_project.public_tests', return_value={'marker':'tests'}):
+            doc = build_snapshot(sync)
+        self.assertNotIn(105, [row['id'] for row in doc['quality']['runs']])
+        tables = doc['sections']['tests']['data']['summary_tables']
+        self.assertEqual([(row['run_id'], row['attempt']) for row in tables], [(105, 1)])
+        self.assertEqual(tables[0]['totals']['tests'], 2)
+
     def test_coverage_summaries_persist_on_runs_and_keep_latest_result_per_beijing_day(self):
         history=History(self.root)
         for number in (1,2,3,4,5):
