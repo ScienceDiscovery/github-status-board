@@ -614,3 +614,6 @@ td.nowrap { white-space: nowrap; }
 .trend-table .table-wrap { max-height: 280px; overflow: auto; margin-top: 6px; }
 .trend-table th, .trend-table td { padding: 3px 10px; text-align: left; }
 .trend-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.summary-counts { display: inline-flex; flex-wrap: wrap; gap: 0 .3em; }
+.summary-counts > span { white-space: nowrap; }

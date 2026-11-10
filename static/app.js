@@ -1154,12 +1154,22 @@
     }));
   }
 
-  function summaryTables(executed) {
-    return executed.filter(report => report.table).map(report => {
+  function summaryTables(reports) {
+    const available = reports.filter(report => report.table);
+    if (!available.length) return '';
+    const key = report => JSON.stringify(report.table.group?.key ?? null);
+    const groups = new Map(available.map(report => [key(report), report.table.group?.label || '未分组（旧报告）']));
+    const selected = groups.has(STATE.summaryGroup) ? STATE.summaryGroup : '';
+    let html = sectionHead('用例执行表', '每组保留最近有表格的运行；各组用例数独立，不累加。');
+    if (groups.size > 1) html += `<div class="filters"><label>表格分组 <select data-summary-group aria-label="表格分组"><option value="">全部分组</option>${[...groups].map(([value, label]) => `<option value="${esc(value)}" ${selected === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select></label></div>`;
+    return html + available.filter(report => !selected || key(report) === selected).map(report => {
       const {title, columns, rows} = report.table;
       // Cells already contain the producer's final display values. Keep both
       // axes in declared order and render every cell as text.
-      return `<section class="card summary-table"><h3>${esc(title)}</h3><p class="muted">${link(report.url, esc(report.artifact))} · ${date(report.created_at)} · <code>${esc(report.branch)}</code></p><div class="table-wrap" tabindex="0" role="region" aria-label="${esc(title)}"><table><thead><tr>${columns.map(column => `<th scope="col">${esc(column.label)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${columns.map(column => `<td>${esc(row[column.key])}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;
+      const counts = report.totals;
+      const countText = [['用例', 'tests'], ['通过', 'passed'], ['失败', 'failed'], ['跳过', 'skipped'], ['重试通过', 'flaky']]
+        .map(([label, field]) => `<span>${label} ${n(counts?.[field])}</span>`).join(' · ');
+      return `<section class="card summary-table" data-summary-group="${esc(report.table.group?.key || '')}"><h3>${esc(title)}</h3><p>${badge(report.table.group?.label || '未分组（旧报告）', 'info')} <span class="summary-counts">${countText}</span></p><p class="muted">${link(report.run_url || report.url, `run #${esc(report.run_id)} / attempt ${esc(report.attempt ?? '—')}`)} · ${date(report.created_at)} · <code>${esc(report.branch)}</code> · <code title="${esc(report.sha)}">${esc(report.sha?.slice(0, 12))}</code> · ${link(report.url, esc(report.artifact))}</p><div class="table-wrap" tabindex="0" role="region" aria-label="${esc(title)}"><table><thead><tr>${columns.map(column => `<th scope="col">${esc(column.label)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${columns.map(column => `<td>${esc(row[column.key])}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;
     }).join('');
   }
 
@@ -1177,7 +1187,7 @@
       { label: 'CI 最近 E2E 用例', value: n(e2e?.totals?.tests), sub: e2e?.totals ? `${e2e.totals.passed} 通过 · ${e2e.totals.failed} 失败/超时 · ${e2e.totals.skipped} 跳过 · ${e2e.totals.flaky} 重试通过` : e2e ? '产物存在但没有解析出用例数' : '无产物', tone: e2e?.totals?.failed ? 'bad' : e2e?.totals ? 'good' : '' },
     ]);
     html += e2eRecordsSection();
-    html += summaryTables(d.executed);
+    html += summaryTables(d.summary_tables ?? d.executed);
     html += realScoresSection(d.executed, d.score_history, d.score_runs, d.mock_real_e2e, d.local_artifact_preview, d.score_report);
     html += taggedSection(d.tagged, line);
 
@@ -1491,6 +1501,11 @@
     console.error(err);
   }
   // ------------------------------------------------------------ events
+  $('#tab-tests').addEventListener('change', (ev) => {
+    if (!ev.target.matches('[data-summary-group]')) return;
+    STATE.summaryGroup = ev.target.value;
+    renderTabs();
+  });
   $('#tab-tests').addEventListener('input', (ev) => {
     const el = ev.target.closest('[data-e2e-filter]');
     if (!el) return;

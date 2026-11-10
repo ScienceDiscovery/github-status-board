@@ -245,6 +245,27 @@ generic['repository'].update(name=summary_repo, url=summary_cfg.repo_url)
 generic['sections']['tests'] = wrap(summary_tests)
 export_site(root/'.e2e/site/generic-summary', generic)
 
+# The same artifact name across three producer groups, followed by a newer
+# counts-only run, exercises the full collector rather than a UI-only fixture.
+tiered_runs = []
+for ident, key, label, count in [(101, 'smoke', 'L3 · smoke', 2), (102, 'regression', 'L4 · regression', 3), (103, 'full', 'L5 · full', 4)]:
+    grouped = json.loads(json.dumps(summary_table))
+    grouped['group'] = dict(key=key, label=label)
+    grouped['rows'] = [dict(grouped['rows'][i % 2], ordinal=str(i + 1), probe=f'{key}-probe-{i + 1}',
+                            state='failed' if i == 0 else 'passed') for i in range(count)]
+    tiered_runs.append(dict(summary_run, id=ident, sha=str(ident)[-1]*40, updated_at=f'2026-09-20T{ident-100:02}:00:00Z',
+        url=summary_cfg.repo_url+f'/actions/runs/{ident}', tests=[dict(summary_run['tests'][0], artifact_id=ident,
+        table=grouped, url=summary_cfg.repo_url+f'/actions/runs/{ident}/artifacts/{ident}',
+        counts=dict(tests=count, passed=count-1, failed=1, skipped=0, flaky=0))]))
+latest = json.loads(json.dumps(tiered_runs[-1]))
+latest.update(id=104, updated_at='2026-09-20T04:00:00Z')
+del latest['tests'][0]['table']
+with patch('gsb.public_sections._tree_paths', return_value=([], 'fixture')):
+    tiered_tests = public_tests(Context(SummaryGH(), summary_cfg, datetime.now(timezone.utc), {'default_branch':'main'}), [latest, *reversed(tiered_runs)])
+tiered = json.loads(json.dumps(generic))
+tiered['sections']['tests'] = wrap(tiered_tests)
+export_site(root/'.e2e/site/tiered-summary', tiered)
+
 # E2E run records through the real collector and Pages attachment, offline: yesterday's
 # collection read histories across multiple runs and branch lines. An expired
 # artifact disappears; fork and oversized artifacts have no hosted HTML.
