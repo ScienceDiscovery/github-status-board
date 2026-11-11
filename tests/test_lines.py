@@ -30,6 +30,30 @@ class ConfigTests(unittest.TestCase):
                          [("main", "main", True), ("jiuwen", "feat/jiuwenswarm", False)])
         self.assertEqual(configured_lines({}, "main"), [{"key": "main", "ref": "main", "default": True}])
 
+    def test_release_branches_are_discovered_from_visible_runs_and_pr_targets(self):
+        runs = [
+            dict(name="CI", id=42805465980, event="workflow_dispatch", branch="releases/v0.4.0.rc1"),
+            dict(name="CI", id=2, event="pull_request", branch="fix", base_branch="release/v0.4.1"),
+            dict(name="Nightly", id=3, event="schedule", branch="releases/v0.3.0.beta"),
+            dict(name="CI", id=4, event="workflow_call", branch="release/hidden-call"),
+            dict(name="Maintenance", id=5, event="push", branch="release/hidden-other"),
+            dict(name="CI", id=6, branch="release/hidden-unknown"),
+            dict(name="CI", id=7, event="push", branch="feature/release-not-a-line"),
+            dict(name="CI", id=8, event="pull_request", branch="fix", pull_requests=[88]),
+        ]
+        settings = {"branch_lines": RENAMED_LINES, "workflows": RULES}
+        prs = [dict(number=88, base="release/pr-base")]
+        lines = configured_lines(settings, "main", runs=runs, prs=prs)
+        self.assertEqual([line["ref"] for line in lines],
+                         ["main", "legacy", "releases/v0.3.0.beta", "release/pr-base", "release/v0.4.1", "releases/v0.4.0.rc1"])
+        self.assertEqual(lines, configured_lines(settings, "main", runs=list(reversed(runs)), prs=prs))
+        self.assertEqual(len({line["key"] for line in lines}), len(lines))
+        rc = next(line for line in lines if line["ref"] == "releases/v0.4.0.rc1")
+        self.assertEqual(line_of("releases/v0.4.0.rc1", lines), rc["key"])
+        self.assertRegex(rc["key"], r"^[a-z0-9-]+$")
+        # A manually configured line keeps its stable key instead of being added twice.
+        self.assertEqual(next(line["key"] for line in lines if line["ref"] == "releases/v0.3.0.beta"), "release")
+
     def test_runs_belong_to_the_branch_their_work_targets(self):
         lines = configured_lines({"branch_lines": LINES}, "main")
         prs = [dict(number=9, head="swarm-fork", head_repo="fork/source", base="feat/jiuwenswarm",
@@ -181,6 +205,54 @@ class SnapshotTests(unittest.TestCase):
         self.assertFalse(any("/records/" in name for name in sync.history.changed))
         for ident in (11, 12, 13, 16):
             self.assertIn(ident, {row["id"] for _, row in sync.history.rows("runs")})
+
+    def test_lane_window_ages_at_beijing_midnight_without_refreshing_artifacts(self):
+        source = self.source()
+        source.runs.append({**source.runs[1], "id": 93, "head_branch": "legacy", "created_at": "2026-08-24T00:00:00Z", "updated_at": "2026-08-24T00:00:00Z"})
+        settings = {"workflows": RULES, "branch_lines": [{"key": "legacy", "ref": "legacy"}]}
+        sync = Sync(source, self.root, REPO, settings=settings, now=NOW).collect()
+        with patch("gsb.incremental_project.public_ops", return_value={}), patch("gsb.incremental_project.public_tests", return_value={}):
+            before = build_snapshot(sync)
+        self.assertEqual(points(before["line_sections"]["legacy"]["ci"]["data"]["lanes"]["lanes"][1]), [93])
+        for name, content in {**sync.files(), "site/data/snapshot.json": json.dumps(before)}.items():
+            path = self.root / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(content)
+        # Same UTC day, next Beijing day: the oldest displayed day must disappear.
+        again = Sync(source, self.root, REPO, settings=settings, now=NOW + timedelta(hours=5))
+        again.meta = sync.meta
+        with patch("gsb.incremental_project.public_tests") as tests:
+            after = build_snapshot(again)
+        self.assertEqual(after["line_sections"]["legacy"]["ci"]["data"]["lanes"]["days"][0], "2026-08-25")
+        self.assertEqual(points(after["line_sections"]["legacy"]["ci"]["data"]["lanes"]["lanes"][1]), [])
+        tests.assert_not_called()
+
+    def test_release_full_run_gets_its_own_line_from_existing_window_records(self):
+        source = self.source()
+        source.runs += [
+            {**source.runs[1], "id": 42805465980, "run_attempt": 1, "event": "workflow_dispatch", "head_branch": "releases/v0.4.0.rc1"},
+            {**source.runs[1], "id": 91, "head_branch": "release/expired", "created_at": "2026-07-01T00:00:00Z"},
+            {**source.runs[1], "id": 92, "head_branch": "release/future", "created_at": "2026-09-23T00:00:00Z"},
+        ]
+        sync = Sync(source, self.root, REPO, settings={"workflows": RULES}, now=NOW).collect()
+        source.calls.clear()
+        with patch("gsb.incremental_project.public_ops", return_value={}), patch("gsb.incremental_project.public_tests", return_value={}):
+            doc = build_snapshot(sync)
+        self.assertEqual([line["ref"] for line in doc["lines"]], ["main", "releases/v0.4.0.rc1"])
+        key = doc["lines"][1]["key"]
+        ci = doc["line_sections"][key]["ci"]["data"]
+        self.assertEqual(ci["default_branch"], "releases/v0.4.0.rc1")
+        self.assertEqual(ci["latest_main"]["run"]["id"], 42805465980)
+        self.assertEqual(points(ci["lanes"]["lanes"][1]), [42805465980])
+        self.assertEqual(ci["lanes"]["lanes"][1]["label"], "releases/v0.4.0.rc1")
+        self.assertNotIn(42805465980, [ident for lane in doc["sections"]["ci"]["data"]["lanes"]["lanes"] for ident in points(lane)])
+        self.assertEqual(source.calls, [], "discovery and lane projection use stored data, not new Actions or branch queries")
+        for name, content in {**sync.files(), "site/data/snapshot.json": json.dumps(doc)}.items():
+            path = self.root / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(content)
+        # The next unchanged build reuses the snapshot, without refreshing all test artifacts.
+        again = Sync(source, self.root, REPO, settings={"workflows": RULES}, now=NOW)
+        again.meta = sync.meta
+        with patch("gsb.incremental_project.public_tests") as tests, patch("gsb.incremental_project.collect_ci") as ci:
+            self.assertEqual(build_snapshot(again), doc)
+        tests.assert_not_called(); ci.assert_not_called()
 
     def test_renamed_branches_project_historical_runs_into_their_current_lines(self):
         source = self.source()

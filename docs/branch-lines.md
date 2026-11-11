@@ -2,7 +2,7 @@
 
 ## 功能
 
-源仓当前以 `main` 为默认分支，另有 `legacy` 和 `releases/v0.3.0.beta`。CI、E2E、Coverage 三页在页首提供“分支线”切换，每次只显示一条分支线的数据，各线互不混合：
+默认分支（通常是 `main`）和已有配置分支保持独立；展示窗口内观测到的 `release/*`、`releases/*` 分支自动增加独立分支线，无需逐版本修改配置。CI、E2E、Coverage 三页在页首提供“分支线”切换，每次只显示一条分支线的数据，各线互不混合：
 
 - 每个 run 归入它的工作所针对的分支：PR 运行归入 PR 的目标分支，push、手动、定时运行归入运行所在分支。
 - 目标分支不是任何已配置分支线的 run（版本 tag、其他分支的 push、无法匹配 PR 的运行）归入默认分支线，因此每个 run 只计一次。Nightly 按运行所在分支归线，手动在 release 分支执行也归 release 线。
@@ -26,7 +26,9 @@
 
 - `key` 用于页面状态，只能是小写字母、数字和连字符；`ref` 是分支名。切换按钮、CI 层名和各处文案都显示完整分支名，不做缩写。
 - `historical_refs` 只重归类早于 `before` 的已采集运行，不改 GitHub 原始记录：旧 `main` 归 `legacy`，旧 `feat/jiuwenswarm` 归现在的 `main`。切换点选在 2026-09-26 20:27 UTC 的最后一次旧 `main` 运行与 2026-09-27 13:19 UTC 的首次新 `main` 运行之间。运行和覆盖率摘要按新分支名展示；缺少原始产物的旧标签目录不能凭分支重命名补造。
-- 默认分支总是第一条线，即使未列出；重复的 key 或分支会被忽略。未配置 `branch_lines` 时不显示切换控件。
+- 默认分支在配置与数据中保持第一条线，即使未列出；重复的 key 或分支会被忽略。自动发现的 release 分支按完整名称排序，使用稳定键，已配置的同名分支沿用原 key。
+- 页面入口只显示 CI 日期窗口（近 30 天、UTC+8）内有实际可展示 run 的分支；只有旧覆盖率、空目录、窗口外历史或被排除类别时不显示。失败、取消、运行中的 run 也算有数据，不要求构建成功。默认分支同样适用，空 main 不会留下空入口；全部为空时不显示切换条。
+- 刷新后当前分支不再有窗口内数据时，切换到第一个仍有数据的分支并更新本机选择。CI、E2E、Coverage 的入口与选择保持一致。
 - 页面选择保存在本浏览器，三页共用；切换时重置“最近 run”的分支筛选与覆盖率周次。
 
 各页在非默认分支线上的内容：
@@ -41,10 +43,10 @@
 
 ## 主要实现
 
-- `gsb/lines.py`：`configured_lines` 读取配置，`target_of` 求 run 的目标分支，`line_of` 映射到分支线。
+- `gsb/lines.py`：`configured_lines` 读取配置并从窗口内已保存 run 的运行分支／PR 目标分支发现 release 分支，`target_of` 求 run 的目标分支，`line_of` 映射到分支线。
 - run 记录新增 `base_branch`（同仓 PR 的目标分支，来自 run 的 `pull_requests`）。fork PR 的 run 没有关联 PR，沿用 [CI 分层历史](ci-history-lanes.md)的按 head 分支匹配 PR，再取 PR 的 `base`。
 - 历史索引新增 run 的 `pull_requests`、`base_branch`、`head_repo` 与 PR 的 `head`、`base`、`head_sha`、`head_repo`。早期索引行缺少这些字段时，快照从记录重建一次索引行，不改记录与计数。
-- `incremental_project.build_snapshot` 按分支线分别计算 CI、分层历史、测试补充数据和覆盖率：`sections.ci` / `sections.tests` 是默认分支线，`line_sections.<key>` 是其他分支线，`lines` 列出全部分支线。Actions 产物列表每次构建只读取一次；覆盖率产物按所属 run 归线，run 不在历史中时按其分支。
+- `incremental_project.build_snapshot` 按分支线分别计算 CI、分层历史、测试补充数据和覆盖率：`sections.ci` / `sections.tests` 是默认分支线，`line_sections.<key>` 是其他分支线，`lines` 保留配置及自动发现的分支线，前端根据对应 CI 日期格内实际 run 过滤可见入口。Actions 产物列表每次构建只读取一次；覆盖率产物按所属 run 归线，run 不在历史中时按其分支。
 - `.sync/supplements.json` 的 `lines.<key>` 缓存各分支线的测试补充数据，随该线 run 集合变化刷新。
 - `.sync/tagged.json` 版本 2 按分支保存标签化测试的组合与目录；版本 1（只有默认分支）自动迁移。
 - 覆盖率基线接受 `*-coverage-summary-push-*` 与 `*-coverage-summary-workflow_dispatch-*`，前提是该分支、且各层均完整成功。
@@ -52,6 +54,7 @@
 
 ## 边界
 
+- 自动发现与隐藏入口不列远端分支、不回扫 Actions 历史，不改变采集查询、预算、E2E 记录版本或产物保留规则。
 - 分支线只影响 CI、E2E、Coverage 三页的展示与归类，不改变采集范围、历史记录和 Bot 触发策略。
 - `legacy` 和 `releases/v0.3.0.beta` 的标签化目录和完整覆盖率基线需要来自各自分支的 push 或手动运行；目标为它们的 PR 可能修改规则，不作为基线依据。
 - 已归档到默认分支、后来才配置分支线的历史 run 会在重建快照时按目标分支重新归类；标签化目录只从配置后的新运行读取。
@@ -63,4 +66,4 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_lines.p
 node .e2e/node_modules/playwright/cli.js test --config test/playwright.config.cjs -g "CI, tests and coverage"
 ```
 
-单元测试覆盖配置校验、同仓 / fork / 手动 / tag 运行的归线、release 手动 Nightly 与 legacy Daily 可见、合并队列优先归类、工作流调用和其他工作流不展示但保留记录、旧分层快照重建、各线成功率、覆盖率产物归线、标签化目录分线与迁移。浏览器用例在桌面和窄屏验证切换、跨页与刷新后保持、Daily 与合并队列链接、空合并队列、各线数据不混合，以及总览列出其他分支线的失败。
+单元测试覆盖配置校验、同仓 / fork / 手动 / tag 运行的归线、release 手动 Nightly 与 legacy Daily 可见、合并队列优先归类、工作流调用和其他工作流不展示但保留记录、旧分层快照重建、各线成功率、覆盖率产物归线、标签化目录分线与迁移。另外覆盖自动发现 `release/*`／`releases/*`、PR 目标分支、键名稳定与窗口外 run 不生成自动分支。浏览器用例在桌面和窄屏验证空入口隐藏、当前入口失效后回退、运行中仍可见、全部为空，以及切换、跨页与刷新后保持、Daily 与合并队列链接、空合并队列、各线数据不混合，以及总览列出其他分支线的失败。
