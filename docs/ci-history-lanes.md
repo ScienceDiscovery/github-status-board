@@ -12,7 +12,7 @@ CI 页的「CI 分层历史」按触发方式展示该分支线窗口内的 PR�
 | Daily | 名称匹配 daily 规则（Nightly）的 run，包括 `schedule` 和手动 `workflow_dispatch` |
 | 版本 | 名称匹配 release 规则（Release）的 run，包括版本 tag 推送或手动运行 |
 
-[分支线](branch-lines.md)的每条线都有上述完整分层。非默认分支的 push / 手动门禁层使用完整分支名；例如在 `releases/v0.3.0.beta` 手动运行 Nightly，会出现在该分支线的 Daily 层。
+[分支线](branch-lines.md)的每条线都有上述完整分层；窗口内有数据的 `release/*`、`releases/*` 自动列为独立分支，窗口内没有可展示 run 的分支入口隐藏。非默认分支的 push / 手动门禁层使用完整分支名；例如在 `releases/v0.3.0.beta` 手动运行 Nightly，会出现在该分支线的 Daily 层。
 
 `merge_group` 优先归入合并队列；其余名称规则取 `board-config.json` 的 `workflows.gate` / `daily` / `release`，缺省时使用相同默认值。`workflow_call` 子 run、其他工作流、缺少事件且没有关联 PR 的门禁 run，以及不属于该线门禁层的分支事件，不在分层图或最近 run 表中展示，也不追加脚注计数。采集仍保存所有 run，不过滤 Actions 查询；同一 run 的重试只展示最后一次尝试。没有事件但有关联 PR 的门禁 run 仍归 PR。
 

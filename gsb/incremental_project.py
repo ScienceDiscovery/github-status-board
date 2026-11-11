@@ -5,7 +5,7 @@ import hashlib
 from zoneinfo import ZoneInfo
 
 from .board import BoardStore
-from .ci_lanes import LANES, PR_EVENTS, build_lanes, window_start
+from .ci_lanes import DISPLAY_ZONE, LANES, PR_EVENTS, build_lanes, window_start
 from .collectors import Context, collect_ci, summarize_issues, summarize_prs, days_between
 from .coverage_store import CoverageStore
 from .history import read_json, encode
@@ -171,7 +171,10 @@ def build_snapshot(sync):
     midnight = sync.now.replace(hour=0, minute=0, second=0)
     cutoff = stamp(midnight - timedelta(days=30))
     progress = sync.progress()
-    lines = configured_lines(sync.settings, meta["default_branch"])
+    start = stamp(window_start(sync.now))
+    observed = [row for _, row in history.rows("runs") if start <= (row.get("created_at") or "") <= stamp(sync.now)]
+    lines = configured_lines(sync.settings, meta["default_branch"], runs=observed,
+                             prs=[row for _, row in history.rows("prs")])
     # A successful poll with no changed records does not manufacture a Pages
     # deployment. Daily aging and health metadata still get a regular refresh.
     cache_upgrade = supplements.get("tests_version") != SUPPLEMENT_TESTS_VERSION
@@ -180,15 +183,16 @@ def build_snapshot(sync):
     old_ci = ((old.get("sections") or {}).get("ci") or {}).get("data") or {}
     old_tests = ((old.get("sections") or {}).get("tests") or {}).get("data")
     cache_upgrade = (cache_upgrade or "lanes" not in old_ci or (isinstance(old_tests, dict) and "tagged" not in old_tests)
-                     or old.get("lines") != lines
                      or any("median_duration_s" not in lane.get("summary", {}) for lane in old_ci["lanes"].get("lanes", [])))
     # Snapshots from before the Issue / PR trend charts are rebuilt once (without refreshing test data).
     trend_upgrade = any(isinstance(((old.get("sections") or {}).get(kind) or {}).get("data"), dict)
                         and "trend" not in old["sections"][kind]["data"] for kind in ("issues", "prs"))
-    lanes_upgrade = False
+    lanes_upgrade = old.get("lines") != lines
+    last_day = sync.now.astimezone(DISPLAY_ZONE).date().isoformat()
     for line in lines:
         sections = old.get("sections", {}) if line["default"] else old.get("line_sections", {}).get(line["key"], {})
         view = ((sections.get("ci") or {}).get("data") or {}).get("lanes") or {}
+        lanes_upgrade = lanes_upgrade or view.get("days", [])[-1:] != [last_day]
         lanes_upgrade = lanes_upgrade or [lane["key"] for lane in view.get("lanes", [])] != [key for key, _ in LANES]
     # Reprojecting stored run categories must not invalidate test-artifact caches.
     if (not history.changed and not sync.tagged.changed and not cache_upgrade and not lanes_upgrade and not trend_upgrade and old.get("sync") == progress
@@ -271,7 +275,6 @@ def build_snapshot(sync):
     store = CoverageStore(read_json(history.root / ".sync/coverage.json", None),
                           read_json(history.root / ".sync/coverage-sources.json", None))
     lines_read = 0
-    start = stamp(window_start(sync.now))
     lane_prs = [history.get("prs", str(row["number"])) for row in all_prs if not row.get("closed_at") or row["closed_at"] >= start]
     refreshed = day_changed or "ops" not in supplements
     if refreshed:

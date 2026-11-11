@@ -265,11 +265,15 @@
   };
   // Branch lines: CI, E2E and Coverage show one long-lived branch at a time. PR runs
   // belong to the branch they target; sections hold the default line.
-  const currentLine = (snap) => { const lines = snap?.lines || []; return lines.find((l) => l.key === STATE.line) || lines[0] || { key: '', ref: snap?.repository?.default_branch, default: true }; };
+  const visibleLines = (snap) => (snap?.lines || []).filter((line) => {
+    const ci = (line.default ? snap.sections : snap.line_sections?.[line.key])?.ci?.data;
+    return ci?.lanes?.lanes?.some((lane) => Object.hasOwn(LANE_SOURCE, lane.key) && lane.days.some((day) => day.length));
+  });
+  const currentLine = (snap) => { const lines = visibleLines(snap); return lines.find((l) => l.key === STATE.line) || lines[0] || { key: '', ref: snap?.repository?.default_branch, default: true }; };
   const lineSection = (snap, name) => { const line = currentLine(snap); return line.default ? snap.sections[name] : snap.line_sections?.[line.key]?.[name]; };
   const lineBar = (snap) => {
-    const lines = snap.lines || [], line = currentLine(snap);
-    if (lines.length < 2) return '';
+    const lines = visibleLines(snap), line = currentLine(snap);
+    if (!lines.length) return '';
     return `<div class="line-bar"><div class="seg line-switch" role="group" aria-label="分支线"><span class="seg-label">分支线</span>${lines.map((l) => `<button type="button" class="${l.key === line.key ? 'on' : ''}" data-line="${esc(l.key)}" aria-pressed="${l.key === line.key}">${esc(l.ref)}</button>`).join('')}</div>`
       + `<span class="muted">当前 <code>${esc(line.ref)}</code>：按运行分支及 PR 目标分支归类，按 PR、分支门禁、合并队列、Daily 与版本展示；各分支线的数据互不混合。</span></div>`;
   };
@@ -1415,6 +1419,10 @@
     safe('issues', () => renderIssues(snap.sections.issues));
     safe('prs', () => renderPRs(snap.sections.prs));
     const line = currentLine(snap);
+    if (STATE.line !== line.key) {
+      STATE.line = line.key;
+      try { localStorage.setItem(LINE_KEY, STATE.line); } catch (e) { /* private mode */ }
+    }
     safe('ci', () => lineBar(snap) + renderCI(lineSection(snap, 'ci'), line));
     safe('tests', () => lineBar(snap) + renderTests(lineSection(snap, 'tests'), line));
     safe('coverage', () => lineBar(snap) + renderCoverage(lineSection(snap, 'tests'), line));

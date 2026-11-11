@@ -1,6 +1,6 @@
 # 页面与交互
 
-看板只展示已采集的稳定状态，不运行测试。页面依次为：总览、Issue、PR、CI、E2E、Coverage、GitCode 同步（见 [GitCode 同步记录](gitcode-sync.md)）。配置了[分支线](branch-lines.md)时，CI、E2E、Coverage 页首可在 main、legacy 与 release 分支之间切换，每次只显示一条分支线。旧的“看板”“构建报告”“历史数据”页已移除；看板形式并入 Issue 与 PR 页，历史分片仍作为采集器的存储保留。
+看板只展示已采集的稳定状态，不运行测试。页面依次为：总览、Issue、PR、CI、E2E、Coverage、GitCode 同步（见 [GitCode 同步记录](gitcode-sync.md)）。[分支线](branch-lines.md)自动包含已观测到的 `release/*` 与 `releases/*`，CI、E2E、Coverage 页首只显示近 30 天 CI 日期格内有可展示运行的分支入口，每次查看一条分支线；刷新后失效的选择自动回到仍有数据的分支。旧的“看板”“构建报告”“历史数据”页已移除；看板形式并入 Issue 与 PR 页，历史分片仍作为采集器的存储保留。
 
 页首显示快照时间。没有数据变化的采集不改快照时间，新的 UTC 日期会重建一次，Bot 至少每 8 小时采集一次；所以快照超过 36 小时未更新时，页面提示采集可能已停止。
 

@@ -1,16 +1,17 @@
-"""Branch lines: long-lived branches whose CI, tests and coverage are viewed apart.
+"""Branch lines: configured and observed release branches viewed apart.
 
 A run belongs to the line its work targets: a pull request's base branch, or
 the branch a push, dispatch or schedule ran on. Everything that targets no
-other configured line (release tags, nightly, unmatched runs) stays with the
+other line (release tags, unmatched runs) stays with the
 default branch, so no run is counted twice.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import datetime, timezone
 
-from .ci_lanes import PR_EVENTS, pr_number
+from .ci_lanes import PR_EVENTS, lane_of, pr_number, workflow_name
 
 KEY_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,30}\Z")
 
@@ -33,8 +34,8 @@ def _historical_refs(entry):
     return refs
 
 
-def configured_lines(settings, default_branch):
-    """Lines from ``branch_lines`` in board-config.json, the default branch first."""
+def configured_lines(settings, default_branch, *, runs=(), prs=()):
+    """Configured lines plus release branches observed in the supplied run window."""
     lines, seen = [], set()
     for entry in (settings or {}).get("branch_lines") or []:
         if not isinstance(entry, dict):
@@ -47,6 +48,25 @@ def configured_lines(settings, default_branch):
             if aliases:
                 line["historical_refs"] = aliases
             lines.append(line)
+    # Discover from stored runs, including PR base branches; never list remote branches or old Actions pages.
+    runs, prs = list(runs), list(prs)
+    by_number = {pr.get("number"): pr for pr in prs}
+    names = {row.get("workflow_id"): row["name"] for row in runs if row.get("name") and not re.search(r"\.ya?ml$", row["name"])}
+    refs = set()
+    for row in runs:
+        ref = target_of(row, prs, by_number)
+        if isinstance(ref, str) and ref.startswith(("release/", "releases/")) and ref.split("/", 1)[1]:
+            if lane_of({**row, "name": workflow_name(row, names)}, (settings or {}).get("workflows"), ref):
+                refs.add(ref)
+    for ref in sorted(refs - {line["ref"] for line in lines} - {default_branch}):
+        salt = 0
+        while True:
+            key = "release-" + hashlib.sha256(f"{ref}:{salt}".encode()).hexdigest()[:20]
+            if key not in seen:
+                break
+            salt += 1
+        seen.add(key)
+        lines.append({"key": key, "ref": ref})
     default = next((line for line in lines if line["ref"] == default_branch), None)
     if not default:
         default = {"key": default_branch if KEY_RE.match(default_branch) else "default", "ref": default_branch}
